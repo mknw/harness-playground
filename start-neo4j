@@ -1,0 +1,8 @@
+docker run \
+    --name neo4j-mldsgraph \
+    --restart always \
+    --publish=7474:7474 --publish=7687:7687 \
+    --env NEO4J_AUTH=neo4j/password \
+    --volume=./neo4j-volume:/data \
+    --env NEO4JLABS_PLUGINS='["apoc", "n10s"]' \
+    neo4j:5.26
