@@ -9,3 +9,4 @@ wheels/
 # Virtual environments
 .venv
 neo4j-volume/transactions/
+neo4j-volume/data/transactions/
