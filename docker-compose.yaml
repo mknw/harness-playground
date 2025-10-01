@@ -1,0 +1,23 @@
+services:
+  mcp-gateway:
+    image: docker/mcp-gateway
+    command:
+      - --servers=neo4j-cypher,neo4j-memory,context7,fetch
+      - --transport=streaming
+      - --port=3000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # environment:
+    #   - url=bolt://host.docker.internal:7687
+    #   - username=neo4j
+    #   - database=neo4j
+      # - password_file=/run/secrets/neo4j_password
+    # secrets:
+    #   - neo4j_password
+    ports:
+      - "3000:3000"
+
+
+# secrets:
+#   neo4j_password:
+#     file: ./neo4j_password.txt

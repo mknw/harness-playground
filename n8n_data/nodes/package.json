@@ -1,0 +1,7 @@
+{
+  "name": "installed-nodes",
+  "private": true,
+  "dependencies": {
+    "@tavily/n8n-nodes-tavily": "0.2.5"
+  }
+}
