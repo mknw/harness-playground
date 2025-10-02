@@ -1,4 +1,33 @@
+version: '3.8'
+
 services:
+  nginx-proxy-manager:
+    image: 'jc21/nginx-proxy-manager:latest'
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '81:81'
+    volumes:
+      - ./npm-data:/data
+      - ./letsencrypt:/etc/letsencrypt
+    networks:
+      - app-network
+
+  n8n:
+    image: 'docker.n8n.io/n8nio/n8n'
+    restart: unless-stopped
+    environment:
+      - GENERIC_TIMEZONE=Europe/Brussels
+      - TZ=Europe/Brussels
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+      - WEBHOOK_URL=https://n8n.yourdomain.com/
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+    networks:
+      - app-network
+
   mcp-gateway:
     image: docker/mcp-gateway
     command:
@@ -7,17 +36,11 @@ services:
       - --port=3000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    # environment:
-    #   - url=bolt://host.docker.internal:7687
-    #   - username=neo4j
-    #   - database=neo4j
-      # - password_file=/run/secrets/neo4j_password
-    # secrets:
-    #   - neo4j_password
     ports:
       - "3000:3000"
+    networks:
+      - app-network
 
-
-# secrets:
-#   neo4j_password:
-#     file: ./neo4j_password.txt
+networks:
+  app-network:
+    driver: bridge
