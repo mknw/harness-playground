@@ -1,28 +1,13 @@
-version: '3.8'
-
 services:
-  nginx-proxy-manager:
-    image: 'jc21/nginx-proxy-manager:latest'
-    restart: unless-stopped
-    ports:
-      - '80:80'
-      - '443:443'
-      - '81:81'
-    volumes:
-      - ./npm-data:/data
-      - ./letsencrypt:/etc/letsencrypt
-    networks:
-      - app-network
-
   n8n:
     image: 'docker.n8n.io/n8nio/n8n'
     restart: unless-stopped
+    ports:
+      - "5678:5678"  # Expose n8n directly to the internet
     environment:
       - GENERIC_TIMEZONE=Europe/Brussels
       - TZ=Europe/Brussels
-      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      - N8N_RUNNERS_ENABLED=true
-      - WEBHOOK_URL=https://n8n.yourdomain.com/
+      - N8N_SECURE_COOKIE=false  # Required to fix the login error over http
     volumes:
       - ./n8n_data:/home/node/.n8n
     networks:
