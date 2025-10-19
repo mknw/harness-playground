@@ -13,8 +13,24 @@ services:
     networks:
       - app-network
 
+  neo4j:
+    image: neo4j:5.26
+    container_name: neo4j-mldsgraph
+    restart: unless-stopped
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4JLABS_PLUGINS=["apoc", "n10s"]
+    volumes:
+      - ./neo4j-volume:/data
+    networks:
+      - app-network
+
   mcp-gateway:
     image: docker/mcp-gateway
+    restart: unless-stopped
     command:
       - --servers=neo4j-cypher,neo4j-memory,context7,fetch
       - --transport=streaming
