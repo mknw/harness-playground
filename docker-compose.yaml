@@ -36,7 +36,7 @@ services:
     environment:
       NEO4J_AUTH: neo4j/password
       NEO4JLABS_PLUGINS: '["apoc", "n10s"]'
-    volumew:
+    volumes:
       - "./neo4j-volume:/data" 
 
 
