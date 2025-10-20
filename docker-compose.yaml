@@ -25,6 +25,20 @@ services:
       - "3000:3000"
     networks:
       - app-network
+  
+  neo4j:
+    image: 'neo4j:5.26'
+    container_name: neo4j-mldsgraph
+    restart: always
+    ports:
+      - "7474:7474"  
+      - "7687:7687"
+    environment:
+      -  NEO4J_AUTH: neo4j/password
+      -  NEO4JLABS_PLUGINS: '["apoc", "n10s"]'
+    volumew:
+      - "./neo4j-volume:/data" 
+
 
 networks:
   app-network:
