@@ -38,6 +38,8 @@ services:
       NEO4JLABS_PLUGINS: '["apoc", "n10s"]'
     volumes:
       - "./neo4j-volume:/data" 
+    networks:
+      - app-network
 
 
 networks:
