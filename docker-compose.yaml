@@ -1,6 +1,7 @@
 services:
   n8n:
     image: 'docker.n8n.io/n8nio/n8n'
+    container_name: n8n-seederis
     restart: unless-stopped
     ports:
       - "5678:5678"  # Expose n8n directly to the internet
@@ -37,6 +38,13 @@ services:
       - --port=3000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - url=bolt://host.docker.internal:7687
+      - username=neo4j
+      - database=neo4j
+      - password_file=/run/secrets/neo4j_password
+    secrets:
+      - neo4j_password
     ports:
       - "3000:3000"
     networks:
@@ -45,3 +53,8 @@ services:
 networks:
   app-network:
     driver: bridge
+
+
+secrets:
+  neo4j_password:
+    file: ./neo4j_password.txt
