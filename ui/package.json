@@ -1,0 +1,31 @@
+{
+  "name": "example-with-unocss",
+  "type": "module",
+  "scripts": {
+    "dev": "vinxi dev",
+    "build": "vinxi build",
+    "start": "vinxi start"
+  },
+  "dependencies": {
+    "@ark-ui/solid": "^5.26.2",
+    "@solidjs/router": "^0.15.3",
+    "@solidjs/start": "^1.2.0",
+    "@stackframe/js": "^2.8.48",
+    "@unocss/preset-wind4": "^66.5.4",
+    "@unocss/reset": "^66.5.4",
+    "solid-js": "^1.9.10",
+    "unocss": "^66.5.4",
+    "vinxi": "^0.5.8"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.38.0",
+    "@types/node": "^24.9.2",
+    "eslint": "^9.38.0",
+    "eslint-plugin-solid": "^0.14.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.2"
+  }
+}

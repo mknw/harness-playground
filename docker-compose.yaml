@@ -25,7 +25,7 @@ services:
       - NEO4J_AUTH=neo4j/password
       - NEO4J_PLUGINS=["apoc", "n10s"]
     volumes:
-      - ./neo4j-volume:/data
+      - ./neo4j_data:/data
     networks:
       - app-network
 
