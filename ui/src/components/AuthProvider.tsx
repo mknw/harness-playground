@@ -1,7 +1,7 @@
 import { createContext, createSignal, createResource, Show, useContext, JSX, onMount, createMemo, createEffect } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";
 import { isServer } from "solid-js/web";
-import { getStackClientApp } from "~/stack/client";
+import { getStackClientApp } from "~/lib/auth/client";
 import type { User } from "@stackframe/js";
 import { isEmailAllowed } from "~/lib/auth/allowList";
 
