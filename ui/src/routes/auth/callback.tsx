@@ -75,7 +75,7 @@ export default function OAuthCallback() {
               </div>
             }
           >
-            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" />
             <div class="text-xl font-medium text-gray-900 mb-2">
               Completing Authentication
             </div>

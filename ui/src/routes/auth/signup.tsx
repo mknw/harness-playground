@@ -92,7 +92,7 @@ export default function SignUp() {
   return (
     <Show when={!checkingAuth()} fallback={
       <div class="min-h-screen flex items-center justify-center bg-gray-50">
-        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
       </div>
     }>
       <div class="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
@@ -174,7 +174,7 @@ export default function SignUp() {
 
           <div class="relative my-6">
             <div class="absolute inset-0 flex items-center">
-              <div class="w-full border-t border-gray-300"></div>
+              <div class="w-full border-t border-gray-300" />
             </div>
             <div class="relative flex justify-center text-sm">
               <span class="px-2 bg-white text-gray-500">Or continue with</span>

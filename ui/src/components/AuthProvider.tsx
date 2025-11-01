@@ -1,4 +1,4 @@
-import { createContext, createSignal, createResource, Show, useContext, JSX, onMount, createMemo, createEffect } from "solid-js";
+import { createContext, createSignal, createResource, Show, useContext, JSX, onMount, createEffect } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";
 import { isServer } from "solid-js/web";
 import { getStackClientApp } from "~/lib/auth/client";
@@ -133,26 +133,25 @@ export function AuthProvider(props: AuthProviderProps) {
     return pathname.startsWith('/auth/');
   };
 
-  // Memoize context value
-  const authContextValue = createMemo<AuthContextType>(() => ({
+  const authContextValue: AuthContextType = {
     user,
-    loading: () => mounted() && user.loading, // Only loading after mount
+    loading: () => mounted() && user.loading,
     refetch: () => {
       setAuthChecked(false);
       void refetch();
     },
     signOut,
-  }));
+  };
 
   return (
-    <AuthContext.Provider value={authContextValue()}>
+    <AuthContext.Provider value={authContextValue}>
       {/* Show content only when mounted AND (user authenticated OR on auth route) */}
       <Show
         when={mounted() && (isAuthRoute() || (user() && !user.loading))}
         fallback={
           <div class="min-h-screen flex items-center justify-center bg-gray-50">
             <div class="text-center">
-              <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+              <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"/>
               <div class="text-xl font-medium text-gray-900 mb-2">
                 Loading TTC Maker
               </div>

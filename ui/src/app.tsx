@@ -10,10 +10,10 @@ export default function App() {
   return (
     <Router
       root={(props) => (
-        <>
+        <AuthProvider>
           <Nav />
           <Suspense>{props.children}</Suspense>
-        </>
+        </AuthProvider>
       )}
     >
       <FileRoutes />
