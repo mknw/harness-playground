@@ -1,6 +1,6 @@
 import { createSignal, onMount, Show } from "solid-js";
 import { A, useNavigate } from "@solidjs/router";
-import { getStackClientApp } from "~/stack/client";
+import { getStackClientApp } from "~/lib/auth/client";
 import { isEmailAllowed, getUnauthorizedMessage } from "~/lib/auth/allowList";
 
 export default function SignIn() {
@@ -80,31 +80,31 @@ export default function SignIn() {
 
   return (
     <Show when={!checkingAuth()} fallback={
-      <div class="min-h-screen flex items-center justify-center bg-gray-50">
-        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
+      <div class="bg-gray-50 flex min-h-screen items-center justify-center">
+        <div class="border-b-2 border-blue-600 rounded-full h-12 w-12 animate-spin" />
       </div>
     }>
-      <div class="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-        <div class="w-full max-w-md bg-white rounded-lg shadow-md p-8">
-          <div class="text-center mb-8">
+      <div class="px-4 py-12 bg-gray-50 flex min-h-screen items-center justify-center lg:px-8 sm:px-6">
+        <div class="p-8 rounded-lg bg-white max-w-md w-full shadow-md">
+          <div class="mb-8 text-center">
             <img
-              src="/ttc-viam-inveniemus.png"
-              alt="Trepell - Viam Inveniemus"
-              class="mx-auto h-32 mb-6"
+              src="/seederis.ai.png"
+              alt="seederis.ai — build with purpose."
+              class="mx-auto mb-6 h-32"
             />
-            <h2 class="text-3xl font-bold text-gray-900">Welcome to TTC Maker</h2>
-            <p class="mt-2 text-sm text-gray-600">Sign in to your account to continue</p>
+            <h2 class="text-3xl text-gray-900 font-bold">seederis.ai Knowledge System</h2>
+            <p class="text-sm text-gray-600 mt-2">Sign in to your account to continue</p>
           </div>
 
           <Show when={error()}>
-            <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md">
+            <div class="mb-4 p-3 border border-red-200 rounded-md bg-red-50">
               <p class="text-sm text-red-600">{error()}</p>
             </div>
           </Show>
 
           <form onSubmit={(e) => void handleEmailSignIn(e)} class="space-y-4">
             <div>
-              <label for="email" class="block text-sm font-medium text-gray-700 mb-1">
+              <label for="email" class="text-sm text-gray-700 font-medium mb-1 block">
                 Email Address
               </label>
               <input
@@ -115,12 +115,12 @@ export default function SignIn() {
                 onInput={(e) => setEmail(e.currentTarget.value)}
                 disabled={loading()}
                 required
-                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                class="px-3 py-2 border border-gray-300 rounded-md w-full shadow-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
               />
             </div>
 
             <div>
-              <label for="password" class="block text-sm font-medium text-gray-700 mb-1">
+              <label for="password" class="text-sm text-gray-700 font-medium mb-1 block">
                 Password
               </label>
               <input
@@ -131,39 +131,39 @@ export default function SignIn() {
                 onInput={(e) => setPassword(e.currentTarget.value)}
                 disabled={loading()}
                 required
-                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                class="px-3 py-2 border border-gray-300 rounded-md w-full shadow-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
               />
             </div>
 
             <button
               type="submit"
-              class="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              class="text-white font-medium px-4 py-2 rounded-md bg-blue-600 w-full shadow-sm focus:outline-none hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
               disabled={loading()}
             >
               {loading() ? "Signing in..." : "Sign In"}
             </button>
           </form>
 
-          <div class="relative my-6">
-            <div class="absolute inset-0 flex items-center">
-              <div class="w-full border-t border-gray-300" />
+          <div class="my-6 relative">
+            <div class="flex items-center inset-0 absolute">
+              <div class="border-t border-gray-300 w-full" />
             </div>
-            <div class="relative flex justify-center text-sm">
-              <span class="px-2 bg-white text-gray-500">Or continue with</span>
+            <div class="text-sm flex justify-center relative">
+              <span class="text-gray-500 px-2 bg-white">Or continue with</span>
             </div>
           </div>
 
           <button
             onClick={() => void handleGoogleSignIn()}
-            class="w-full py-2 px-4 border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 font-medium rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="text-gray-700 font-medium px-4 py-2 border border-gray-300 rounded-md bg-white w-full shadow-sm focus:outline-none hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
             disabled={loading()}
           >
             Sign in with Google
           </button>
 
-          <p class="mt-6 text-center text-sm text-gray-600">
+          <p class="text-sm text-gray-600 mt-6 text-center">
             Don't have an account?{" "}
-            <A href="/auth/signup" class="font-medium text-blue-600 hover:underline">
+            <A href="/auth/signup" class="text-blue-600 font-medium hover:underline">
               Sign up
             </A>
           </p>

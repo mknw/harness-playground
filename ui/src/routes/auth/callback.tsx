@@ -1,5 +1,5 @@
 import { onMount, createSignal, Show } from "solid-js";
-import { getStackClientApp } from "~/stack/client";
+import { getStackClientApp } from "~/lib/auth/client";
 
 export default function OAuthCallback() {
   const [processing, setProcessing] = createSignal(true);
@@ -53,13 +53,13 @@ export default function OAuthCallback() {
   });
 
   return (
-    <div class="min-h-screen flex items-center justify-center bg-gray-50">
+    <div class="bg-gray-50 flex min-h-screen items-center justify-center">
       <div class="text-center">
         <Show
           when={!error()}
           fallback={
-            <div class="max-w-md mx-auto">
-              <div class="text-red-500 text-xl mb-4">Authentication Error</div>
+            <div class="mx-auto max-w-md">
+              <div class="text-xl text-red-500 mb-4">Authentication Error</div>
               <div class="text-gray-600 mb-4">{error()}</div>
               <div class="text-sm text-gray-500">
                 Redirecting to sign in page...
@@ -70,13 +70,13 @@ export default function OAuthCallback() {
           <Show
             when={processing()}
             fallback={
-              <div class="text-green-500 text-xl">
+              <div class="text-xl text-green-500">
                 Authentication successful! Redirecting...
               </div>
             }
           >
-            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" />
-            <div class="text-xl font-medium text-gray-900 mb-2">
+            <div class="mx-auto mb-4 border-b-2 border-blue-600 rounded-full h-12 w-12 animate-spin" />
+            <div class="text-xl text-gray-900 font-medium mb-2">
               Completing Authentication
             </div>
             <div class="text-gray-600">

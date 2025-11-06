@@ -3,10 +3,10 @@ import Counter from "~/components/Counter";
 
 export default function Home() {
   return (
-    <main class="text-center mx-auto text-gray-700 p-4">
-      <h1 class="max-6-xs text-6xl text-sky-700 font-thin uppercase my-16">
-        <div class="flex justify-center items-center">
-          <span class="mr-5">Hello</span> <img class="w-12 h-12" src="https://unocss.dev/logo.svg" alt="UnoCSS logo" />!
+    <main class="text-gray-700 mx-auto p-4 text-center">
+      <h1 class="max-6-xs text-6xl text-sky-700 font-thin my-16 uppercase">
+        <div class="flex items-center justify-center">
+          <span class="mr-5">Hello</span> <img class="h-12 w-12" src="https://unocss.dev/logo.svg" alt="UnoCSS logo" />!
         </div>
       </h1>
       <Counter />

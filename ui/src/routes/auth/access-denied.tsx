@@ -2,13 +2,13 @@ import { A } from "@solidjs/router";
 
 export default function AccessDenied() {
   return (
-    <div class="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div class="w-full max-w-md bg-white rounded-lg shadow-md p-8">
+    <div class="px-4 py-12 bg-gray-50 flex min-h-screen items-center justify-center lg:px-8 sm:px-6">
+      <div class="p-8 rounded-lg bg-white max-w-md w-full shadow-md">
         <div class="text-center">
           {/* Error Icon */}
-          <div class="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-red-100 mb-4">
+          <div class="mx-auto mb-4 rounded-full bg-red-100 flex h-16 w-16 items-center justify-center">
             <svg
-              class="h-10 w-10 text-red-600"
+              class="text-red-600 h-10 w-10"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -22,16 +22,16 @@ export default function AccessDenied() {
             </svg>
           </div>
 
-          <h2 class="text-2xl font-bold text-gray-900 mb-4">Access Denied</h2>
+          <h2 class="text-2xl text-gray-900 font-bold mb-4">Access Denied</h2>
 
-          <div class="mb-6 text-left bg-gray-50 border border-gray-200 rounded-md p-4">
+          <div class="mb-6 p-4 text-left border border-gray-200 rounded-md bg-gray-50">
             <p class="text-sm text-gray-700 mb-3">
               Your account is not authorized to access this application.
             </p>
             <p class="text-sm text-gray-600 mb-3">
-              Access to TTC Maker is restricted to authorized users only. If you believe you should have access, please contact the administrator.
+              Access to seederis.ai Knowledge System is restricted to authorized users only. If you believe you should have access, please contact the administrator.
             </p>
-            <div class="border-t border-gray-300 pt-3 mt-3">
+            <div class="mt-3 pt-3 border-t border-gray-300">
               <p class="text-xs text-gray-500 font-semibold mb-1">Need access?</p>
               <p class="text-xs text-gray-600">
                 Contact your system administrator to request access to this application.
@@ -41,7 +41,7 @@ export default function AccessDenied() {
 
           <A
             href="/auth/signin"
-            class="inline-block w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors"
+            class="text-white font-medium px-4 py-2 rounded-md bg-blue-600 w-full inline-block shadow-sm transition-colors focus:outline-none hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             Return to Sign In
           </A>

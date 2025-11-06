@@ -149,11 +149,11 @@ export function AuthProvider(props: AuthProviderProps) {
       <Show
         when={mounted() && (isAuthRoute() || (user() && !user.loading))}
         fallback={
-          <div class="min-h-screen flex items-center justify-center bg-gray-50">
+          <div class="bg-gray-50 flex min-h-screen items-center justify-center">
             <div class="text-center">
-              <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"/>
-              <div class="text-xl font-medium text-gray-900 mb-2">
-                Loading TTC Maker
+              <div class="mx-auto mb-4 border-b-2 border-blue-600 rounded-full h-12 w-12 animate-spin"/>
+              <div class="text-xl text-gray-900 font-medium mb-2">
+                Loading seederis.ai Knowledge System
               </div>
               <div class="text-gray-600">
                 Please wait while we verify your authentication...
