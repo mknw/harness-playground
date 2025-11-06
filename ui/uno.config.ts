@@ -13,6 +13,8 @@ export default defineConfig({
         sans: 'Inter',
         serif: 'Roboto Slab',
         mono: 'Fira Code',
+        lexend: 'Lexend Zetta:200',
+        lexend_exa: 'Lexend Exa:200'
       }
     })
   ],
