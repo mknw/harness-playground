@@ -40,7 +40,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       bg="dark-bg-primary"
       border="r dark-border-primary"
       transition="width"
-      style={`width: ${props.collapsed ? '3rem' : '16rem'};`}
+      style={{width: props.collapsed ? '3rem' : '16rem'}}
     >
       {/* Header with Toggle */}
       <div p="4" border="b dark-border-primary" flex="~" items="center" justify="between">
