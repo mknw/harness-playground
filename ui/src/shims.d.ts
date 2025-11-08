@@ -6,5 +6,9 @@ declare module 'solid-js' {
       tracking?: string | boolean;
       leading?: string | boolean;
     }
+    interface SVGAttributes<T> extends AttributifyAttributes {
+      tracking?: string | boolean;
+      leading?: string | boolean;
+    }
   }
 }

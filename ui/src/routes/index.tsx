@@ -1,44 +1,39 @@
-import { A } from "@solidjs/router";
-import Counter from "~/components/Counter";
+import { Splitter } from '@ark-ui/solid/splitter'
+import { ChatInterface } from '~/components/ark-ui/ChatInterface'
+import { KnowledgeGraphPanel } from '~/components/ark-ui/KnowledgeGraphPanel'
 
 export default function Home() {
   return (
-    <main class="text-gray-700 mx-auto p-4 text-center">
-      <h1 class="max-6-xs text-6xl text-sky-700 font-thin my-16 uppercase">
-        <div class="flex items-center justify-center">
-          <span class="mr-5">Hello</span> <img class="h-12 w-12" src="https://unocss.dev/logo.svg" alt="UnoCSS logo" />!
-        </div>
-      </h1>
-      <Counter />
-      <p class="mt-8">
-        Visit{" "}
-        <a
-          href="https://solidjs.com"
-          target="_blank"
-          class="text-sky-600 hover:underline"
-        >
-          solidjs.com
-        </a>{" "}
-        to learn how to build Solid apps.
-      </p>
-      <p class="mt-2">
-        Visit{" "}
-        <a
-          href="https://unocss.dev"
-          target="_blank"
-          class="text-sky-600 hover:underline"
-        >
-          unocss.dev
-        </a>{" "}
-        to learn how to style your app.
-      </p>
-      <p class="my-4">
-        <span>Home</span>
-        {" - "}
-        <A href="/about" class="text-sky-600 hover:underline">
-          About Page
-        </A>{" "}
-      </p>
+    <main h="[calc(100vh-4rem)]">
+      <Splitter.Root
+        orientation="horizontal"
+        defaultSize={[60, 40]}
+        panels={[
+          { id: 'chat', collapsible: true, minSize: 40, maxSize: 80 },
+          { id: 'graph', collapsible: true, minSize: 30, maxSize: 60 }
+        ]}
+        h="full"
+      >
+        {/* Chat Panel */}
+        <Splitter.Panel id="chat">
+          <ChatInterface />
+        </Splitter.Panel>
+
+        {/* Resize Trigger */}
+        <Splitter.ResizeTrigger
+          id="chat:graph"
+          w="2"
+          bg="dark-border-primary hover:neon-cyan/50"
+          cursor="col-resize"
+          transition="all"
+          shadow="hover:[0_0_10px_rgba(0,255,255,0.3)]"
+        />
+
+        {/* Knowledge Graph Panel */}
+        <Splitter.Panel id="graph">
+          <KnowledgeGraphPanel />
+        </Splitter.Panel>
+      </Splitter.Root>
     </main>
-  );
+  )
 }
