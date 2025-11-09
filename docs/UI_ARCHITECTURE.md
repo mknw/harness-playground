@@ -213,6 +213,209 @@ import { UserMenu } from "~/components/ark-ui/UserMenu"
 
 ---
 
+## 5. Application Layout & Chat Interface
+
+### Overall Layout Structure
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Nav (dark-bg-secondary)                                 │
+│  Home | About          [Theme] [Avatar Menu]            │
+├────────────┬──────────────────────────┬─────────────────┤
+│            │                          │                 │
+│  Sidebar   │   Chat Messages          │  Knowledge      │
+│  (64 cols) │   (ScrollArea)           │  Graph Panel    │
+│            │                          │                 │
+│  [History] │ ─────────────────────────│  (placeholder)  │
+│  Thread 1  │   Chat Input             │                 │
+│  Thread 2  │   (Field.Textarea)       │                 │
+│  Thread 3  │                          │                 │
+│            │                          │                 │
+│ [+ New]    │                          │  [Reset] [Exp]  │
+└────────────┴──────────────────────────┴─────────────────┘
+    ↑              ↑─── Splitter ───↑          ↑
+Collapsible      60% default       40% default
+```
+
+### Main Page Component
+**File:** `ui/src/routes/index.tsx`
+
+```tsx
+<Splitter.Root orientation="horizontal" defaultSize={[60, 40]}>
+  <Splitter.Panel id="chat">
+    <ChatInterface />  {/* Sidebar + Messages + Input */}
+  </Splitter.Panel>
+
+  <Splitter.ResizeTrigger id="chat:graph" />
+
+  <Splitter.Panel id="graph">
+    <KnowledgeGraphPanel />
+  </Splitter.Panel>
+</Splitter.Root>
+```
+
+### Chat Interface Components
+
+**Location:** All in `ui/src/components/ark-ui/`
+
+#### 1. ChatInterface.tsx
+Main container combining sidebar and chat area:
+```tsx
+<div flex="~">
+  <ChatSidebar />           // 64 columns wide
+  <div flex="~ col 1">      // Flexible main area
+    <ChatMessages />
+    <ChatInput />
+  </div>
+</div>
+```
+
+#### 2. ChatSidebar.tsx
+**Props:** `collapsed: boolean`, `onToggle: () => void`
+- Width: `3rem` (collapsed) → `16rem` (expanded)
+- Smooth inline style transition
+- Thread history with relative timestamps
+- Content hidden when collapsed (toggle button only)
+
+#### 3. ChatMessages.tsx
+- **ScrollArea.Root** - Custom scrollable message container
+- **Features:**
+  - Auto-scroll to latest message
+  - Different layouts for user vs assistant messages
+  - Avatar with initials fallback
+  - Message bubbles with timestamps
+  - Empty state with icon
+- **User messages:** Right-aligned, cyber-700 background
+- **AI messages:** Left-aligned, dark-bg-tertiary background
+
+#### 4. ChatInput.tsx
+- **Field.Textarea** with `autoresize` prop
+- **Keyboard shortcuts:**
+  - Enter → Send message
+  - Shift+Enter → New line
+- **States:** Disabled during AI processing
+- **Styling:** Neon cyan border on focus
+
+#### 5. KnowledgeGraphPanel.tsx
+- Placeholder for graph visualization
+- Header with title and description
+- Footer with action buttons (Reset View, Export Graph)
+
+### Theme System
+
+**File:** `ui/src/components/ark-ui/ThemeSwitcher.tsx`
+
+```tsx
+// Toggle between light/dark modes
+// Persists to localStorage
+// Updates document.documentElement.classList
+```
+
+**Custom Color Palette:** (defined in `uno.config.ts`)
+
+```typescript
+{
+  cyber: {     // Purple/indigo brand colors
+    600: '#4f46e5',
+    700: '#4338ca',
+    800: '#3730a3',
+    // ... full scale
+  },
+  neon: {      // Accent colors for highlights
+    cyan: '#00ffff',
+    magenta: '#ff00ff',
+    purple: '#9d00ff',
+    // ... more neon colors
+  },
+  dark: {      // Semantic dark theme tokens
+    bg: {
+      primary: '#0a0a0f',      // Darkest background
+      secondary: '#12121a',    // Main panels
+      tertiary: '#1a1a24',     // Cards/inputs
+      hover: '#22222f',        // Interactive states
+    },
+    border: {
+      primary: '#2a2a3a',      // Main borders
+      secondary: '#3a3a4a',    // Secondary borders
+      accent: '#4a4a5a',       // Highlighted borders
+    },
+    text: {
+      primary: '#e4e4e7',      // Main text
+      secondary: '#a1a1aa',    // Secondary text
+      tertiary: '#71717a',     // Tertiary/muted text
+    }
+  }
+}
+```
+
+**UnoCSS Shortcuts:**
+- `glass-panel` - Semi-transparent panel with backdrop blur
+- `neon-border` - Cyan border with glow effect
+- `cyber-button` - Cyber-themed button with glow on hover
+
+### Component Data Flow
+
+```
+ChatInterface (state management)
+    ├─ messages: Signal<Message[]>
+    ├─ isProcessing: Signal<boolean>
+    ├─ sidebarCollapsed: Signal<boolean>
+    └─ handleSendMessage()
+         │
+         ├─> ChatMessages (props.messages)
+         │       └─ Auto-scroll on new messages
+         │
+         ├─> ChatInput (props.onSend, props.disabled)
+         │       └─ Triggers handleSendMessage()
+         │
+         └─> ChatSidebar (props.collapsed, props.onToggle)
+                 └─ Dummy thread data (static)
+```
+
+### Message Type
+```typescript
+interface Message {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: Date
+}
+```
+
+---
+
+## 6. UnoCSS Limitations & Workarounds
+
+### SVG Elements
+**UnoCSS attributify does NOT work on `<svg>` elements.**
+
+Use standard SVG attributes:
+```tsx
+// ❌ WRONG - Causes TypeScript errors
+<svg w="16" h="16" m="auto">
+
+// ✓ CORRECT
+<svg width="16" height="16" style="margin: 0 auto;">
+```
+
+**Attributes to convert:**
+- `w="..."` → `width="..."`
+- `h="..."` → `height="..."`
+- `m="..."` → `style="margin: ..."`
+- `text="color"` → `style="color: ..."`
+- `transform="..."` → Use inline style with dynamic values
+
+**Event handlers:** Wrap reactive values in functions for SolidJS
+```tsx
+// ❌ WRONG
+onClick={props.onToggle}
+
+// ✓ CORRECT
+onClick={() => props.onToggle()}
+```
+
+---
+
 ## Quick Commands
 
 ```bash
@@ -228,16 +431,55 @@ pnpm eslint     # Run linter
 ```
 ui/
 ├── eslint.config.ts              # ESLint rules
-├── uno.config.ts                 # UnoCSS config
+├── uno.config.ts                 # UnoCSS config + theme
 ├── src/
 │   ├── shims.d.ts                # TypeScript augmentation
+│   ├── routes/
+│   │   └── index.tsx             # Main page with Splitter layout
 │   ├── components/
 │   │   ├── AuthProvider.tsx      # Auth context provider
-│   │   ├── Nav.tsx               # Main navigation
+│   │   ├── Nav.tsx               # Main navigation with theme switcher
 │   │   └── ark-ui/
-│   │       └── UserMenu.tsx      # Avatar dropdown
+│   │       ├── UserMenu.tsx           # Avatar dropdown menu
+│   │       ├── ThemeSwitcher.tsx      # Dark/light theme toggle
+│   │       ├── ChatInterface.tsx      # Main chat container
+│   │       ├── ChatSidebar.tsx        # Thread history sidebar
+│   │       ├── ChatMessages.tsx       # Message display area
+│   │       ├── ChatInput.tsx          # Autoresize textarea
+│   │       └── KnowledgeGraphPanel.tsx # Graph visualization panel
 │   └── lib/auth/
 │       ├── client.ts             # StackClientApp
 │       ├── server.ts             # Server auth helpers
 │       └── allowList.ts          # Email access control
 ```
+
+---
+
+## MCP Tools Available
+
+### Context7
+- `resolve-library-id` - Search for library documentation
+- `get-library-docs` - Fetch up-to-date docs for a library
+
+**Example:**
+```typescript
+// 1. Find library ID
+const results = await resolveLibraryId({ libraryName: "solidjs" })
+// → Returns: /solidjs/solid, /solidjs/solid-start, etc.
+
+// 2. Get documentation
+const docs = await getLibraryDocs({
+  context7CompatibleLibraryID: "/solidjs/solid",
+  topic: "signals and reactivity",
+  tokens: 3000
+})
+```
+
+### Ark UI
+- `list_components` - List all available Ark UI components
+- `get_component_props` - Get props for a specific component
+- `list_examples` - List examples for a component
+- `get_example` - Get specific example code
+- `styling_guide` - Get data attributes for styling
+
+**Frameworks:** react, vue, svelte, solid
