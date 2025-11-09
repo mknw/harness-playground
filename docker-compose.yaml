@@ -4,11 +4,11 @@ services:
     container_name: n8n-seederis
     restart: unless-stopped
     ports:
-      - "5678:5678"  # Expose n8n directly to the internet
+      - "5678:5678"
     environment:
       - GENERIC_TIMEZONE=Europe/Brussels
       - TZ=Europe/Brussels
-      - N8N_SECURE_COOKIE=false  # Required to fix the login error over http
+      - N8N_SECURE_COOKIE=false
     volumes:
       - ./n8n_data:/home/node/.n8n
     networks:
@@ -28,33 +28,33 @@ services:
       - ./neo4j_data:/data
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   mcp-gateway:
     image: docker/mcp-gateway
     restart: unless-stopped
     command:
-      - --servers=neo4j-cypher,neo4j-memory,context7,fetch
+      - --servers=neo4j-cypher,fetch
+      - --config=/mcp/config.yaml
+      - --catalog=/mcp/custom-catalog.yaml
       - --transport=streaming
       - --port=3000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - url=bolt://host.docker.internal:7687
-      - username=neo4j
-      - database=neo4j
-      - password_file=/run/secrets/neo4j_password
-    secrets:
-      - neo4j_password
+      - ./mcp-config.yaml:/mcp/config.yaml:ro
+      - ./custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
     ports:
       - "3000:3000"
     networks:
       - app-network
+    depends_on:
+      neo4j:
+        condition: service_healthy
 
 networks:
   app-network:
     driver: bridge
-
-
-secrets:
-  neo4j_password:
-    file: ./neo4j_password.txt
