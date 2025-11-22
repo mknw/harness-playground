@@ -25,3 +25,11 @@ registry:
         value: '{{neo4j-cypher.database}}'
       - name: NEO4J_READ_ONLY
         value: '{{neo4j-cypher.read_only}}'
+  
+  fetch:
+    description: Fetch and retrieve content from the web
+    title: Fetch
+    type: server
+    image: mcp/fetch@sha256:ef9535a3f07249142f9ca5a6033d7024950afdb6dc05e98292794a23e9f5dfbe
+    tools:
+      - name: fetch

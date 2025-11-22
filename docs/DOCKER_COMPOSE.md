@@ -76,6 +76,9 @@ env:
    ```
 
 2. **custom-catalog.yaml**: Custom catalog definition with corrected environment variable mappings
+   - Includes **neo4j-cypher** server with fixed NEO4J_URI mapping
+   - Includes **fetch** server for web content retrieval
+   - Uses SHA256 digests for image references (e.g., `mcp/fetch@sha256:...`)
 
 3. **docker-compose.yaml**: Mounts both configuration files read-only
    ```yaml
@@ -106,3 +109,42 @@ The custom catalog was created by:
 2. Examining `pkg/gateway/clientpool.go` to understand template evaluation
 3. Identifying the `argsAndEnv` function that constructs environment variables
 4. Creating a corrected mapping based on what the neo4j-cypher server actually expects
+
+## Adding Additional MCP Servers
+
+To add new MCP servers to the custom catalog:
+
+1. **Find the server's image digest**:
+   ```bash
+   # If the image is already pulled locally
+   docker images | grep mcp/<server-name>
+   docker inspect <image-id> --format='{{index .RepoDigests 0}}'
+   ```
+
+2. **Add to custom-catalog.yaml**:
+   ```yaml
+   registry:
+     server-name:
+       description: Server description
+       title: Display Name
+       type: server
+       image: mcp/server-name@sha256:<digest>
+       tools:
+         - name: tool_name_1
+         - name: tool_name_2
+   ```
+
+3. **Add server to docker-compose.yaml command**:
+   ```yaml
+   command:
+     - --servers=neo4j-cypher,fetch,new-server
+   ```
+
+4. **Add configuration if needed** (in mcp-config.yaml):
+   ```yaml
+   new-server:
+     param1: value1
+     param2: value2
+   ```
+
+**Important**: Always use SHA256 digests (`@sha256:...`) not tags (`:latest`) for image references. The gateway doesn't accept tag-based references in the format `@latest`.
