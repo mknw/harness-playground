@@ -10,6 +10,9 @@ app.config.timestamp_*.js
 .env
 .env*.local
 
+# BAML Generated
+baml_client/
+
 # dependencies
 /node_modules
 

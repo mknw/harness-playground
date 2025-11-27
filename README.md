@@ -1,224 +1,214 @@
-# Renewable Energy Market Graph
+# kg-agent: Knowledge Graph Agent System
+
+A knowledge graph agent system integrating n8n workflow orchestration, Neo4j graph database, and MCP Gateway for AI agent tool integration.
 
 ## Requirements
 
-Docker Desktop
+- Docker Desktop
+- Docker Compose
 
-## Run n8n
+## Quick Start
 
-```
-docker run -it --rm \
- --name n8n \
- -p 5678:5678 \
- -e GENERIC_TIMEZONE="Europe/Brussels" \
- -e TZ="Europe/Brussels" \
- -e N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true \
- -e N8N_RUNNERS_ENABLED=true \
- -v n8n_data:/home/node/.n8n \
- docker.n8n.io/n8nio/n8n
- ```
+```bash
+# Start all services
+docker compose up -d
 
-## Web Search
+# View logs
+docker compose logs -f
 
-1. create tavily api key
-2. add tool 'tavily search' to agent
-
-## Information extraction
-
-1. Add node
-2. Define json
-
-## Start neo4j
-
-```
-docker run \
-    --name neo4j-mldsgraph \
-    --restart always \
-    --publish=7474:7474 --publish=7687:7687 \
-    --env NEO4J_AUTH=neo4j/password \
-    --volume=./neo4j-volume:/data \
-    --env NEO4JLABS_PLUGINS='["apoc", "n10s"]' \
-    neo4j:5.26
+# Stop all services
+docker compose down
 ```
 
-Here, the plugins _APOC_ (Awesome Procedures on Cypher) and _n10s_ (neosemantics) can be removed if not required.
+## Services
 
-## Knowledge graph agent
+All services run in Docker containers and communicate via the `app-network` bridge network:
 
-1. find `neo4j-cypher` and `neo4j-memory` on MCP toolkit, add them
+- **n8n** (http://localhost:5678) - Workflow automation platform
+- **Neo4j** (http://localhost:7474) - Graph database with APOC and n10s plugins
+- **MCP Gateway** (http://localhost:3000) - Model Context Protocol gateway
 
-2. provide configuration:
+## Configuration Files
+
+The system uses three main configuration files:
+
+1. **docker-compose.yaml** - Service orchestration
+2. **mcp-config.yaml** - MCP server connection parameters
+3. **custom-catalog.yaml** - Custom MCP catalog with tool definitions
+
+See [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md) for detailed configuration information.
+
+## Current MCP Servers
+
+The system includes two MCP servers:
+
+### neo4j-cypher
+- **Tools**: `get_neo4j_schema`, `read_neo4j_cypher`, `write_neo4j_cypher`
+- **Purpose**: Execute Cypher queries against Neo4j
+- **Configuration**: Custom environment variable mapping (NEO4J_URI instead of NEO4J_URL)
+
+### fetch
+- **Tools**: `fetch`
+- **Purpose**: Retrieve content from the web
+
+## Using MCP Tools in n8n
+
+1. **Access n8n**: Navigate to http://localhost:5678
+2. **Create a workflow** with an AI Agent node
+3. **Add MCP Client Tool**:
+   - Endpoint: `http://mcp-gateway:3000/mcp`
+   - Server Transport: `HTTP Streamable`
+   - Authentication: None
+
+4. **Select tools** from the available MCP servers (neo4j-cypher, fetch)
+
+## Neo4j Database
+
+Access Neo4j Browser at http://localhost:7474
+
+**Default credentials**:
+- Username: `neo4j`
+- Password: `password`
+
+**Included plugins**:
+- APOC (Awesome Procedures on Cypher)
+- n10s (neosemantics)
+
+**Important**: If you need to reset Neo4j credentials or encounter authentication rate limiting:
+```bash
+# Stop containers
+docker compose down
+
+# Remove Neo4j data
+rm -rf neo4j_data
+
+# Restart
+docker compose up -d
 ```
-url = bolt://host.docker.internal:7687
-username = neo4j
-database = neo4j
-password = *****
+
+## Adding New MCP Servers
+
+The project uses a custom MCP catalog to manage available tools. To add a new MCP server:
+
+### 1. Find the Server's Image Digest
+
+```bash
+# If the image is already pulled locally
+docker images | grep mcp/<server-name>
+
+# Get the SHA256 digest
+docker inspect <image-id> --format='{{index .RepoDigests 0}}'
 ```
 
-3. run:  `docker mcp gateway run --transport streaming --port 3000`
+### 2. Add to custom-catalog.yaml
 
-4. Add `MCP Client` tool. Use: `http://host.docker.internal:3000/mcp`  as Endpoint, and `HTTP Streamable` as Server Transport. Authentication none.
+```yaml
+registry:
+  your-server-name:
+    description: Description of what this server does
+    title: Display Name
+    type: server
+    image: mcp/server-name@sha256:<digest>
+    tools:
+      - name: tool_name_1
+      - name: tool_name_2
+    # Add env variables if needed
+    env:
+      - name: SOME_CONFIG
+        value: '{{your-server-name.config_key}}'
+```
 
-Note: The endpoint host should be substituted with `localhost` if your n8n instance is running through docker.
+**Important**: Always use SHA256 digests (`@sha256:...`) not tags (`:latest`). The MCP Gateway doesn't accept tag-based references like `@latest`.
 
+### 3. Add Configuration (if needed)
 
-### Prompt
+If your server requires configuration, add it to `mcp-config.yaml`:
 
-Below, I'll provide the updated full setup based on your request. To ensure the state of every component persists (even during upgrades, restarts, or container changes), I've added **mounted volumes** to the `docker-compose.yml` file. This uses Docker named volumes (for portability across hosts) and local bind mounts (for easier inspection/debugging on your local machine). Named volumes are defined at the end of the compose file, and they'll retain data unless explicitly removed. For services that already had volumes, I've refined them; forothers, I've added suitable ones based on the components (e.g., config files, user data, databases).
+```yaml
+your-server-name:
+  config_key: config_value
+  another_key: another_value
+```
 
-Key updates:
-- **Volumes**: Added for each service to persist config, data, and state (e.g., Neo4j DB, n8n workflows, Redis dumps, Kong plugins/configs). Named volumes are prefixed with `mcp-` for clarity.
-- **Data persistence**: Even if you upgrade an image or rebuild a container, the volume data remains. You can back them up with `docker run --rm -v mcp-neo4j-data:/data -v $(pwd)/backup:/backup alpine tar czf /backup/neo4j-backup.tar.gz -C /data .`.
-- **Local folders**: The bind mounts (e.g., `./neo4j/data:/data`) point to local dirs in your project folder. These are easier to edit/debug locally. Create them as before. Add a `.gitignore` file (newly included below) to avoid committing sensitive local data to Git.
-- **Pruning**: Named volumes aren't removed by `docker compose down`, so your state is safe. To clean: `docker volume rm mcp-neo4j-data` (etc.).
-- Assumptions: If a service is custom (e.g., mcp-server1), volumes assume common paths like `/app/data`—adjust if your app uses others. For Kong (MCP Gateway), we're persisting config/plugins. For Fetch.ai, assuming it's data-oriented.
+### 4. Update docker-compose.yaml
 
-I've updated the files with the complete configuration. The commands section has minor additions (e.g., creating volumes explicitly).
+Add your new server to the `--servers` command:
 
-### Step 1: Set Up Your Project Directory and Updated Files
-1. **Open a terminal and navigate/create the folder**:
-   - Run: `mkdir mcp-gateway-setup && cd mcp-gateway-setup`
-   - This creates a project folder and switches into it.
+```yaml
+mcp-gateway:
+  command:
+    - --servers=neo4j-cypher,fetch,your-server-name
+```
 
-2. **Create/update the required files**. Use a text editor to make these files. Save them in the `mcp-gateway-setup` folder. (The previous files are updated with volume additions.)
+### 5. Restart the Gateway
 
-   - **Updated File 1: docker-compose.yml** (the main orchestration file, with persistent volumes added for each service)
-     ```
-     version: '3.8'
+```bash
+docker restart kg-agent-mcp-gateway-1
+# Or restart all services
+docker compose restart
+```
 
-     services:
-       mcp-gateway:
-         image: kong:latest  # Replace if you have a custom MCP Gateway image
-         environment:
-           - KONG_DATABASE=off
-           - KONG_PROXY_LISTEN=0.0.0.0:8000
-           - KONG_ADMIN_LISTEN=0.0.0.0:8001
-           - KONG_LOG_LEVEL=info
-         ports:
-           - "8000:8000"
-           - "8001:8001"
-         networks:
-           - mcp-net
-         depends_on:
-           - neo4j
-           - n8n
-         env_file:
-           - .env  # For any additional env vars
-         volumes:
-           - mcp-gateway-config:/etc/kong:ro  # Persist config/plugins; ro for read-only to prevent overwrites
-           - mcp-gateway-data:/usr/local/kong/data  # For any custom user data/plugins
+For more details, see the [Docker Compose Documentation](docs/DOCKER_COMPOSE.md).
 
+## Data Persistence
 
-       neo4j:
-         image: neo4j:5.0
-         environment:
-           - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
-           - NEO4J_dbms_memory_heap_initial__size=512m
-         ports:
-           - "7474:7474"
-           - "7687:7687"
-         volumes:
-           - ./neo4j/data:/data:rw  # Bind mount for local DB inspection; persists all DB data/transactions
-           - mcp-neo4j-logs:/logs  # Persist logs separately
-         networks:
-           - mcp-net
-         env_file:
-           - .env
+All data is persisted in local directories:
 
-       n8n:
-         image: n8nio/n8n:latest
-         environment:
-           - N8N_BASIC_AUTH_ACTIVE=false
-           - N8N_HOST=n8n
-           - N8N_PORT=5678
-           - WEBHOOK_URL=http://localhost:8000/
-           - OPENAI_API_KEY=${OPENAI_API_KEY}
-         ports:
-           - "5678:5678"
-         volumes:
-           - ./n8n/data:/home/node/.n8n:rw  # Bind mount; persists workflows, credentials, executions
-           - mcp-n8n-config:/home/node/.config  # For additional config state
-         networks:
-           - mcp-net
-         depends_on:
-           - neo4j
-           - fetch
-           - neo4memory
-         env_file:
-           - .env
+- `./n8n_data` - n8n workflows, credentials, and executions
+- `./neo4j_data` - Neo4j database files
 
-     networks:
-       mcp-net:
-         driver: bridge
+These directories are created automatically when you first run `docker compose up`.
 
-     volumes:  # Named volumes for persistence across container upgrades
-       mcp-neo4j-logs:
-       mcp-n8n-config:
-     ```
+## Troubleshooting
 
-   - **File 2: .env** (unchanged from previous)
-     ```
-     # Replace with your actual values
-     CONTEXT_API_KEY=your_context7_api_key_here
-     FETCH_WALLET_ADDRESS=your_fetch_wallet_address
-     FETCH_API_KEY=your_fetch_api_key
-     NEO4J_PASSWORD=your_secure_neo4j_password  # e.g., 'changeme123'
-     OPENAI_API_KEY=your_openai_api_key
-     ```
+### MCP Gateway not loading servers
 
-   - **New File 3: .gitignore** (to ignore local volume folders and sensitive data when using Git)
-     ```
-     # Ignore local volume folders to prevent committing large/sensitive data
-     neo4j/data/
-     n8n/data/
-     fetch-data/
-     neo4memory/data/
-     .env
-     *backup*
-     ```
-     - Save this in the root of your project. If using Git, commit it to avoid tracking the folders.
+Check the gateway logs:
+```bash
+docker logs kg-agent-mcp-gateway-1
+```
 
-### Step 2: Commands to Run
-Follow these in sequence. The changes ensure volumes persist data.
+Look for:
+- Image pull errors
+- Configuration errors
+- Environment variable mapping issues
 
-1. **Navigate to your project folder** (if not already):
-   - Command: `cd mcp-gateway-setup`
+### n8n can't connect to MCP Gateway
 
-2. **(Optional) Build any custom images** (if your MCP servers or Context7 are custom):
-   - For "mcp-server1" (assuming a Dockerfile in ./mcp-server1/): `docker build -t your-mcp-server-image:tag ./mcp-server1/`
-   - Do the same for others if needed. Replace placeholders in docker-compose.yml.
+Ensure you're using the Docker service name:
+- ✅ Correct: `http://mcp-gateway:3000/mcp`
+- ❌ Wrong: `http://localhost:3000/mcp`
 
-3. **Test MCP Gateway standalone** (before full setup):
-   - Command: `docker run -d --name mcp-gateway-test -p 8000:8000 -p 8001:8001 --volume mcp-gateway-config-test:/etc/kong kong:latest`
-   - To check: `docker ps`.
-   - Stop: `docker stop mcp-gateway-test && docker rm mcp-gateway-test`.
+### Neo4j authentication issues
 
-4. **Create necessary local folders** (for bind mounts):
-   - Command: `mkdir -p neo4j/data n8n/data fetch-data neo4memory/data`
+If you see authentication rate limiting:
+1. Stop containers: `docker compose down`
+2. Remove data: `rm -rf neo4j_data`
+3. Restart: `docker compose up -d`
 
-5. **Start the full setup with Docker Compose** (this creates named volumes automatically):
-   - Command: `docker compose up -d`
-   - Volumes will persist across `docker compose down` and `up`.
+### View all service logs
 
-6. **Check status, logs, and volumes**:
-   - View running containers: `docker compose ps`
-   - View logs: `docker compose logs -f`
-   - List all volumes: `docker volume ls` (you'll see the mcp-* ones).
-   - Inspect a volume's data (e.g., for neo4j): `docker run --rm -v mcp-neo4j-logs:/data alpine ls -la /data`
+```bash
+docker compose logs -f
+```
 
-7. **Configure routes in MCP Gateway** (as before):
-   - (Commands unchanged) Use curl to add routes via http://localhost:8001.
+## Documentation
 
-8. **Verify integrations and persistence**:
-   - Access UIs as before.
-   - In n8n, create/save a workflow—restart n8n with `docker compose restart n8n` and verify it's persisted.
-   - Add data to Neo4j/Redis via UIs or tools, then restart services: Data should remain.
+- [Docker Compose Configuration](docs/DOCKER_COMPOSE.md) - Detailed service configuration and troubleshooting
 
-9. **Stop everything**:
-   - Command: `docker compose down` (volumes persist).
+## Project Structure
 
-10. **Clean up volumes if needed** (destructive—backup first):
-    - Command: `docker volume rm $(docker volume ls | grep mcp- | awk '{print $2}')`
-    - Or per-volume: `docker volume rm mcp-neo4j-data`
+```
+kg-agent/
+├── docker-compose.yaml      # Service orchestration
+├── mcp-config.yaml          # MCP server configuration
+├── custom-catalog.yaml      # Custom MCP catalog
+├── n8n_data/               # n8n data (auto-created)
+├── neo4j_data/             # Neo4j data (auto-created)
+└── docs/
+    └── DOCKER_COMPOSE.md   # Detailed documentation
+```
 
-If issues arise (e.g., permission errors on bind mounts), ensure your user has access to the local folders. For Windows/Mac, Docker Desktop handles it, but check logs. Let me know for further tweaks!
+## License
+
+[Add your license information here]

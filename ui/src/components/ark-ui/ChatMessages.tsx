@@ -1,15 +1,28 @@
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
 import { For, createEffect } from 'solid-js'
+import type { ElementDefinition } from 'cytoscape'
+
+export interface ToolCall {
+  tool: string
+  parameters: Record<string, unknown>
+  status: 'pending' | 'approved' | 'rejected' | 'executed'
+  result?: unknown
+  explanation?: string
+}
 
 export interface Message {
   id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: Date
+  toolCalls?: ToolCall[]
+  graphData?: ElementDefinition[]
 }
 
 interface ChatMessagesProps {
   messages: Message[]
+  onApproveWrite?: (messageId: string, toolCall: ToolCall) => void
+  onRejectWrite?: (messageId: string, toolCall: ToolCall) => void
 }
 
 export const ChatMessages = (props: ChatMessagesProps) => {
@@ -68,6 +81,70 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                   <div text="sm" white-space="pre-wrap" break-words>
                     {message.content}
                   </div>
+
+                  {/* Pending Tool Calls */}
+                  {message.toolCalls && message.toolCalls.length > 0 && (
+                    <For each={message.toolCalls}>
+                      {(toolCall) => (
+                        toolCall.status === 'pending' && (
+                          <div
+                            m="t-3"
+                            p="3"
+                            rounded="md"
+                            bg="dark-bg-secondary"
+                            border="1 neon-yellow/50"
+                          >
+                            <div flex="~" items="center" gap="2" m="b-2">
+                              <div
+                                w="2"
+                                h="2"
+                                rounded="full"
+                                bg="neon-yellow"
+                                shadow="[0_0_10px_rgba(255,255,0,0.5)]"
+                              />
+                              <div text="xs neon-yellow" font="medium">
+                                Approval Required
+                              </div>
+                            </div>
+
+                            <div text="xs dark-text-secondary" m="b-2">
+                              {toolCall.explanation}
+                            </div>
+
+                            <div flex="~" gap="2">
+                              <button
+                                onClick={() => props.onApproveWrite?.(message.id, toolCall)}
+                                p="x-3 y-1"
+                                text="xs dark-text-primary"
+                                bg="green-600/20 hover:green-600/30"
+                                border="1 green-500/50"
+                                rounded="md"
+                                cursor="pointer"
+                                transition="all"
+                                font="medium"
+                              >
+                                ✓ Approve
+                              </button>
+                              <button
+                                onClick={() => props.onRejectWrite?.(message.id, toolCall)}
+                                p="x-3 y-1"
+                                text="xs dark-text-primary"
+                                bg="red-600/20 hover:red-600/30"
+                                border="1 red-500/50"
+                                rounded="md"
+                                cursor="pointer"
+                                transition="all"
+                                font="medium"
+                              >
+                                ✗ Reject
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      )}
+                    </For>
+                  )}
+
                   <div
                     text="xs dark-text-tertiary"
                     m="t-1"

@@ -10,8 +10,10 @@ wheels/
 **/.venv
 
 # neo4j db
-neo4j_data/transactions/
-neo4j_data/data/transactions/
+neo4j_data/
+
+# n8n data
+n8n_data/
 
 # UI Solid Start Frontend
 **/node_modules
