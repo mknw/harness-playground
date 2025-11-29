@@ -94,7 +94,7 @@ export async function getUtcpClient(): Promise<CodeModeUtcpClient> {
       load_variables_from: [],
       tool_repository: 'local',
       tool_search_strategy: 'local_then_remote',
-      post_processing: 'none',
+      post_processing: [],  // Empty array = no post-processing
       manual_call_templates: [mcpTemplate, n8nTemplate]
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- CodeModeUtcpClient has loose typing
     } as any

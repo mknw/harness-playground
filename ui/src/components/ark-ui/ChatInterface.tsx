@@ -1,5 +1,19 @@
+/**
+ * ChatInterface Component
+ *
+ * Main chat interface that coordinates:
+ * - User message input
+ * - Agent processing (via server functions)
+ * - Message display with tool calls
+ * - Graph visualization updates
+ *
+ * Architecture:
+ * - Creates AgentOrchestrator synchronously (no async init)
+ * - Schema is fetched lazily when needed (server-side)
+ */
+
 import { createSignal, onMount } from 'solid-js'
-import { ChatMessages, type Message, type ToolCall } from './ChatMessages'
+import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
 import { AgentOrchestrator } from '~/lib/utcp-baml-agent'
@@ -21,44 +35,22 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const [messages, setMessages] = createSignal<Message[]>([])
   const [isProcessing, setIsProcessing] = createSignal(false)
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
-  const [_initError, setInitError] = createSignal<string | null>(null)
 
-  // Initialize agent orchestrator
-  let orchestrator: AgentOrchestrator | null = null
+  // Create orchestrator synchronously - NO async initialization needed
+  const orchestrator = new AgentOrchestrator()
 
-  onMount(async () => {
-    try {
-      orchestrator = new AgentOrchestrator()
-      await orchestrator.initialize()
-
-      // Add welcome message
-      const welcomeMessage: Message = {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: '👋 Hello! I\'m your knowledge graph assistant. I can help you:\n\n- Query and explore the Neo4j graph\n- Create new nodes and relationships\n- Analyze patterns and connections\n- Visualize graph data\n\nWhat would you like to know?',
-        timestamp: new Date()
-      }
-      setMessages([welcomeMessage])
-    } catch (error) {
-      console.error('Failed to initialize agent:', error)
-      setInitError(error instanceof Error ? error.message : 'Unknown error')
-
-      const errorMessage: Message = {
-        id: Date.now().toString(),
-        role: 'system',
-        content: `⚠️ Failed to initialize agent: ${error instanceof Error ? error.message : 'Unknown error'}\n\nPlease check that:\n- Neo4j is running\n- MCP Gateway is accessible\n- Environment variables are configured`,
-        timestamp: new Date()
-      }
-      setMessages([errorMessage])
+  onMount(() => {
+    // Add welcome message (no async init required)
+    const welcomeMessage: Message = {
+      id: Date.now().toString(),
+      role: 'assistant',
+      content: 'Hello! I\'m your knowledge graph assistant. I can help you:\n\n- Query and explore the Neo4j graph\n- Create new nodes and relationships\n- Analyze patterns and connections\n- Visualize graph data\n\nWhat would you like to know?',
+      timestamp: new Date()
     }
+    setMessages([welcomeMessage])
   })
 
   const handleSendMessage = async (content: string) => {
-    if (!orchestrator) {
-      console.error('Agent not initialized')
-      return
-    }
-
     // Add user message
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -70,7 +62,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     setIsProcessing(true)
 
     try {
-      // Process message with agent
+      // Process message with agent (two-step flow happens server-side)
       const result = await orchestrator.processMessage(content)
 
       // Convert AgentMessage to Message
@@ -79,7 +71,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         role: result.response.role,
         content: result.response.content,
         timestamp: result.response.timestamp,
-        toolCalls: result.response.toolCalls,
+        toolCall: result.response.toolCall,
         graphData: result.response.graphData
       }
 
@@ -87,7 +79,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
       // Update graph visualization if we got graph data
       if (result.graphUpdate) {
+        console.log('[ChatInterface] Graph update received:', result.graphUpdate.length, 'elements')
+        if (result.graphUpdate.length > 0) {
+          console.log('[ChatInterface] First element:', JSON.stringify(result.graphUpdate[0], null, 2))
+        }
         props.onGraphUpdate?.(result.graphUpdate)
+      } else {
+        console.log('[ChatInterface] No graph update in result')
       }
     } catch (error) {
       console.error('Error processing message:', error)
@@ -95,7 +93,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       const errorMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: `❌ Sorry, I encountered an error:\n\n\`\`\`\n${error instanceof Error ? error.message : 'Unknown error'}\n\`\`\`\n\nPlease try rephrasing your question or check the system logs.`,
+        content: `Sorry, I encountered an error:\n\n\`\`\`\n${error instanceof Error ? error.message : 'Unknown error'}\n\`\`\`\n\nPlease try rephrasing your question.`,
         timestamp: new Date()
       }
       setMessages([...messages(), errorMessage])
@@ -104,28 +102,19 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     }
   }
 
-  const handleApproveWrite = async (messageId: string, toolCall: ToolCall) => {
-    if (!orchestrator) {
-      console.error('Agent not initialized')
-      return
-    }
-
+  const handleApproveWrite = async (messageId: string) => {
     setIsProcessing(true)
 
     try {
       // Execute the write query
-      const graphUpdate = await orchestrator.executeWriteQuery(
-        toolCall.parameters.query as string | undefined
-      )
+      const { graphUpdate, toolCall } = await orchestrator.executeWriteQuery()
 
-      // Update the message to mark tool call as executed
+      // Update the message with executed tool call
       setMessages(messages().map(msg => {
-        if (msg.id === messageId) {
+        if (msg.id === messageId && msg.toolCall) {
           return {
             ...msg,
-            toolCalls: msg.toolCalls?.map(tc =>
-              tc === toolCall ? { ...tc, status: 'executed' as const, result: graphUpdate } : tc
-            )
+            toolCall: toolCall || { ...msg.toolCall, status: 'executed' as const }
           }
         }
         return msg
@@ -135,7 +124,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       const successMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: `✅ Write operation completed successfully!\n\n${graphUpdate.length} graph elements were affected.`,
+        content: `Write operation completed successfully! ${graphUpdate.length} graph elements were affected.`,
         timestamp: new Date()
       }
       setMessages([...messages(), successMessage])
@@ -147,14 +136,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     } catch (error) {
       console.error('Error executing write query:', error)
 
-      // Update the message to mark tool call as rejected
+      // Update the message to mark tool call as error
       setMessages(messages().map(msg => {
-        if (msg.id === messageId) {
+        if (msg.id === messageId && msg.toolCall) {
           return {
             ...msg,
-            toolCalls: msg.toolCalls?.map(tc =>
-              tc === toolCall ? { ...tc, status: 'rejected' as const } : tc
-            )
+            toolCall: { ...msg.toolCall, status: 'error' as const, error: String(error) }
           }
         }
         return msg
@@ -163,7 +150,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       const errorMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: `❌ Write operation failed:\n\n\`\`\`\n${error instanceof Error ? error.message : 'Unknown error'}\n\`\`\``,
+        content: `Write operation failed:\n\n\`\`\`\n${error instanceof Error ? error.message : 'Unknown error'}\n\`\`\``,
         timestamp: new Date()
       }
       setMessages([...messages(), errorMessage])
@@ -172,28 +159,33 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     }
   }
 
-  const handleRejectWrite = (messageId: string, toolCall: ToolCall) => {
-    // Update the message to mark tool call as rejected
-    setMessages(messages().map(msg => {
-      if (msg.id === messageId) {
-        return {
-          ...msg,
-          toolCalls: msg.toolCalls?.map(tc =>
-            tc === toolCall ? { ...tc, status: 'rejected' as const } : tc
-          )
-        }
-      }
-      return msg
-    }))
+  const handleRejectWrite = async (messageId: string) => {
+    try {
+      // Notify orchestrator of rejection
+      const rejectionMessage = await orchestrator.rejectPendingWrite()
 
-    // Add rejection message
-    const rejectionMessage: Message = {
-      id: Date.now().toString(),
-      role: 'assistant',
-      content: '❌ Write operation was rejected by user.',
-      timestamp: new Date()
+      // Update the message to show rejection in tool call
+      setMessages(messages().map(msg => {
+        if (msg.id === messageId && msg.toolCall) {
+          return {
+            ...msg,
+            toolCall: { ...msg.toolCall, status: 'error' as const, error: 'Rejected by user' }
+          }
+        }
+        return msg
+      }))
+
+      // Add rejection message from agent
+      const responseMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: rejectionMessage,
+        timestamp: new Date()
+      }
+      setMessages([...messages(), responseMessage])
+    } catch (error) {
+      console.error('Error rejecting write:', error)
     }
-    setMessages([...messages(), rejectionMessage])
   }
 
   return (

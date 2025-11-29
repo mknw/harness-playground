@@ -29,8 +29,10 @@ export interface Neo4jRelationship {
   type: string;
   start: string | number;
   end: string | number;
-  startNode?: string;  // Neo4j 5.x element ID
-  endNode?: string;  // Neo4j 5.x element ID
+  startNode?: string;  // Neo4j 5.x element ID (deprecated naming)
+  endNode?: string;  // Neo4j 5.x element ID (deprecated naming)
+  startNodeElementId?: string;  // Neo4j 5.x element ID
+  endNodeElementId?: string;  // Neo4j 5.x element ID
   properties: Record<string, unknown>;
   elementId?: string;
 }
@@ -105,9 +107,17 @@ function transformRelationship(rel: Neo4jRelationship): ElementDefinition {
   // Use elementId if available (Neo4j 5.x), otherwise use identity
   const id = rel.elementId?.toString() || rel.identity.toString();
 
-  // Use startNode/endNode if available (Neo4j 5.x), otherwise use start/end
-  const source = rel.startNode?.toString() || rel.start.toString();
-  const target = rel.endNode?.toString() || rel.end.toString();
+  // For source/target, we need to match the node IDs
+  // Neo4j 5.x uses startNodeElementId/endNodeElementId (full element IDs)
+  // Fall back to startNode/start for older formats
+  const source = rel.startNodeElementId?.toString()
+    || rel.startNode?.toString()
+    || rel.start.toString();
+  const target = rel.endNodeElementId?.toString()
+    || rel.endNode?.toString()
+    || rel.end.toString();
+
+  console.log('[transform] Relationship source:', source, 'target:', target);
 
   return {
     data: {
@@ -168,25 +178,44 @@ function formatRelationshipLabel(type: string): string {
  * Handles different result formats from neo4j-cypher MCP server
  */
 export function parseNeo4jResults(mcpResponse: unknown): Neo4jQueryResult {
+  console.log('[transform] parseNeo4jResults called');
+
   // Type guard for response object
   const response = mcpResponse as Record<string, unknown>;
 
   // If response is already in expected format
   if (response?.nodes && response?.relationships) {
+    console.log('[transform] Response already in expected format');
     return response as unknown as Neo4jQueryResult;
   }
 
   // If response has records array
   if (response?.records && Array.isArray(response.records)) {
+    console.log('[transform] Found records array, length:', response.records.length);
+    if (response.records.length > 0) {
+      // Log the structure of the first record
+      const firstRecord = response.records[0];
+      console.log('[transform] First record type:', typeof firstRecord);
+      console.log('[transform] First record constructor:', firstRecord?.constructor?.name);
+      // If it has keys() method (Neo4j Record), log keys
+      if (firstRecord && typeof firstRecord.keys === 'function') {
+        console.log('[transform] Record keys:', firstRecord.keys());
+      }
+      if (firstRecord && typeof firstRecord.toObject === 'function') {
+        console.log('[transform] Record toObject:', JSON.stringify(firstRecord.toObject(), null, 2));
+      }
+    }
     return extractNodesAndRelsFromRecords(response.records);
   }
 
   // If response is a simple array
   if (Array.isArray(mcpResponse)) {
+    console.log('[transform] Response is array, length:', mcpResponse.length);
     return extractNodesAndRelsFromRecords(mcpResponse);
   }
 
   // Empty result
+  console.log('[transform] No valid format found, returning empty');
   return { nodes: [], relationships: [] };
 }
 
@@ -195,20 +224,33 @@ export function parseNeo4jResults(mcpResponse: unknown): Neo4jQueryResult {
  * Handles the case where MCP returns raw record arrays
  */
 function extractNodesAndRelsFromRecords(records: unknown[]): Neo4jQueryResult {
+  console.log('[transform] extractNodesAndRelsFromRecords called with', records.length, 'records');
+
   const nodes = new Map<string, Neo4jNode>();
   const relationships: Neo4jRelationship[] = [];
 
   for (const record of records) {
+    // Neo4j Record objects have a toObject() method
+    const recordObj = record && typeof (record as { toObject?: () => unknown }).toObject === 'function'
+      ? (record as { toObject: () => unknown }).toObject()
+      : record;
+
     // Record can be an object with keys or an array
-    const values = Array.isArray(record)
-      ? record
-      : Object.values(record as Record<string, unknown>);
+    const values = Array.isArray(recordObj)
+      ? recordObj
+      : Object.values(recordObj as Record<string, unknown>);
+
+    console.log('[transform] Processing record with', values.length, 'values');
 
     for (const value of values) {
+      console.log('[transform] Checking value:', typeof value, value?.constructor?.name);
+
       if (isNode(value)) {
         const id = value.elementId?.toString() || value.identity.toString();
+        console.log('[transform] Found node:', id);
         nodes.set(id, value);
       } else if (isRelationship(value)) {
+        console.log('[transform] Found relationship');
         relationships.push(value);
 
         // Also extract connected nodes if present
@@ -216,11 +258,16 @@ function extractNodesAndRelsFromRecords(records: unknown[]): Neo4jQueryResult {
           // These are node references - we might get the full nodes separately
         }
       } else if (isPath(value)) {
+        console.log('[transform] Found path');
         // Path contains nodes and relationships
         extractFromPath(value, nodes, relationships);
+      } else {
+        console.log('[transform] Value not recognized as node/rel/path');
       }
     }
   }
+
+  console.log('[transform] Extracted', nodes.size, 'nodes and', relationships.length, 'relationships');
 
   return {
     nodes: Array.from(nodes.values()),

@@ -1,27 +1,25 @@
 /**
  * Agent Orchestrator (Client-Side)
  *
- * Coordinates the knowledge graph agent's operations via server functions:
- * - Processes user messages with BAML functions (server-side)
- * - Executes graph queries via UTCP (server-side)
- * - Manages conversation state (client-side via thread events)
- * - Handles user-confirmed writes (via server functions)
+ * Simplified orchestrator that:
+ * - Does NOT pre-fetch schema (lazy loading in server)
+ * - Delegates all logic to server functions
+ * - Manages thread state locally
+ * - Tracks pending writes for approval flow
  *
  * Architecture:
- * - Uses lib/neo4j for non-agentic operations (schema, manual Cypher)
- * - Uses lib/utcp-baml-agent for agentic operations (BAML + UTCP)
+ * - Server handles: BAML reasoning, schema fetching, query execution
+ * - Client handles: UI state, thread events, approval coordination
  */
 
 import type { ElementDefinition } from 'cytoscape';
-import { getSchema } from '../neo4j/queries';
 import {
   processAgentMessage,
   executeApprovedWrite,
   rejectWrite,
-  initializeAgent,
-  type SerializedThread
-} from './index';
-import type { GraphQuery } from '../../../baml_client';
+  type SerializedThread,
+  type ToolCallInfo
+} from './server';
 
 // ============================================================================
 // Types
@@ -32,23 +30,16 @@ export interface AgentMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: Date;
-  toolCalls?: ToolCall[];
+  toolCall?: ToolCallInfo;  // Single tool call (not array)
   graphData?: ElementDefinition[];
-}
-
-export interface ToolCall {
-  tool: string;
-  parameters: Record<string, unknown>;
-  status: 'pending' | 'approved' | 'rejected' | 'executed';
-  result?: unknown;
-  explanation?: string;
 }
 
 export interface ProcessMessageResult {
   response: AgentMessage;
   graphUpdate?: ElementDefinition[];
   needsApproval?: boolean;
-  pendingQuery?: GraphQuery;
+  pendingCypher?: string;
+  pendingExplanation?: string;
 }
 
 // ============================================================================
@@ -57,62 +48,27 @@ export interface ProcessMessageResult {
 
 export class AgentOrchestrator {
   private threadEvents: SerializedThread = [];
-  private graphSchema: string | null = null;
-  private isInitialized = false;
-  private pendingWrite: GraphQuery | null = null;
+  private pendingCypher: string | null = null;
+  private pendingExplanation: string | null = null;
 
-  /**
-   * Initialize the agent
-   * Fetches the Neo4j schema on startup via server function
-   */
-  async initialize(): Promise<void> {
-    if (this.isInitialized) return;
-
-    try {
-      console.log('🤖 Initializing Agent Orchestrator...');
-
-      // Use non-agentic layer for schema (direct neo4j-driver)
-      const result = await initializeAgent();
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to initialize');
-      }
-
-      this.graphSchema = result.graphSchema || null;
-
-      console.log('✅ Agent initialized successfully');
-      console.log('   - Schema loaded:', !!this.graphSchema);
-
-      this.isInitialized = true;
-    } catch (error) {
-      console.error('❌ Agent initialization failed:', error);
-      throw new Error(`Failed to initialize agent: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
+  // NO initialize() method - schema is fetched lazily when needed
 
   /**
    * Process a user message
-   * Uses agentic layer (BAML + UTCP) via server function
+   * Server handles: intent detection → optional schema fetch → query execution
    */
   async processMessage(userMessage: string): Promise<ProcessMessageResult> {
-    if (!this.isInitialized) {
-      await this.initialize();
-    }
-
     try {
-      // Call server function to process message with BAML
-      const result = await processAgentMessage(
-        userMessage,
-        this.threadEvents,
-        this.graphSchema || undefined
-      );
+      // Call server function (two-step flow happens server-side)
+      const result = await processAgentMessage(userMessage, this.threadEvents);
 
       // Update thread state
       this.threadEvents = result.threadEvents;
 
-      // Store pending write if needs approval
-      if (result.needsApproval && result.pendingQuery) {
-        this.pendingWrite = result.pendingQuery;
+      // Store pending write info if needs approval
+      if (result.needsApproval && result.pendingCypher) {
+        this.pendingCypher = result.pendingCypher;
+        this.pendingExplanation = result.pendingExplanation || null;
       }
 
       // Convert timestamp string back to Date
@@ -121,24 +77,25 @@ export class AgentOrchestrator {
         role: result.response.role,
         content: result.response.content,
         timestamp: new Date(result.response.timestamp),
-        toolCalls: result.response.toolCalls
+        toolCall: result.toolCall,
+        graphData: result.graphUpdate
       };
 
       return {
         response: agentMessage,
         graphUpdate: result.graphUpdate,
         needsApproval: result.needsApproval,
-        pendingQuery: result.pendingQuery
+        pendingCypher: result.pendingCypher,
+        pendingExplanation: result.pendingExplanation
       };
     } catch (error) {
       console.error('Error processing message:', error);
 
-      // Return error response
       return {
         response: {
           id: Date.now().toString(),
           role: 'assistant',
-          content: `I encountered an error while processing your request:\n\n\`\`\`\n${error instanceof Error ? error.message : String(error)}\n\`\`\`\n\nPlease try rephrasing your question.`,
+          content: `Error: ${error instanceof Error ? error.message : String(error)}`,
           timestamp: new Date()
         }
       };
@@ -146,46 +103,43 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Execute a write query (after user approval)
-   * Uses agentic layer via server function
-   * @param query - Optional query override (uses pending query if not provided)
-   * @returns Updated graph elements
+   * Execute a write query after user approval
+   * @returns Object containing graph update and updated tool call info
    */
-  async executeWriteQuery(query?: string): Promise<ElementDefinition[]> {
-    if (!this.isInitialized) {
-      await this.initialize();
-    }
-
-    const queryToExecute = query || this.pendingWrite?.cypher;
-    const explanation = this.pendingWrite?.explanation || 'User-approved write operation';
-
-    if (!queryToExecute) {
-      throw new Error('No query to execute');
+  async executeWriteQuery(): Promise<{
+    graphUpdate: ElementDefinition[];
+    toolCall?: ToolCallInfo;
+  }> {
+    if (!this.pendingCypher) {
+      throw new Error('No pending write query');
     }
 
     try {
-      console.log('✏️ Executing write query:', queryToExecute);
+      console.log('✏️ Executing write query:', this.pendingCypher);
 
-      // Execute write query via server function
       const result = await executeApprovedWrite(
-        queryToExecute,
-        explanation,
+        this.pendingCypher,
+        this.pendingExplanation || 'User-approved write',
         this.threadEvents
       );
 
       if (!result.success) {
-        throw new Error(result.error || 'Failed to execute write query');
+        throw new Error(result.error || 'Write query failed');
       }
 
       // Update thread state
       this.threadEvents = result.threadEvents;
 
       // Clear pending write
-      this.pendingWrite = null;
+      this.pendingCypher = null;
+      this.pendingExplanation = null;
 
-      console.log('✅ Write query executed successfully');
+      console.log('✅ Write query executed');
 
-      return result.graphUpdate || [];
+      return {
+        graphUpdate: result.graphUpdate || [],
+        toolCall: result.toolCall
+      };
     } catch (error) {
       console.error('Error executing write query:', error);
       throw error;
@@ -203,7 +157,8 @@ export class AgentOrchestrator {
     this.threadEvents = result.threadEvents;
 
     // Clear pending write
-    this.pendingWrite = null;
+    this.pendingCypher = null;
+    this.pendingExplanation = null;
 
     return result.message;
   }
@@ -212,14 +167,21 @@ export class AgentOrchestrator {
    * Check if there's a pending write awaiting approval
    */
   hasPendingWrite(): boolean {
-    return this.pendingWrite !== null;
+    return this.pendingCypher !== null;
   }
 
   /**
-   * Get the pending write query
+   * Get the pending write cypher query
    */
-  getPendingWrite(): GraphQuery | null {
-    return this.pendingWrite;
+  getPendingCypher(): string | null {
+    return this.pendingCypher;
+  }
+
+  /**
+   * Get the pending write explanation
+   */
+  getPendingExplanation(): string | null {
+    return this.pendingExplanation;
   }
 
   /**
@@ -232,36 +194,13 @@ export class AgentOrchestrator {
   /**
    * Clear conversation history
    */
-  clearConversationHistory(): void {
+  clearConversation(): void {
     this.threadEvents = [];
-    this.pendingWrite = null;
-    console.log('🧹 Conversation history cleared');
-  }
-
-  /**
-   * Get graph schema
-   */
-  getGraphSchema(): string | null {
-    return this.graphSchema;
-  }
-
-  /**
-   * Refresh graph schema
-   * Uses non-agentic layer (direct neo4j-driver)
-   */
-  async refreshSchema(): Promise<void> {
-    try {
-      const result = await getSchema();
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to refresh schema');
-      }
-
-      this.graphSchema = result.schema || null;
-      console.log('✅ Schema refreshed');
-    } catch (error) {
-      console.error('❌ Failed to refresh schema:', error);
-      throw error;
-    }
+    this.pendingCypher = null;
+    this.pendingExplanation = null;
+    console.log('🧹 Conversation cleared');
   }
 }
+
+// Re-export types
+export type { ToolCallInfo, SerializedThread };

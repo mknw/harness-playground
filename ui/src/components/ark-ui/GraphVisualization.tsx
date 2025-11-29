@@ -13,7 +13,7 @@
 import cytoscape, { type Core, type ElementDefinition, type LayoutOptions } from 'cytoscape';
 import { createSignal, onMount, onCleanup, createEffect, Show, For } from 'solid-js';
 import { Collapsible } from '@ark-ui/solid/collapsible';
-import { runManualCypher } from '~/lib/neo4j/queries';
+import { runManualCypher, getNodeProperties } from '~/lib/neo4j/queries';
 
 // ============================================================================
 // Types
@@ -49,6 +49,16 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
   const [isExecuting, setIsExecuting] = createSignal(false);
   const [queryHistory, setQueryHistory] = createSignal<string[]>([]);
 
+  // Selected node state (for properties panel)
+  const [selectedNode, setSelectedNode] = createSignal<{
+    id: string;
+    label: string;
+    labels: string[];
+    properties: Record<string, unknown> | null;
+    position: { x: number; y: number };
+  } | null>(null);
+  const [isLoadingProps, setIsLoadingProps] = createSignal(false);
+
   // ========================================
   // Cytoscape Initialization
   // ========================================
@@ -74,8 +84,9 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
             'background-color': '#00ffff',
             'label': 'data(label)',
             'color': '#e4e4e7',
-            'text-valign': 'center',
+            'text-valign': 'top',
             'text-halign': 'center',
+            'text-margin-y': -8,
             'font-size': '12px',
             'font-family': 'Inter, sans-serif',
             'border-width': 2,
@@ -83,7 +94,11 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
             'width': 50,
             'height': 50,
             'text-wrap': 'wrap',
-            'text-max-width': '80px'
+            'text-max-width': '100px',
+            'text-background-opacity': 1,
+            'text-background-color': '#0a0a0f',
+            'text-background-padding': '4px',
+            'text-background-shape': 'roundrectangle'
           }
         },
 
@@ -153,13 +168,34 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     // eslint-disable-next-line solid/reactivity
     cy.on('tap', 'node', (evt) => {
       const node = evt.target;
-      props.onNodeClick?.(node.id(), node.data() as Record<string, unknown>);
+      const data = node.data() as Record<string, unknown>;
+      const renderedPos = node.renderedPosition();
+
+      // Show properties panel
+      setSelectedNode({
+        id: node.id(),
+        label: (data.label as string) || 'Node',
+        labels: (data.labels as string[]) || [],
+        properties: (data.properties as Record<string, unknown>) || null,
+        position: { x: renderedPos.x, y: renderedPos.y }
+      });
+
+      // Also call external handler if provided
+      props.onNodeClick?.(node.id(), data);
     });
 
     // eslint-disable-next-line solid/reactivity
     cy.on('tap', 'edge', (evt) => {
       const edge = evt.target;
       props.onEdgeClick?.(edge.id(), edge.data() as Record<string, unknown>);
+    });
+
+    // Click on background to close panel
+    // eslint-disable-next-line solid/reactivity
+    cy.on('tap', (evt) => {
+      if (evt.target === cy) {
+        setSelectedNode(null);
+      }
     });
 
     // Double-click to center on node
@@ -181,7 +217,12 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
 
   // Update graph when elements change
   createEffect(() => {
-    if (!cy || !containerRef) return;
+    console.log('[GraphViz] Effect triggered, elements count:', props.elements.length);
+
+    if (!cy || !containerRef) {
+      console.log('[GraphViz] cy or containerRef not ready');
+      return;
+    }
 
     // Check container has valid dimensions before rendering
     const rect = containerRef.getBoundingClientRect();
@@ -191,6 +232,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     }
 
     const elements = props.elements;
+    console.log('[GraphViz] Processing elements:', elements.length);
 
     if (elements.length === 0) {
       cy.elements().remove();
@@ -265,6 +307,31 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
       handleRunCypher();
+    }
+  };
+
+  // ========================================
+  // Node Properties Handler
+  // ========================================
+
+  const handleLoadProperties = async () => {
+    const node = selectedNode();
+    if (!node) return;
+
+    setIsLoadingProps(true);
+    try {
+      const result = await getNodeProperties(node.id);
+      if (result.success && result.properties) {
+        // Update selected node with properties
+        setSelectedNode({ ...node, properties: result.properties });
+
+        // Also update Cytoscape node data for future clicks
+        cy?.getElementById(node.id).data('properties', result.properties);
+      }
+    } catch (error) {
+      console.error('Failed to load properties:', error);
+    } finally {
+      setIsLoadingProps(false);
     }
   };
 
@@ -547,6 +614,92 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
               </div>
             </div>
           </div>
+        </Show>
+
+        {/* Node Properties Panel */}
+        <Show when={selectedNode()}>
+          {(node) => (
+            <div
+              style={{
+                position: 'absolute',
+                left: `${Math.min(node().position.x + 60, (containerRef?.clientWidth || 400) - 280)}px`,
+                top: `${Math.max(20, Math.min(node().position.y, (containerRef?.clientHeight || 400) - 200))}px`,
+                transform: 'translateY(-50%)'
+              }}
+              bg="dark-bg-secondary"
+              border="1 dark-border-primary"
+              rounded="lg"
+              p="4"
+              min-w="64"
+              max-w="72"
+              shadow="[0_0_20px_rgba(0,0,0,0.5)]"
+              z="50"
+            >
+              {/* Header */}
+              <div flex="~" justify="between" items="start" m="b-3" gap="2">
+                <div>
+                  <div text="sm dark-text-primary" font="semibold">{node().label}</div>
+                  <div text="xs dark-text-tertiary">{node().labels.join(', ')}</div>
+                </div>
+                <button
+                  onClick={() => setSelectedNode(null)}
+                  p="1"
+                  text="dark-text-tertiary hover:dark-text-primary"
+                  bg="transparent hover:dark-bg-hover"
+                  rounded="md"
+                  cursor="pointer"
+                  transition="colors"
+                >
+                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Properties */}
+              <Show
+                when={node().properties && Object.keys(node().properties!).length > 0}
+                fallback={
+                  <div>
+                    <div text="xs dark-text-tertiary" m="b-2">No properties loaded</div>
+                    <button
+                      onClick={handleLoadProperties}
+                      disabled={isLoadingProps()}
+                      p="x-3 y-2"
+                      w="full"
+                      text="xs dark-text-primary"
+                      bg="neon-cyan/20 hover:neon-cyan/30 disabled:opacity-50"
+                      border="1 neon-cyan/50"
+                      rounded="md"
+                      cursor="pointer disabled:cursor-wait"
+                      transition="all"
+                      font="medium"
+                    >
+                      {isLoadingProps() ? 'Loading...' : 'Load Properties'}
+                    </button>
+                  </div>
+                }
+              >
+                <div text="xs" max-h="48" overflow="y-auto" space="y-2">
+                  <For each={Object.entries(node().properties!)}>
+                    {([key, value]) => (
+                      <div border="b dark-border-secondary" p="b-2">
+                        <div text="dark-text-tertiary" font="medium">{key}</div>
+                        <div text="dark-text-primary" style={{ "word-break": "break-word" }}>
+                          {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
+                        </div>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+
+              {/* Node ID footer */}
+              <div text="xs dark-text-tertiary" m="t-3" p="t-2" border="t dark-border-secondary" font="mono">
+                ID: {node().id.substring(0, 20)}...
+              </div>
+            </div>
+          )}
         </Show>
       </div>
     </div>

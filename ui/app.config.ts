@@ -11,7 +11,17 @@ export default defineConfig({
         transformers: [
           transformerAttributifyJsx()
         ]
-      })
+      }),
     ],
+    // Externalize WebAssembly-based packages for SSR (they only work client-side)
+    // ssr: {
+    //   external: ['solid-markdown-wasm'],
+    //   noExternal: []
+    // },
+    // build: {
+    //   rollupOptions: {
+    //     external: ['solid-markdown-wasm']
+    //   }
+    // }
   }
 });

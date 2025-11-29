@@ -1,5 +1,5 @@
 {
-  "name": "example-with-unocss",
+  "name": "seederis-ai-kg-ui",
   "type": "module",
   "scripts": {
     "baml-test": "baml-cli test",
@@ -23,6 +23,7 @@
     "@utcp/sdk": "^1.0.17",
     "@utcp/text": "^1.0.12",
     "cytoscape": "^3.33.1",
+    "marked": "^17.0.1",
     "neo4j-driver": "^6.0.1",
     "solid-js": "^1.9.10",
     "unocss": "^66.5.4",
@@ -40,6 +41,7 @@
     "eslint": "^9.38.0",
     "eslint-plugin-solid": "^0.14.5",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.46.2"
+    "typescript-eslint": "^8.46.2",
+    "vite-plugin-wasm": "^3.5.0"
   }
 }

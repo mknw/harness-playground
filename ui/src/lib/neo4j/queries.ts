@@ -110,6 +110,56 @@ export async function getSimplifiedSchema(credentials?: Neo4jCredentials): Promi
 }
 
 // ============================================================================
+// Node Property Operations
+// ============================================================================
+
+export interface NodePropertiesResult {
+  success: boolean;
+  properties?: Record<string, unknown>;
+  labels?: string[];
+  error?: string;
+}
+
+/**
+ * Fetch properties for a specific node by element ID
+ * Used when clicking on a graph node that doesn't have properties loaded
+ *
+ * @param elementId - Neo4j 5.x element ID (e.g., "4:xxx:123")
+ */
+export async function getNodeProperties(
+  elementId: string
+): Promise<NodePropertiesResult> {
+  "use server";
+
+  const session = getNeo4jDriver().session();
+  try {
+    const result = await session.run(
+      'MATCH (n) WHERE elementId(n) = $elementId RETURN properties(n) as props, labels(n) as labels',
+      { elementId }
+    );
+
+    if (result.records.length === 0) {
+      return { success: false, error: 'Node not found' };
+    }
+
+    const record = result.records[0];
+    return {
+      success: true,
+      properties: record.get('props') as Record<string, unknown>,
+      labels: record.get('labels') as string[]
+    };
+  } catch (error) {
+    console.error('Failed to fetch node properties:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  } finally {
+    await session.close();
+  }
+}
+
+// ============================================================================
 // Manual Cypher Operations
 // ============================================================================
 

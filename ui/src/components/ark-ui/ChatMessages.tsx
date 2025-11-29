@@ -1,38 +1,56 @@
-import { ScrollArea } from '@ark-ui/solid/scroll-area'
-import { For, createEffect } from 'solid-js'
-import type { ElementDefinition } from 'cytoscape'
+/**
+ * ChatMessages Component
+ *
+ * Renders the chat message history with:
+ * - User messages (right-aligned)
+ * - Assistant messages (left-aligned)
+ * - Tool calls displayed SEPARATELY below messages (via ToolCallDisplay)
+ */
 
-export interface ToolCall {
-  tool: string
-  parameters: Record<string, unknown>
-  status: 'pending' | 'approved' | 'rejected' | 'executed'
-  result?: unknown
-  explanation?: string
-}
+import { ScrollArea } from '@ark-ui/solid/scroll-area'
+import { For, Show, createEffect, createSignal, createMemo } from 'solid-js'
+import type { ElementDefinition } from 'cytoscape'
+import type { ToolCallInfo } from '~/lib/utcp-baml-agent/server'
+import { ToolCallDisplay } from './ToolCallDisplay'
+import { marked } from 'marked'
+
+// Configure marked for safe HTML output
+marked.setOptions({
+  breaks: true, // Convert \n to <br>
+  gfm: true     // GitHub Flavored Markdown
+})
 
 export interface Message {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: Date
-  toolCalls?: ToolCall[]
+  toolCall?: ToolCallInfo  // Single tool call (not array)
   graphData?: ElementDefinition[]
 }
 
 interface ChatMessagesProps {
   messages: Message[]
-  onApproveWrite?: (messageId: string, toolCall: ToolCall) => void
-  onRejectWrite?: (messageId: string, toolCall: ToolCall) => void
+  onApproveWrite?: (messageId: string) => void
+  onRejectWrite?: (messageId: string) => void
 }
 
 export const ChatMessages = (props: ChatMessagesProps) => {
-  let viewportRef: HTMLDivElement | undefined
+  let bottomRef: HTMLDivElement | undefined
+  const [prevCount, setPrevCount] = createSignal(0)
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll ONLY when new messages are added (not on content updates)
   createEffect(() => {
-    if (props.messages.length > 0 && viewportRef) {
-      viewportRef.scrollTop = viewportRef.scrollHeight
+    const currentCount = props.messages.length
+
+    // Only scroll if message count increased (new message added)
+    if (currentCount > prevCount() && bottomRef) {
+      setTimeout(() => {
+        bottomRef?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+      }, 50)
     }
+
+    setPrevCount(currentCount)
   })
 
   const getInitials = (role: string) => {
@@ -40,127 +58,86 @@ export const ChatMessages = (props: ChatMessagesProps) => {
   }
 
   return (
-    <ScrollArea.Root flex="1" overflow="hidden">
-      <ScrollArea.Viewport ref={viewportRef}>
+    <ScrollArea.Root style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+      <ScrollArea.Viewport style={{ height: '100%' }}>
         <ScrollArea.Content p="4" space="y-4">
           <For each={props.messages}>
             {(message) => (
-              <div
-                flex="~"
-                gap="3"
-                data-role={message.role}
-                class={message.role === 'user' ? 'flex-row-reverse' : ''}
-              >
-                {/* Avatar */}
+              <div flex="~ col" gap="2">
+                {/* Message Bubble */}
                 <div
-                  flex="~ shrink-0"
-                  w="8"
-                  h="8"
-                  rounded="full"
-                  items="center"
-                  justify="center"
-                  text="white xs"
-                  font="medium"
-                  bg={message.role === 'user' ? 'cyber-700' : 'dark-bg-tertiary'}
-                  border={message.role === 'user' ? '1 cyber-500' : '1 neon-cyan/50'}
-                  shadow={message.role === 'user' ? '[0_0_10px_rgba(79,70,229,0.3)]' : '[0_0_10px_rgba(0,255,255,0.2)]'}
+                  flex="~"
+                  gap="3"
+                  data-role={message.role}
+                  class={message.role === 'user' ? 'flex-row-reverse' : ''}
                 >
-                  {getInitials(message.role)}
-                </div>
-
-                {/* Message Content */}
-                <div
-                  max-w="2xl"
-                  p="3"
-                  rounded="lg"
-                  bg={message.role === 'user' ? 'cyber-800/50' : 'dark-bg-tertiary'}
-                  text="dark-text-primary"
-                  border={message.role === 'user' ? '1 cyber-700/50' : '1 dark-border-secondary'}
-                  backdrop-blur="sm"
-                >
-                  <div text="sm" white-space="pre-wrap" break-words>
-                    {message.content}
-                  </div>
-
-                  {/* Pending Tool Calls */}
-                  {message.toolCalls && message.toolCalls.length > 0 && (
-                    <For each={message.toolCalls}>
-                      {(toolCall) => (
-                        toolCall.status === 'pending' && (
-                          <div
-                            m="t-3"
-                            p="3"
-                            rounded="md"
-                            bg="dark-bg-secondary"
-                            border="1 neon-yellow/50"
-                          >
-                            <div flex="~" items="center" gap="2" m="b-2">
-                              <div
-                                w="2"
-                                h="2"
-                                rounded="full"
-                                bg="neon-yellow"
-                                shadow="[0_0_10px_rgba(255,255,0,0.5)]"
-                              />
-                              <div text="xs neon-yellow" font="medium">
-                                Approval Required
-                              </div>
-                            </div>
-
-                            <div text="xs dark-text-secondary" m="b-2">
-                              {toolCall.explanation}
-                            </div>
-
-                            <div flex="~" gap="2">
-                              <button
-                                onClick={() => props.onApproveWrite?.(message.id, toolCall)}
-                                p="x-3 y-1"
-                                text="xs dark-text-primary"
-                                bg="green-600/20 hover:green-600/30"
-                                border="1 green-500/50"
-                                rounded="md"
-                                cursor="pointer"
-                                transition="all"
-                                font="medium"
-                              >
-                                ✓ Approve
-                              </button>
-                              <button
-                                onClick={() => props.onRejectWrite?.(message.id, toolCall)}
-                                p="x-3 y-1"
-                                text="xs dark-text-primary"
-                                bg="red-600/20 hover:red-600/30"
-                                border="1 red-500/50"
-                                rounded="md"
-                                cursor="pointer"
-                                transition="all"
-                                font="medium"
-                              >
-                                ✗ Reject
-                              </button>
-                            </div>
-                          </div>
-                        )
-                      )}
-                    </For>
-                  )}
-
+                  {/* Avatar */}
                   <div
-                    text="xs dark-text-tertiary"
-                    m="t-1"
+                    flex="~ shrink-0"
+                    w="8"
+                    h="8"
+                    rounded="full"
+                    items="center"
+                    justify="center"
+                    text="white xs"
+                    font="medium"
+                    bg={message.role === 'user' ? 'cyber-700' : 'dark-bg-tertiary'}
+                    border={message.role === 'user' ? '1 cyber-500' : '1 neon-cyan/50'}
+                    shadow={message.role === 'user' ? '[0_0_10px_rgba(79,70,229,0.3)]' : '[0_0_10px_rgba(0,255,255,0.2)]'}
                   >
-                    {message.timestamp.toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
+                    {getInitials(message.role)}
+                  </div>
+
+                  {/* Message Content */}
+                  <div
+                    max-w="2xl"
+                    p="3"
+                    rounded="lg"
+                    bg={message.role === 'user' ? 'cyber-800/50' : 'dark-bg-tertiary'}
+                    text="dark-text-primary"
+                    border={message.role === 'user' ? '1 cyber-700/50' : '1 dark-border-secondary'}
+                    backdrop-blur="sm"
+                  >
+                    <Show
+                      when={message.role === 'assistant'}
+                      fallback={
+                        <div text="sm" white-space="pre-wrap" break-words>
+                          {message.content}
+                        </div>
+                      }
+                    >
+                      <div
+                        text="sm"
+                        class="prose-chat"
+                        innerHTML={marked.parse(message.content) as string}
+                      />
+                    </Show>
+
+                    <div text="xs dark-text-tertiary" m="t-1">
+                      {message.timestamp.toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </div>
                   </div>
                 </div>
+
+                {/* Tool Call - SEPARATE from message bubble */}
+                <Show when={message.toolCall && message.role === 'assistant'}>
+                  <div m="l-11">
+                    <ToolCallDisplay
+                      toolCall={message.toolCall!}
+                      onApprove={() => props.onApproveWrite?.(message.id)}
+                      onReject={() => props.onRejectWrite?.(message.id)}
+                    />
+                  </div>
+                </Show>
               </div>
             )}
           </For>
 
           {/* Empty State */}
-          {props.messages.length === 0 && (
+          <Show when={props.messages.length === 0}>
             <div
               flex="~"
               items="center"
@@ -177,7 +154,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
-                    style={{"margin":"0 auto"}}
+                    style={{ margin: '0 auto' }}
                   >
                     <path
                       stroke-linecap="round"
@@ -195,7 +172,10 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                 </div>
               </div>
             </div>
-          )}
+          </Show>
+
+          {/* Sentinel element for auto-scroll */}
+          <div ref={bottomRef} />
         </ScrollArea.Content>
       </ScrollArea.Viewport>
 
