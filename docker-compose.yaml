@@ -38,17 +38,17 @@ services:
     image: docker/mcp-gateway
     restart: unless-stopped
     command:
-      - --servers=neo4j-cypher,fetch
+      # - --servers=neo4j-cypher,fetch,web_search
       - --config=/mcp/config.yaml
       - --catalog=/mcp/custom-catalog.yaml
       - --transport=streaming
-      - --port=3000
+      - --port=8811
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./mcp-config.yaml:/mcp/config.yaml:ro
       - ./custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
     ports:
-      - "3000:3000"
+      - "8811:8811"
     networks:
       - app-network
     depends_on:
