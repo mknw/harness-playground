@@ -1,14 +1,6 @@
-/**
- * ChatMessages Component
- *
- * Renders the chat message history with:
- * - User messages (right-aligned)
- * - Assistant messages (left-aligned)
- * - Tool calls displayed SEPARATELY below messages (via ToolCallDisplay)
- */
 
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
-import { For, Show, createEffect, createSignal, createMemo } from 'solid-js'
+import { For, Show, createEffect, createSignal } from 'solid-js'
 import type { ElementDefinition } from 'cytoscape'
 import type { ToolCallInfo } from '~/lib/utcp-baml-agent/server'
 import { ToolCallDisplay } from './ToolCallDisplay'
@@ -58,7 +50,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
   }
 
   return (
-    <ScrollArea.Root style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+    <ScrollArea.Root style={{ flex: 1, overflow: 'hidden', 'min-height': 0 }}>
       <ScrollArea.Viewport style={{ height: '100%' }}>
         <ScrollArea.Content p="4" space="y-4">
           <For each={props.messages}>

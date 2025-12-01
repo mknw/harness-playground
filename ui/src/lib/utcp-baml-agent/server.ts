@@ -1,23 +1,38 @@
 /**
- * Agentic Server Functions (Simplified Two-Step Flow)
+ * Agentic Server Functions (Event-Driven Streaming Architecture)
  *
  * Server-side functions that expose agentic capabilities via SolidStart's "use server".
  *
  * Architecture:
- * - Step 1: DetectIntent (BAML) - lightweight, no schema needed
- * - Step 2: executeGraphQuery - lazy schema fetch + direct neo4j-driver
- * - Uses BAML for LLM reasoning (runs server-side due to native module requirement)
- * - Uses direct neo4j-driver for query execution (no UTCP)
+ * - Step 1: RouteUserMessage (BAML) - determine intent and routing
+ * - Step 2: Multi-turn tool loop with namespace-specific planning
+ * - Step 3: CreateToolResponse (BAML) - synthesize results
+ *
+ * Streaming via Promise arrays for real-time UI updates.
  */
 
 "use server";
 
-import { Thread, type SerializedThread } from './state';
+import {
+  Thread,
+  type SerializedThread,
+  type ToolMode,
+  type ToolNamespace,
+  type ApprovalState,
+  type RoutingInterfaceEvent,
+  type ToolExecutionPlan,
+  type ToolEvent,
+  type StreamEvent,
+  MAX_TOOL_TURNS,
+  estimateTokens,
+  prepareResultsForContext,
+  requiresApproval,
+  createApprovalState
+} from './state';
 import { getSchema, executeWriteCypher } from '../neo4j/queries';
 import { getNeo4jDriver } from '../neo4j/client';
 import { transformNeo4jToCytoscape, parseNeo4jResults } from '../graph/transform';
 import type { ElementDefinition } from 'cytoscape';
-import type { GraphQuery } from '../../../baml_client';
 import neo4j from 'neo4j-driver';
 
 // ============================================================================
@@ -75,253 +90,502 @@ function toSerializable(value: unknown): unknown {
 // Types
 // ============================================================================
 
-export interface ToolCallInfo {
-  id: string;
-  tool: 'read_neo4j_cypher' | 'write_neo4j_cypher' | 'get_schema';
-  cypher?: string;
-  status: 'pending' | 'executed' | 'error';
-  result?: {
-    nodeCount: number;
-    relationshipCount: number;
-    raw?: unknown;
-  };
-  error?: string;
-  timestamp: string;
-}
-
-export interface AgentMessageResponse {
-  id: string;
-  role: 'assistant';
-  content: string;
-  timestamp: string;
-}
-
 export interface ProcessMessageResult {
-  response: AgentMessageResponse;
-  toolCall?: ToolCallInfo;
-  graphUpdate?: ElementDefinition[];
+  events: StreamEvent[];
   threadEvents: SerializedThread;
-  needsApproval: boolean;
-  pendingCypher?: string;
-  pendingExplanation?: string;
+  graphUpdate?: ElementDefinition[];
+  needsApproval?: boolean;
+  pendingPlan?: ToolExecutionPlan;
 }
 
 export interface WriteExecutionResult {
   success: boolean;
-  toolCall?: ToolCallInfo;
+  toolEvent?: ToolEvent;
   graphUpdate?: ElementDefinition[];
   threadEvents: SerializedThread;
   error?: string;
+  toolCall?: ToolCallInfo;
 }
 
 // ============================================================================
-// Main Entry Point: Two-Step Processing
+// Legacy Types (for backward compatibility)
 // ============================================================================
 
 /**
- * Process a user message through the agent (two-step flow)
- *
- * Step 1: DetectIntent - determines if graph query is needed (no schema)
- * Step 2: executeGraphQuery - lazy schema fetch + query execution
+ * Tool call information for UI display
+ * Used by ToolCallDisplay component
+ */
+export interface ToolCallInfo {
+  // UI display type
+  type: 'neo4j_query' | 'neo4j_write' | 'web_search' | 'fetch' | 'code_mode';
+  // Execution status for visual indicators
+  status: 'pending' | 'executed' | 'error';
+  // Tool identifier (for display label)
+  tool: string;
+  // The cypher query or operation payload
+  cypher?: string;
+  // Query explanation
+  explanation?: string;
+  // Whether this is a read-only operation
+  isReadOnly?: boolean;
+  // Execution result with stats
+  result?: {
+    nodeCount?: number;
+    relationshipCount?: number;
+    raw?: unknown;
+  };
+  // Error message if failed
+  error?: string;
+}
+
+/**
+ * @deprecated Use ProcessMessageResult instead
+ */
+export interface AgentMessageResponse {
+  response: { id: string; role: 'assistant'; content: string; timestamp: string };
+  threadEvents: SerializedThread;
+  graphUpdate?: ElementDefinition[];
+  needsApproval: boolean;
+  pendingCypher?: string;
+  pendingExplanation?: string;
+  toolCall?: ToolCallInfo;
+}
+
+// ============================================================================
+// MCP Gateway Client
+// ============================================================================
+
+const MCP_GATEWAY_URL = 'http://localhost:8811/mcp';
+
+/**
+ * Call an MCP tool through the gateway
+ */
+async function callMcpGateway(
+  tool: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const response = await fetch(MCP_GATEWAY_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'tools/call',
+      params: { name: tool, arguments: args }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Gateway error: ${response.status} ${response.statusText}`);
+  }
+
+  const result = await response.json();
+  if (result.error) {
+    throw new Error(result.error.message || 'Gateway tool call failed');
+  }
+
+  return result.result;
+}
+
+// ============================================================================
+// Main Entry Point: Streaming Message Processing
+// ============================================================================
+
+/**
+ * Process a user message with streaming events
  *
  * @param message - The user's message
  * @param threadEvents - Serialized thread events from previous turns
+ * @param approvalState - Current approval state for the session
  */
-export async function processAgentMessage(
+export async function processAgentMessageStreaming(
   message: string,
-  threadEvents: SerializedThread
+  threadEvents: SerializedThread,
+  approvalState?: ApprovalState
 ): Promise<ProcessMessageResult> {
   "use server";
 
-  // Restore thread from serialized events
   const thread = Thread.fromJSON(threadEvents);
   thread.addUserMessage(message);
 
+  const events: StreamEvent[] = [];
+  const state = approvalState || createApprovalState();
+
   try {
-    // Dynamic import of BAML client (inside try-catch to handle import errors)
     const { b } = await import('../../../baml_client');
+
     // ========================================
-    // STEP 1: Intent Detection (no schema)
+    // STEP 1: Route Message
     // ========================================
-    const intent = await b.DetectIntent(
+    const routing = await b.RouteUserMessage(
       message,
       thread.getRecentHistory(10)
     );
 
-    // If no graph query needed, return directly
-    if (!intent.requires_graph_query) {
-      thread.addAssistantMessage(intent.message);
+    // Add routing event
+    events.push({
+      type: 'routing',
+      data: routing as unknown as RoutingInterfaceEvent,
+      timestamp: new Date().toISOString()
+    });
+
+    // If no tool needed, return conversational response
+    if (!routing.tool_call_needed) {
+      thread.addAssistantMessage(routing.response_text);
+
+      events.push({
+        type: 'complete',
+        data: routing.response_text,
+        timestamp: new Date().toISOString()
+      });
 
       return {
-        response: {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: intent.message,
-          timestamp: new Date().toISOString()
-        },
-        threadEvents: thread.toJSON(),
-        needsApproval: false
+        events,
+        threadEvents: thread.toJSON()
       };
     }
 
     // ========================================
-    // STEP 2: Graph Query Execution
+    // STEP 2: Multi-Turn Tool Execution
     // ========================================
-    return await executeGraphQuery(
-      thread,
+    const { toolEvents, finalResponse, graphUpdate, needsApproval, pendingPlan } =
+      await executeToolLoop(
+        routing as unknown as RoutingInterfaceEvent,
+        message,
+        thread,
+        state
+      );
+
+    // Add tool events to stream
+    for (const te of toolEvents) {
+      events.push({
+        type: 'executing',
+        data: te,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // If approval needed, return with pending state
+    if (needsApproval && pendingPlan) {
+      return {
+        events,
+        threadEvents: thread.toJSON(),
+        graphUpdate,
+        needsApproval: true,
+        pendingPlan
+      };
+    }
+
+    // ========================================
+    // STEP 3: Generate Final Response
+    // ========================================
+    const finalContent = await b.CreateToolResponse(
+      JSON.stringify(toolEvents),
       message,
-      intent.query_intent || message,
-      intent.message
+      routing.intent
     );
+
+    const fullMessage = `${routing.response_text}\n\n${finalContent}`;
+    thread.addAssistantMessage(fullMessage);
+
+    events.push({
+      type: 'complete',
+      data: fullMessage,
+      timestamp: new Date().toISOString()
+    });
+
+    return {
+      events,
+      threadEvents: thread.toJSON(),
+      graphUpdate
+    };
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     thread.addError(errorMessage, { phase: 'process_message' });
 
+    events.push({
+      type: 'error',
+      data: errorMessage,
+      timestamp: new Date().toISOString()
+    });
+
     return {
-      response: {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: `I encountered an error:\n\n\`\`\`\n${errorMessage}\n\`\`\`\n\nPlease try again.`,
-        timestamp: new Date().toISOString()
-      },
-      threadEvents: thread.toJSON(),
-      needsApproval: false
+      events,
+      threadEvents: thread.toJSON()
     };
   }
 }
 
 // ============================================================================
-// Step 2: Graph Query Execution (Direct neo4j-driver)
+// Multi-Turn Tool Execution Loop
+// ============================================================================
+
+interface ToolLoopResult {
+  toolEvents: ToolEvent[];
+  finalResponse?: string;
+  graphUpdate?: ElementDefinition[];
+  needsApproval?: boolean;
+  pendingPlan?: ToolExecutionPlan;
+}
+
+/**
+ * Execute tools in a loop until done or max turns reached
+ */
+async function executeToolLoop(
+  routing: RoutingInterfaceEvent,
+  message: string,
+  thread: Thread,
+  approvalState: ApprovalState
+): Promise<ToolLoopResult> {
+  const { b } = await import('../../../baml_client');
+  const toolEvents: ToolEvent[] = [];
+  let graphUpdate: ElementDefinition[] | undefined;
+  let n_turn = 0;
+  let endTool = false;
+
+  while (!endTool && n_turn < MAX_TOOL_TURNS) {
+    n_turn++;
+
+    // Prepare context from previous results
+    const previousResults = prepareResultsForContext(toolEvents);
+
+    // Plan next action based on tool namespace
+    const plan = await planToolExecution(
+      routing,
+      message,
+      previousResults,
+      n_turn
+    );
+
+    // Check if approval needed for writes
+    if (requiresApproval(plan, approvalState)) {
+      thread.addApprovalRequest(plan.payload, plan.reasoning);
+
+      return {
+        toolEvents,
+        graphUpdate,
+        needsApproval: true,
+        pendingPlan: plan
+      };
+    }
+
+    // Execute the tool
+    const toolEvent = await executeToolPlan(plan, routing.tool_mode, n_turn);
+    toolEvents.push(toolEvent);
+
+    // Record in thread
+    thread.addToolCall(plan.toolName, JSON.parse(plan.payload), routing.intent);
+    thread.addToolResponse(plan.toolName, toolEvent);
+
+    // Extract graph data if neo4j query
+    if (plan.toolName.includes('neo4j') && toolEvent.status_code === 200) {
+      const parsed = parseNeo4jResults({ records: toolEvent.data as any[] || [] });
+      const newGraphData = toSerializable(transformNeo4jToCytoscape(
+        parsed.nodes || [],
+        parsed.relationships || []
+      )) as ElementDefinition[];
+
+      graphUpdate = [...(graphUpdate || []), ...newGraphData];
+    }
+
+    // Check if done
+    endTool = plan.end_tool || n_turn >= MAX_TOOL_TURNS;
+  }
+
+  return { toolEvents, graphUpdate };
+}
+
+// ============================================================================
+// Tool Planning (Namespace-Specific)
 // ============================================================================
 
 /**
- * Execute a graph query with lazy schema fetching
- *
- * @param thread - Thread state
- * @param userMessage - Original user message
- * @param queryIntent - Natural language description of the query
- * @param prefixMessage - Initial response message from intent detection
+ * Plan tool execution based on namespace
  */
-async function executeGraphQuery(
-  thread: Thread,
-  userMessage: string,
-  queryIntent: string,
-  prefixMessage: string
-): Promise<ProcessMessageResult> {
+async function planToolExecution(
+  routing: RoutingInterfaceEvent,
+  message: string,
+  previousResults: string,
+  n_turn: number
+): Promise<ToolExecutionPlan> {
   const { b } = await import('../../../baml_client');
-  const toolCallId = Date.now().toString();
 
-  // 1. Lazy schema fetch (only happens when query is needed)
-  const schemaResult = await getSchema();
-  if (!schemaResult.success) {
-    throw new Error(`Failed to fetch schema: ${schemaResult.error}`);
-  }
+  switch (routing.tool_name) {
+    case 'neo4j': {
+      // Get schema for neo4j operations
+      const schemaResult = await getSchema();
+      const schema = schemaResult.success ? schemaResult.schema || '' : '';
 
-  // 2. Generate Cypher query using BAML
-  const query: GraphQuery = await b.GenerateCypherQuery(
-    queryIntent,
-    schemaResult.schema || ''
-  );
-
-  // Record tool call in thread
-  thread.addToolCall(
-    query.read_only ? 'read_neo4j_cypher' : 'write_neo4j_cypher',
-    { query: query.cypher },
-    query.read_only ? 'read' : 'write'
-  );
-
-  // 3. Handle write queries (need approval)
-  if (!query.read_only) {
-    thread.addApprovalRequest(query.cypher, query.explanation);
-
-    return {
-      response: {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: `${prefixMessage}\n\nI've prepared a query that will modify the database. Please review and approve it.`,
-        timestamp: new Date().toISOString()
-      },
-      toolCall: {
-        id: toolCallId,
-        tool: 'write_neo4j_cypher',
-        cypher: query.cypher,
-        status: 'pending',
-        timestamp: new Date().toISOString()
-      },
-      threadEvents: thread.toJSON(),
-      needsApproval: true,
-      pendingCypher: query.cypher,
-      pendingExplanation: query.explanation
-    };
-  }
-
-  // 4. Execute read query directly via neo4j-driver
-  const session = getNeo4jDriver().session();
-  try {
-    const result = await session.run(query.cypher);
-
-    // Convert Neo4j types to serializable JSON
-    const rawResults = toSerializable(result.records.map(r => r.toObject())) as unknown[];
-
-    // Parse and transform results (also needs serialization)
-    const parsed = parseNeo4jResults({ records: result.records });
-
-    console.log('[server] Parsed nodes:', parsed.nodes?.length || 0);
-    console.log('[server] Parsed rels:', parsed.relationships?.length || 0);
-    if (parsed.nodes?.length) {
-      console.log('[server] First node:', JSON.stringify(parsed.nodes[0], null, 2));
+      return await b.PlanNeo4jOperation(
+        message,
+        routing.intent,
+        schema,
+        previousResults,
+        n_turn
+      );
     }
 
-    const graphData = toSerializable(transformNeo4jToCytoscape(
-      parsed.nodes || [],
-      parsed.relationships || []
-    )) as ElementDefinition[];
+    case 'web_search':
+      return await b.PlanWebSearch(
+        message,
+        routing.intent,
+        previousResults,
+        n_turn
+      );
 
-    console.log('[server] GraphData elements:', graphData.length);
+    case 'code_mode': {
+      // Get available tools for code_mode
+      const availableTools = [
+        'read_neo4j_cypher',
+        'write_neo4j_cypher',
+        'get_neo4j_schema',
+        'web_search',
+        'fetch'
+      ];
 
-    // Record tool response
-    thread.addToolResponse('read_neo4j_cypher', {
-      nodeCount: parsed.nodes?.length || 0,
-      relationshipCount: parsed.relationships?.length || 0
-    });
+      return await b.PlanCodeModeOperation(
+        message,
+        routing.intent,
+        availableTools,
+        previousResults,
+        n_turn
+      );
+    }
 
-    // 5. Interpret results using BAML
-    const interpretation = await b.InterpretGraphResults(
-      query.cypher,
-      JSON.stringify(rawResults, null, 2),
-      userMessage
-    );
+    default:
+      throw new Error(`Unknown tool namespace: ${routing.tool_name}`);
+  }
+}
 
-    const fullMessage = `${prefixMessage}\n\n${interpretation}`;
-    thread.addAssistantMessage(fullMessage);
+// ============================================================================
+// Tool Execution
+// ============================================================================
+
+/**
+ * Execute a tool plan and return ToolEvent
+ */
+async function executeToolPlan(
+  plan: ToolExecutionPlan,
+  toolMode: ToolMode,
+  n_turn: number
+): Promise<ToolEvent> {
+  const startTime = Date.now();
+
+  try {
+    let result: unknown;
+    const args = JSON.parse(plan.payload);
+
+    if (toolMode === 'CodeMode') {
+      // Use MCP gateway code_mode
+      result = await callMcpGateway('run_tools_with_javascript', args);
+    } else if (plan.toolName.includes('neo4j')) {
+      // Execute neo4j queries directly for better performance
+      result = await executeNeo4jTool(plan.toolName, args);
+    } else {
+      // Use MCP gateway for other tools
+      result = await callMcpGateway(plan.toolName, args);
+    }
+
+    const resultStr = JSON.stringify(result);
+    const stats = extractStats(result, plan.toolName);
 
     return {
-      response: {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: fullMessage,
-        timestamp: new Date().toISOString()
-      },
-      toolCall: {
-        id: toolCallId,
-        tool: 'read_neo4j_cypher',
-        cypher: query.cypher,
-        status: 'executed',
-        result: {
-          nodeCount: parsed.nodes?.length || 0,
-          relationshipCount: parsed.relationships?.length || 0,
-          raw: rawResults
-        },
-        timestamp: new Date().toISOString()
-      },
-      graphUpdate: graphData,
-      threadEvents: thread.toJSON(),
-      needsApproval: false
+      status_code: 200,
+      status_description: 'Success',
+      operation: plan.payload,
+      data: toSerializable(result),
+      n_turn,
+      stats: {
+        ...stats,
+        duration_ms: Date.now() - startTime,
+        token_count: estimateTokens(resultStr)
+      }
     };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    return {
+      status_code: 500,
+      status_description: errorMessage,
+      operation: plan.payload,
+      data: null,
+      n_turn,
+      stats: {
+        duration_ms: Date.now() - startTime
+      }
+    };
+  }
+}
+
+/**
+ * Execute Neo4j tools directly via neo4j-driver
+ */
+async function executeNeo4jTool(
+  toolName: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const session = getNeo4jDriver().session();
+
+  try {
+    if (toolName === 'get_neo4j_schema') {
+      const schemaResult = await getSchema();
+      return schemaResult.schema;
+    }
+
+    const query = args.query as string;
+    if (!query) {
+      throw new Error('Query is required');
+    }
+
+    if (toolName === 'write_neo4j_cypher') {
+      const result = await executeWriteCypher(query);
+      if (!result.success) {
+        throw new Error(result.error);
+      }
+      return result.raw;
+    }
+
+    // read_neo4j_cypher
+    const result = await session.run(query);
+    return result.records.map(r => toSerializable(r.toObject()));
   } finally {
     await session.close();
   }
+}
+
+/**
+ * Extract statistics from tool result
+ */
+function extractStats(
+  result: unknown,
+  toolName: string
+): { nodeCount?: number; relationshipCount?: number } {
+  if (!result || !toolName.includes('neo4j')) {
+    return {};
+  }
+
+  if (Array.isArray(result)) {
+    // Count nodes and relationships in result
+    let nodeCount = 0;
+    let relationshipCount = 0;
+
+    for (const record of result) {
+      if (record && typeof record === 'object') {
+        for (const value of Object.values(record)) {
+          if (value && typeof value === 'object') {
+            const v = value as Record<string, unknown>;
+            if ('labels' in v) nodeCount++;
+            if ('type' in v && 'start' in v) relationshipCount++;
+          }
+        }
+      }
+    }
+
+    return { nodeCount, relationshipCount };
+  }
+
+  return {};
 }
 
 // ============================================================================
@@ -329,71 +593,99 @@ async function executeGraphQuery(
 // ============================================================================
 
 /**
- * Execute an approved write query
- * Called when user approves a pending write operation
- *
- * @param cypher - The Cypher query to execute
- * @param explanation - The query explanation
- * @param threadEvents - Serialized thread events
+ * Convert ToolExecutionPlan to ToolCallInfo for UI display
  */
-export async function executeApprovedWrite(
-  cypher: string,
-  explanation: string,
+function planToToolCallInfo(
+  plan: ToolExecutionPlan | undefined,
+  status: 'pending' | 'executed' | 'error' = 'pending',
+  result?: unknown,
+  error?: string
+): ToolCallInfo | undefined {
+  if (!plan) return undefined;
+
+  const toolType = plan.toolName.includes('write') ? 'neo4j_write' :
+    plan.toolName.includes('neo4j') ? 'neo4j_query' :
+    plan.toolName.includes('web_search') ? 'web_search' :
+    plan.toolName.includes('fetch') ? 'fetch' : 'code_mode';
+
+  // Extract cypher from payload if neo4j
+  let cypher: string | undefined;
+  try {
+    const payload = JSON.parse(plan.payload);
+    cypher = payload.query;
+  } catch {
+    cypher = plan.payload;
+  }
+
+  // Build result with stats if executed
+  let resultObj: ToolCallInfo['result'];
+  if (status === 'executed' && result) {
+    const stats = extractStats(result, plan.toolName);
+    resultObj = {
+      nodeCount: stats.nodeCount,
+      relationshipCount: stats.relationshipCount,
+      raw: result
+    };
+  }
+
+  return {
+    type: toolType,
+    status,
+    tool: plan.toolName,
+    cypher,
+    explanation: plan.reasoning,
+    isReadOnly: !plan.toolName.includes('write'),
+    result: resultObj,
+    error
+  };
+}
+
+/**
+ * Execute an approved write operation (new signature with ToolExecutionPlan)
+ */
+async function executeApprovedWriteWithPlan(
+  plan: ToolExecutionPlan,
   threadEvents: SerializedThread
 ): Promise<WriteExecutionResult> {
-  "use server";
-
   const thread = Thread.fromJSON(threadEvents);
-  const toolCallId = Date.now().toString();
 
   try {
-    // Record approval
     thread.addApprovalResponse(true);
 
-    // Execute via direct neo4j-driver
-    const result = await executeWriteCypher(cypher);
+    const toolEvent = await executeToolPlan(plan, 'Mcp', 1);
 
-    if (!result.success) {
-      thread.addError(result.error || 'Write query failed', { tool: 'write_neo4j_cypher' });
+    if (toolEvent.status_code !== 200) {
+      thread.addError(toolEvent.status_description, { tool: plan.toolName });
 
       return {
         success: false,
-        toolCall: {
-          id: toolCallId,
-          tool: 'write_neo4j_cypher',
-          cypher,
-          status: 'error',
-          error: result.error,
-          timestamp: new Date().toISOString()
-        },
+        toolEvent,
         threadEvents: thread.toJSON(),
-        error: result.error
+        error: toolEvent.status_description
       };
     }
 
-    thread.addToolResponse('write_neo4j_cypher', {
-      success: true
-    });
+    thread.addToolResponse(plan.toolName, toolEvent);
 
-    const successMessage = `Changes applied successfully.\n\n**Query executed:**\n\`\`\`cypher\n${cypher}\n\`\`\`\n\n${explanation}`;
-    thread.addAssistantMessage(successMessage);
+    // Get graph update if neo4j
+    let graphUpdate: ElementDefinition[] | undefined;
+    if (plan.toolName.includes('neo4j')) {
+      const parsed = parseNeo4jResults({ records: toolEvent.data as any[] || [] });
+      graphUpdate = toSerializable(transformNeo4jToCytoscape(
+        parsed.nodes || [],
+        parsed.relationships || []
+      )) as ElementDefinition[];
+    }
+
+    // Build toolCall for legacy compatibility
+    const toolCall = planToToolCallInfo(plan, 'executed', toolEvent.data);
 
     return {
       success: true,
-      toolCall: {
-        id: toolCallId,
-        tool: 'write_neo4j_cypher',
-        cypher,
-        status: 'executed',
-        result: {
-          nodeCount: 0, // Write queries don't always return counts
-          relationshipCount: 0,
-          raw: result.raw
-        },
-        timestamp: new Date().toISOString()
-      },
-      graphUpdate: result.graphUpdate,
-      threadEvents: thread.toJSON()
+      toolEvent,
+      graphUpdate,
+      threadEvents: thread.toJSON(),
+      toolCall
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -408,11 +700,40 @@ export async function executeApprovedWrite(
 }
 
 /**
- * Reject a pending write query
- * Called when user rejects a pending write operation
- *
- * @param reason - Optional reason for rejection
- * @param threadEvents - Serialized thread events
+ * Execute an approved write operation
+ * Supports both new (ToolExecutionPlan) and legacy (cypher, explanation) signatures
+ */
+export async function executeApprovedWrite(
+  planOrCypher: ToolExecutionPlan | string,
+  explanationOrThreadEvents: string | SerializedThread,
+  maybeThreadEvents?: SerializedThread
+): Promise<WriteExecutionResult> {
+  "use server";
+
+  // Handle legacy 3-argument signature
+  if (typeof planOrCypher === 'string') {
+    const cypher = planOrCypher;
+    const explanation = explanationOrThreadEvents as string;
+    const threadEvents = maybeThreadEvents!;
+
+    // Convert to ToolExecutionPlan
+    const plan: ToolExecutionPlan = {
+      reasoning: explanation,
+      toolName: 'write_neo4j_cypher',
+      payload: JSON.stringify({ query: cypher }),
+      description: 'Executing approved write operation',
+      end_tool: true
+    };
+
+    return executeApprovedWriteWithPlan(plan, threadEvents);
+  }
+
+  // New 2-argument signature
+  return executeApprovedWriteWithPlan(planOrCypher, explanationOrThreadEvents as SerializedThread);
+}
+
+/**
+ * Reject a pending write operation
  */
 export async function rejectWrite(
   reason: string | undefined,
@@ -436,7 +757,83 @@ export async function rejectWrite(
 }
 
 // ============================================================================
-// Re-export types for client use
+// Legacy Compatibility - Keep old function name
 // ============================================================================
 
-export type { SerializedThread } from './state';
+/**
+ * @deprecated Use processAgentMessageStreaming instead
+ */
+export async function processAgentMessage(
+  message: string,
+  threadEvents: SerializedThread
+): Promise<AgentMessageResponse> {
+  const result = await processAgentMessageStreaming(message, threadEvents);
+
+  // Extract final message from events
+  const completeEvent = result.events.find(e => e.type === 'complete');
+  const errorEvent = result.events.find(e => e.type === 'error');
+  const routingEvent = result.events.find(e => e.type === 'routing');
+  const executingEvents = result.events.filter(e => e.type === 'executing');
+
+  let content = '';
+  if (completeEvent) {
+    content = completeEvent.data as string;
+  } else if (errorEvent) {
+    content = `Error: ${errorEvent.data}`;
+  } else if (routingEvent) {
+    content = (routingEvent.data as RoutingInterfaceEvent).response_text;
+  }
+
+  // Build toolCall from the last executing event or pending plan
+  let toolCall: ToolCallInfo | undefined;
+  if (executingEvents.length > 0) {
+    const lastEvent = executingEvents[executingEvents.length - 1].data as ToolEvent;
+    const isError = lastEvent.status_code !== 200;
+    const toolType = lastEvent.operation.includes('write') ? 'neo4j_write' : 'neo4j_query';
+
+    // Extract cypher from operation
+    let cypher: string | undefined;
+    try {
+      const payload = JSON.parse(lastEvent.operation);
+      cypher = payload.query;
+    } catch {
+      cypher = lastEvent.operation;
+    }
+
+    toolCall = {
+      type: toolType,
+      status: isError ? 'error' : 'executed',
+      tool: toolType === 'neo4j_write' ? 'write_neo4j_cypher' : 'read_neo4j_cypher',
+      cypher,
+      result: isError ? undefined : {
+        nodeCount: lastEvent.stats?.nodeCount,
+        relationshipCount: lastEvent.stats?.relationshipCount,
+        raw: lastEvent.data
+      },
+      error: isError ? lastEvent.status_description : undefined
+    };
+  } else if (result.pendingPlan) {
+    toolCall = planToToolCallInfo(result.pendingPlan, 'pending');
+  }
+
+  return {
+    response: {
+      id: Date.now().toString(),
+      role: 'assistant',
+      content,
+      timestamp: new Date().toISOString()
+    },
+    threadEvents: result.threadEvents,
+    graphUpdate: result.graphUpdate,
+    needsApproval: result.needsApproval || false,
+    pendingCypher: result.pendingPlan?.payload,
+    pendingExplanation: result.pendingPlan?.reasoning,
+    toolCall
+  };
+}
+
+// ============================================================================
+// Re-export types
+// ============================================================================
+
+export type { SerializedThread, StreamEvent, ToolEvent, ToolExecutionPlan, ApprovalState } from './state';
