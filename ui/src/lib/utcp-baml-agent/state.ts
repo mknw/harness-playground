@@ -25,7 +25,7 @@ export const MAX_THREAD_TOKENS = 8000;
 // ============================================================================
 
 /** Tool execution modes (in order of preference) */
-export type ToolMode = 'mcp' | 'code_mode' | null;
+export type ToolMode = 'Mcp' | 'CodeMode' | null;
 
 /** Available tool namespaces */
 export type ToolNamespace = 'neo4j' | 'web_search' | 'code_mode';

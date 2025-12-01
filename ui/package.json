@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@ark-ui/solid": "^5.26.2",
-    "@boundaryml/baml": "^0.213.0",
     "@solidjs/router": "^0.15.3",
     "@solidjs/start": "^1.2.0",
     "@stackframe/js": "^2.8.48",
@@ -33,6 +32,7 @@
     "node": ">=22"
   },
   "devDependencies": {
+    "@boundaryml/baml": "^0.214.0",
     "@eslint/js": "^9.38.0",
     "@types/node": "^24.9.2",
     "@unocss/eslint-config": "^66.5.4",
