@@ -1,0 +1,47 @@
+{
+  "name": "seederis-ai-kg-ui",
+  "type": "module",
+  "scripts": {
+    "baml-test": "baml-cli test",
+    "baml-generate": "baml-cli generate",
+    "dev": "vinxi dev",
+    "build": "pnpm baml-generate & vinxi build",
+    "start": "vinxi start"
+  },
+  "dependencies": {
+    "@ark-ui/solid": "^5.26.2",
+    "@solidjs/router": "^0.15.3",
+    "@solidjs/start": "^1.2.0",
+    "@stackframe/js": "^2.8.48",
+    "@unocss/reset": "^66.5.4",
+    "@utcp/code-mode": "^1.0.5",
+    "@utcp/dotenv-loader": "^1.0.1",
+    "@utcp/file": "^1.0.1",
+    "@utcp/http": "^1.0.13",
+    "@utcp/mcp": "^1.0.16",
+    "@utcp/sdk": "^1.0.17",
+    "@utcp/text": "^1.0.12",
+    "cytoscape": "^3.33.1",
+    "marked": "^17.0.1",
+    "neo4j-driver": "^6.0.1",
+    "solid-js": "^1.9.10",
+    "unocss": "^66.5.4",
+    "vinxi": "^0.5.8"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@boundaryml/baml": "^0.214.0",
+    "@eslint/js": "^9.38.0",
+    "@types/node": "^24.9.2",
+    "@unocss/eslint-config": "^66.5.4",
+    "@unocss/preset-attributify": "^66.5.4",
+    "@unocss/preset-wind4": "^66.5.4",
+    "eslint": "^9.38.0",
+    "eslint-plugin-solid": "^0.14.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.2",
+    "vite-plugin-wasm": "^3.5.0"
+  }
+}

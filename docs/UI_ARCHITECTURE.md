@@ -1,0 +1,485 @@
+# UI Architecture Reference
+
+> **Scope:** This document covers the `ui/` directory - the SolidJS frontend application.
+
+Quick reference for the SolidJS frontend structure, configuration, and patterns.
+
+---
+
+## 1. Package Management & Core Dependencies
+
+### Package Manager
+- **pnpm** - Fast, disk space efficient package manager
+- Node.js >= 22 required
+
+### Core Stack
+```json
+{
+  "framework": "@solidjs/start ^1.2.0",
+  "router": "@solidjs/router ^0.15.3",
+  "ui-library": "@ark-ui/solid ^5.26.2",
+  "auth": "@stackframe/js ^2.8.48",
+  "styling": "unocss ^66.5.4",
+  "bundler": "vinxi ^0.5.8"
+}
+```
+
+### ESLint Configuration
+**File:** `ui/eslint.config.ts`
+
+Key rules:
+```typescript
+{
+  "prefer-const": "warn",
+  "no-constant-binary-expression": "error",
+  "@typescript-eslint/no-empty-object-type": ["error", {
+    "allowInterfaces": "with-single-extends"  // Allows module augmentation
+  }],
+  "@typescript-eslint/no-unused-vars": ["error", {
+    "varsIgnorePattern": "^_|^T$",  // Ignore _ and T (generic params)
+    "argsIgnorePattern": "^_"
+  }]
+}
+```
+
+---
+
+## 2. UnoCSS Configuration
+
+### Setup Files
+- **Config:** `ui/uno.config.ts`
+- **TypeScript Shim:** `ui/src/shims.d.ts`
+
+### Configuration
+```typescript
+defineConfig({
+  presets: [
+    presetAttributify(),    // Enables attribute-based styling
+    presetWind4(),          // Tailwind v4-like utilities
+    presetWebFonts({        // Google Fonts
+      fonts: {
+        sans: 'Inter',
+        serif: 'Roboto Slab',
+        mono: 'Fira Code'
+      }
+    })
+  ],
+  transformers: [
+    transformerAttributifyJsx()  // JSX/TSX support
+  ]
+})
+```
+
+### Attributify Syntax
+Enables attribute-based styling instead of `class`:
+
+```tsx
+// Traditional
+<div class="flex items-center gap-2 bg-blue-500">
+
+// Attributify
+<div flex items-center gap-2 bg-blue-500>
+
+// With variants
+<button bg="blue-500 hover:blue-600" text="white sm">
+
+// Grouped values
+<div p="x-4 y-2" border="~ gray-200">
+
+// Self-referencing with ~
+<div border="~ red">  // = border border-red
+```
+
+### TypeScript Shim
+**File:** `ui/src/shims.d.ts`
+
+```typescript
+import type { AttributifyAttributes } from '@unocss/preset-attributify'
+
+declare module 'solid-js' {
+  namespace JSX {
+    interface HTMLAttributes<T> extends AttributifyAttributes {
+      // Add custom utility types here if needed
+      tracking?: string | boolean;
+      leading?: string | boolean;
+    }
+  }
+}
+```
+
+---
+
+## 3. Authentication
+
+### Architecture Overview
+**Client-side:** `StackClientApp` (browser only)
+**Server-side:** `getCurrentUser()` via Stack Auth cookies
+**Email allowlist:** Controls access (`ui/src/lib/auth/allowList.ts`)
+
+### Client Setup
+**File:** `ui/src/lib/auth/client.ts`
+
+```typescript
+// Singleton pattern - lazy initialization
+getStackClientApp() → StackClientApp
+
+// Environment variables required:
+VITE_STACK_PROJECT_ID
+VITE_STACK_PUBLISHABLE_CLIENT_KEY
+
+// URL configuration:
+{
+  signIn: '/auth/signin',
+  signUp: '/auth/signup',
+  oauthCallback: window.location.origin + '/auth/callback',
+  afterSignOut: '/auth/signin'
+}
+```
+
+### Server Validation
+**File:** `ui/src/lib/auth/server.ts`
+
+```typescript
+// Use in server functions:
+const user = await getAuthenticatedUser();
+// → Returns: { id, email, displayName }
+// → Throws if: not authenticated or email not in allowlist
+```
+
+### AuthProvider Component
+**File:** `ui/src/components/AuthProvider.tsx`
+
+Provides app-wide auth context:
+
+```typescript
+const { user, loading, refetch, signOut } = useAuth();
+
+// Features:
+// - Client-only resource fetching (no SSR issues)
+// - Automatic redirect logic (auth ↔ protected routes)
+// - Email allowlist enforcement
+// - Loading states with branded spinner
+```
+
+**Redirect Logic:**
+1. Authenticated user on `/auth/*` → redirect to `/`
+2. Unauthenticated user on protected route → redirect to `/auth/signin`
+3. User email not in allowlist → sign out + redirect to `/auth/access-denied`
+
+---
+
+## 4. User Avatar & Actions
+
+### UserMenu Component
+**File:** `ui/src/components/ark-ui/UserMenu.tsx`
+
+Integration with Stack Auth via `useAuth()`:
+
+```tsx
+import { useAuth } from '~/components/AuthProvider'
+
+const { user, signOut } = useAuth()
+
+// Available user data:
+user().profileImageUrl  // Avatar URL (nullable)
+user().displayName      // Display name (nullable)
+user().primaryEmail     // Email address (nullable)
+
+// Sign out action:
+await signOut()  // → Clears session, redirects to signin
+```
+
+**Component Structure:**
+- **Ark UI Avatar:** Shows profile image or initials fallback
+- **Ark UI Menu:** Dropdown with Profile Settings & Sign Out
+- **Positioning:** Added to Nav via `<li class="ml-auto">`
+- **Visibility:** Only shown when `user()` exists
+
+**Usage in Nav:**
+```tsx
+// ui/src/components/Nav.tsx
+import { UserMenu } from "~/components/ark-ui/UserMenu"
+
+<nav class="bg-sky-800">
+  <ul class="...">
+    <li>Home</li>
+    <li>About</li>
+    <li class="ml-auto">
+      <UserMenu />  {/* Auto-hides when logged out */}
+    </li>
+  </ul>
+</nav>
+```
+
+---
+
+## 5. Application Layout & Chat Interface
+
+### Overall Layout Structure
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Nav (dark-bg-secondary)                                 │
+│  Home | About          [Theme] [Avatar Menu]            │
+├────────────┬──────────────────────────┬─────────────────┤
+│            │                          │                 │
+│  Sidebar   │   Chat Messages          │  Knowledge      │
+│  (64 cols) │   (ScrollArea)           │  Graph Panel    │
+│            │                          │                 │
+│  [History] │ ─────────────────────────│  (placeholder)  │
+│  Thread 1  │   Chat Input             │                 │
+│  Thread 2  │   (Field.Textarea)       │                 │
+│  Thread 3  │                          │                 │
+│            │                          │                 │
+│ [+ New]    │                          │  [Reset] [Exp]  │
+└────────────┴──────────────────────────┴─────────────────┘
+    ↑              ↑─── Splitter ───↑          ↑
+Collapsible      60% default       40% default
+```
+
+### Main Page Component
+**File:** `ui/src/routes/index.tsx`
+
+```tsx
+<Splitter.Root orientation="horizontal" defaultSize={[60, 40]}>
+  <Splitter.Panel id="chat">
+    <ChatInterface />  {/* Sidebar + Messages + Input */}
+  </Splitter.Panel>
+
+  <Splitter.ResizeTrigger id="chat:graph" />
+
+  <Splitter.Panel id="graph">
+    <KnowledgeGraphPanel />
+  </Splitter.Panel>
+</Splitter.Root>
+```
+
+### Chat Interface Components
+
+**Location:** All in `ui/src/components/ark-ui/`
+
+#### 1. ChatInterface.tsx
+Main container combining sidebar and chat area:
+```tsx
+<div flex="~">
+  <ChatSidebar />           // 64 columns wide
+  <div flex="~ col 1">      // Flexible main area
+    <ChatMessages />
+    <ChatInput />
+  </div>
+</div>
+```
+
+#### 2. ChatSidebar.tsx
+**Props:** `collapsed: boolean`, `onToggle: () => void`
+- Width: `3rem` (collapsed) → `16rem` (expanded)
+- Smooth inline style transition
+- Thread history with relative timestamps
+- Content hidden when collapsed (toggle button only)
+
+#### 3. ChatMessages.tsx
+- **ScrollArea.Root** - Custom scrollable message container
+- **Features:**
+  - Auto-scroll to latest message
+  - Different layouts for user vs assistant messages
+  - Avatar with initials fallback
+  - Message bubbles with timestamps
+  - Empty state with icon
+- **User messages:** Right-aligned, cyber-700 background
+- **AI messages:** Left-aligned, dark-bg-tertiary background
+
+#### 4. ChatInput.tsx
+- **Field.Textarea** with `autoresize` prop
+- **Keyboard shortcuts:**
+  - Enter → Send message
+  - Shift+Enter → New line
+- **States:** Disabled during AI processing
+- **Styling:** Neon cyan border on focus
+
+#### 5. KnowledgeGraphPanel.tsx
+- Placeholder for graph visualization
+- Header with title and description
+- Footer with action buttons (Reset View, Export Graph)
+
+### Theme System
+
+**File:** `ui/src/components/ark-ui/ThemeSwitcher.tsx`
+
+```tsx
+// Toggle between light/dark modes
+// Persists to localStorage
+// Updates document.documentElement.classList
+```
+
+**Custom Color Palette:** (defined in `uno.config.ts`)
+
+```typescript
+{
+  cyber: {     // Purple/indigo brand colors
+    600: '#4f46e5',
+    700: '#4338ca',
+    800: '#3730a3',
+    // ... full scale
+  },
+  neon: {      // Accent colors for highlights
+    cyan: '#00ffff',
+    magenta: '#ff00ff',
+    purple: '#9d00ff',
+    // ... more neon colors
+  },
+  dark: {      // Semantic dark theme tokens
+    bg: {
+      primary: '#0a0a0f',      // Darkest background
+      secondary: '#12121a',    // Main panels
+      tertiary: '#1a1a24',     // Cards/inputs
+      hover: '#22222f',        // Interactive states
+    },
+    border: {
+      primary: '#2a2a3a',      // Main borders
+      secondary: '#3a3a4a',    // Secondary borders
+      accent: '#4a4a5a',       // Highlighted borders
+    },
+    text: {
+      primary: '#e4e4e7',      // Main text
+      secondary: '#a1a1aa',    // Secondary text
+      tertiary: '#71717a',     // Tertiary/muted text
+    }
+  }
+}
+```
+
+**UnoCSS Shortcuts:**
+- `glass-panel` - Semi-transparent panel with backdrop blur
+- `neon-border` - Cyan border with glow effect
+- `cyber-button` - Cyber-themed button with glow on hover
+
+### Component Data Flow
+
+```
+ChatInterface (state management)
+    ├─ messages: Signal<Message[]>
+    ├─ isProcessing: Signal<boolean>
+    ├─ sidebarCollapsed: Signal<boolean>
+    └─ handleSendMessage()
+         │
+         ├─> ChatMessages (props.messages)
+         │       └─ Auto-scroll on new messages
+         │
+         ├─> ChatInput (props.onSend, props.disabled)
+         │       └─ Triggers handleSendMessage()
+         │
+         └─> ChatSidebar (props.collapsed, props.onToggle)
+                 └─ Dummy thread data (static)
+```
+
+### Message Type
+```typescript
+interface Message {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: Date
+}
+```
+
+---
+
+## 6. UnoCSS Limitations & Workarounds
+
+### SVG Elements
+**UnoCSS attributify does NOT work on `<svg>` elements.**
+
+Use standard SVG attributes:
+```tsx
+// ❌ WRONG - Causes TypeScript errors
+<svg w="16" h="16" m="auto">
+
+// ✓ CORRECT
+<svg width="16" height="16" style="margin: 0 auto;">
+```
+
+**Attributes to convert:**
+- `w="..."` → `width="..."`
+- `h="..."` → `height="..."`
+- `m="..."` → `style="margin: ..."`
+- `text="color"` → `style="color: ..."`
+- `transform="..."` → Use inline style with dynamic values
+
+**Event handlers:** Wrap reactive values in functions for SolidJS
+```tsx
+// ❌ WRONG
+onClick={props.onToggle}
+
+// ✓ CORRECT
+onClick={() => props.onToggle()}
+```
+
+---
+
+## Quick Commands
+
+```bash
+pnpm dev        # Start dev server
+pnpm build      # Production build
+pnpm eslint     # Run linter
+```
+
+---
+
+## File Locations Cheatsheet
+
+```
+ui/
+├── eslint.config.ts              # ESLint rules
+├── uno.config.ts                 # UnoCSS config + theme
+├── src/
+│   ├── shims.d.ts                # TypeScript augmentation
+│   ├── routes/
+│   │   └── index.tsx             # Main page with Splitter layout
+│   ├── components/
+│   │   ├── AuthProvider.tsx      # Auth context provider
+│   │   ├── Nav.tsx               # Main navigation with theme switcher
+│   │   └── ark-ui/
+│   │       ├── UserMenu.tsx           # Avatar dropdown menu
+│   │       ├── ThemeSwitcher.tsx      # Dark/light theme toggle
+│   │       ├── ChatInterface.tsx      # Main chat container
+│   │       ├── ChatSidebar.tsx        # Thread history sidebar
+│   │       ├── ChatMessages.tsx       # Message display area
+│   │       ├── ChatInput.tsx          # Autoresize textarea
+│   │       └── KnowledgeGraphPanel.tsx # Graph visualization panel
+│   └── lib/auth/
+│       ├── client.ts             # StackClientApp
+│       ├── server.ts             # Server auth helpers
+│       └── allowList.ts          # Email access control
+```
+
+---
+
+## MCP Tools Available
+
+### Context7
+- `resolve-library-id` - Search for library documentation
+- `get-library-docs` - Fetch up-to-date docs for a library
+
+**Example:**
+```typescript
+// 1. Find library ID
+const results = await resolveLibraryId({ libraryName: "solidjs" })
+// → Returns: /solidjs/solid, /solidjs/solid-start, etc.
+
+// 2. Get documentation
+const docs = await getLibraryDocs({
+  context7CompatibleLibraryID: "/solidjs/solid",
+  topic: "signals and reactivity",
+  tokens: 3000
+})
+```
+
+### Ark UI
+- `list_components` - List all available Ark UI components
+- `get_component_props` - Get props for a specific component
+- `list_examples` - List examples for a component
+- `get_example` - Get specific example code
+- `styling_guide` - Get data attributes for styling
+
+**Frameworks:** ~react, vue, svelte,~ *solid*
