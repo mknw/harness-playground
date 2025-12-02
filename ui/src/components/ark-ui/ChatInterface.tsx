@@ -44,7 +44,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     const welcomeMessage: Message = {
       id: Date.now().toString(),
       role: 'assistant',
-      content: 'Hello! I\'m your knowledge graph assistant. I can help you:\n\n- Query and explore the Neo4j graph\n- Create new nodes and relationships\n- Analyze patterns and connections\n- Visualize graph data\n\nWhat would you like to know?',
+      content: 'Hello! I\'m your knowledge assistant. I can help you:\n\n- Query and explore your Knowledge Base\n- Create new observations\n- Analyze patterns and connections\n- Use additional tools\n\nWhat would you like to know?',
       timestamp: new Date()
     }
     setMessages([welcomeMessage])

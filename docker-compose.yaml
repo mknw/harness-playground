@@ -38,7 +38,7 @@ services:
     image: docker/mcp-gateway
     restart: unless-stopped
     command:
-      # - --servers=neo4j-cypher,fetch,web_search
+      - --servers=neo4j-cypher,fetch,web_search
       - --config=/mcp/config.yaml
       - --catalog=/mcp/custom-catalog.yaml
       - --transport=streaming

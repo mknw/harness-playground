@@ -482,4 +482,4 @@ const docs = await getLibraryDocs({
 - `get_example` - Get specific example code
 - `styling_guide` - Get data attributes for styling
 
-**Frameworks:** react, vue, svelte, solid
+**Frameworks:** ~react, vue, svelte,~ *solid*

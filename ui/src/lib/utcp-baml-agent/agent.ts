@@ -7,18 +7,18 @@
  * This file is kept for type exports only.
  */
 
-import type { GraphQuery } from '../../../baml_client'
-import type { ElementDefinition } from 'cytoscape'
-import type { Thread } from './state'
+// import type { GraphQuery } from '../../../baml_client'
+// import type { ElementDefinition } from 'cytoscape'
+// import type { Thread } from './state'
 
 // ============================================================================
 // Legacy Types (kept for backwards compatibility)
 // ============================================================================
 
-export interface AgentLoopResult {
-  thread: Thread
-  message: string
-  graphData?: ElementDefinition[]
-  needsApproval: boolean
-  pendingQuery?: GraphQuery
-}
+// export interface AgentLoopResult {
+//   thread: Thread
+//   message: string
+//   graphData?: ElementDefinition[]
+//   needsApproval: boolean
+//   pendingQuery?: GraphQuery
+// }

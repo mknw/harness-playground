@@ -15,7 +15,7 @@
 // ============================================================================
 
 /** Maximum number of turns per tool execution loop */
-export const MAX_TOOL_TURNS = 5;
+export const MAX_TOOL_TURNS = 3;
 
 /** Token limit before pruning older ToolEvents */
 export const MAX_THREAD_TOKENS = 8000;

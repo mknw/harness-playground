@@ -25,7 +25,7 @@ registry:
         value: '{{neo4j-cypher.database}}'
       - name: NEO4J_READ_ONLY
         value: '{{neo4j-cypher.read_only}}'
-  
+
   fetch:
     description: Fetch and retrieve content from the web
     title: Fetch
@@ -33,3 +33,11 @@ registry:
     image: mcp/fetch@sha256:ef9535a3f07249142f9ca5a6033d7024950afdb6dc05e98292794a23e9f5dfbe
     tools:
       - name: fetch
+
+  web_search:
+    description: A Model Context Protocol (MCP) server that provides web search capabilities through DuckDuckGo, with additional features for content fetching and parsing.
+    title: DuckDuckGo
+    type: server
+    image: mcp/duckduckgo@sha256:68eb20db6109f5c312a695fc5ec3386ad15d93ffb765a0b4eb1baf4328dec14f
+    allowHosts:
+      - html.duckduckgo.com:443
