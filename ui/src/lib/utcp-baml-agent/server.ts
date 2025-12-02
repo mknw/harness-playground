@@ -158,7 +158,29 @@ export interface AgentMessageResponse {
 const MCP_GATEWAY_URL = 'http://localhost:8811/mcp';
 
 /**
+ * Parse SSE (Server-Sent Events) response from MCP Gateway
+ * SSE format: "event: message\ndata: {json}\n\n"
+ */
+function parseSSEResponse(text: string): unknown {
+  const lines = text.split('\n');
+  let lastData: string | null = null;
+
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      lastData = line.slice(6); // Remove "data: " prefix
+    }
+  }
+
+  if (!lastData) {
+    throw new Error('No data found in SSE response');
+  }
+
+  return JSON.parse(lastData);
+}
+
+/**
  * Call an MCP tool through the gateway
+ * Handles SSE (streaming) response format from --transport=streaming
  */
 async function callMcpGateway(
   tool: string,
@@ -179,7 +201,19 @@ async function callMcpGateway(
     throw new Error(`Gateway error: ${response.status} ${response.statusText}`);
   }
 
-  const result = await response.json();
+  // MCP Gateway with --transport=streaming returns SSE format
+  const contentType = response.headers.get('content-type') || '';
+  let result: { error?: { message?: string }; result?: unknown };
+
+  if (contentType.includes('text/event-stream') || contentType.includes('text/plain')) {
+    // Parse SSE response
+    const text = await response.text();
+    result = parseSSEResponse(text) as typeof result;
+  } else {
+    // Fallback to JSON for non-streaming responses
+    result = await response.json();
+  }
+
   if (result.error) {
     throw new Error(result.error.message || 'Gateway tool call failed');
   }

@@ -67,15 +67,28 @@ function RouteUserMessage(
 
     ROUTING RULES:
 
-    1. Tool IS needed if user wants to:
-       - Query or modify graph data (neo4j) -> tool_name = "neo4j", tool_mode = "Mcp"
-       - Search the web for information (web_search) -> tool_name = "web_search", tool_mode = "Mcp"
-       - Complex operations needing multiple tools (code_mode) -> tool_name = "code_mode", tool_mode = "CodeMode"
+    1. Use neo4j (tool_name = "neo4j", tool_mode = "Mcp") when user wants to:
+       - Query graph data: "show me nodes", "find relationships", "what's in the graph"
+       - Create/add nodes: "add a node", "create an entity", "add X to the graph"
+       - Modify graph: "update", "delete", "connect nodes"
+       - ANY operation involving the knowledge graph database
 
-    2. Tool is NOT needed for:
+    2. Use web_search (tool_name = "web_search", tool_mode = "Mcp") when user wants to:
+       - Search the internet for information NOT in the graph
+       - Find external documentation or resources
+       - Look up current events or news
+       - Research topics from the web
+
+    3. Use code_mode (tool_name = "code_mode", tool_mode = "CodeMode") when:
+       - Complex operations needing multiple tools combined
+       - Operations requiring JavaScript logic
+
+    4. Tool is NOT needed for:
        - Greetings, thanks, casual chat
        - Questions about capabilities or help
        - Clarification questions
+
+    IMPORTANT: "Add X to the graph" means CREATE a node in neo4j, NOT search the web!
 
     OUTPUT REQUIREMENTS:
 
