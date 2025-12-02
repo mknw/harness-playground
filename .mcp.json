@@ -2,7 +2,7 @@
   "mcpServers": {
     "kg-gateway": {
       "type": "sse",
-      "url": "http://localhost:3000/mcp"
+      "url": "http://localhost:8811/mcp"
     }
   }
 }
