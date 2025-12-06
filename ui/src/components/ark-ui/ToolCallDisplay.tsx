@@ -12,7 +12,7 @@
 
 import { Collapsible } from '@ark-ui/solid/collapsible'
 import { Show } from 'solid-js'
-import type { ToolCallInfo } from '~/lib/utcp-baml-agent/server'
+import type { ToolCallInfo } from '~/lib/baml-agent/server'
 
 interface ToolCallDisplayProps {
   toolCall: ToolCallInfo
@@ -194,7 +194,7 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
             <Show when={props.toolCall.status === 'pending'}>
               <div flex="~" gap="2" m="t-2">
                 <button
-                  onClick={props.onApprove}
+                  onClick={() => props.onApprove?.()}
                   p="x-4 y-2"
                   text="sm dark-text-primary"
                   bg="green-600/20 hover:green-600/30"
@@ -213,7 +213,7 @@ export const ToolCallDisplay = (props: ToolCallDisplayProps) => {
                   Approve
                 </button>
                 <button
-                  onClick={props.onReject}
+                  onClick={() => props.onReject?.()}
                   p="x-4 y-2"
                   text="sm dark-text-primary"
                   bg="red-600/20 hover:red-600/30"

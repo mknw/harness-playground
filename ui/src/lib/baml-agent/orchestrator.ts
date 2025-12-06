@@ -84,11 +84,25 @@ export class AgentOrchestrator {
             ? `This operation requires your approval:\n\n**Query:**\n\`\`\`cypher\n${this.getPendingQuery()}\n\`\`\`\n\n**Explanation:** ${result.pendingPlan.reasoning}`
             : 'Processing...';
 
+      // Build toolCall for pending approval so UI can render Approve/Reject buttons
+      let toolCall: ToolCallInfo | undefined;
+      if (result.needsApproval && result.pendingPlan) {
+        toolCall = {
+          type: 'neo4j',  // Write operations are always neo4j
+          status: 'pending',
+          tool: result.pendingPlan.toolName,
+          cypher: this.getPendingQuery() || undefined,
+          explanation: result.pendingPlan.reasoning,
+          isReadOnly: false
+        };
+      }
+
       const agentMessage: AgentMessage = {
         id: Date.now().toString(),
         role: 'assistant',
         content,
         timestamp: new Date(),
+        toolCall,
         graphData: result.graphUpdate
       };
 
