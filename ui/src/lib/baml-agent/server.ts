@@ -16,7 +16,6 @@
 import {
   Thread,
   type SerializedThread,
-  type ToolMode,
   type ToolNamespace,
   type ApprovalState,
   type RoutingInterfaceEvent,
@@ -31,11 +30,10 @@ import {
   fromBamlRouting,
   fromNeo4jPlan,
   fromWebSearchPlan,
-  fromCodeModePlan,
-  ToolModeEnum
+  fromCodeModePlan
 } from './state';
-import { getSchemaForAgent, executeWriteCypher } from '../neo4j/queries';
-import { getNeo4jDriver } from '../neo4j/client';
+import { executeTool } from './agent';
+import { getSchemaForAgent } from '../neo4j/queries';
 import { transformNeo4jToCytoscape, parseNeo4jResults } from '../graph/transform';
 import type { ElementDefinition } from 'cytoscape';
 import neo4j from 'neo4j-driver';
@@ -143,75 +141,6 @@ export interface ToolCallInfo {
   error?: string;
 }
 
-// ============================================================================
-// MCP Gateway Client
-// ============================================================================
-
-const MCP_GATEWAY_URL = 'http://localhost:8811/mcp';
-
-/**
- * Parse SSE (Server-Sent Events) response from MCP Gateway
- * SSE format: "event: message\ndata: {json}\n\n"
- */
-function parseSSEResponse(text: string): unknown {
-  const lines = text.split('\n');
-  let lastData: string | null = null;
-
-  for (const line of lines) {
-    if (line.startsWith('data: ')) {
-      lastData = line.slice(6); // Remove "data: " prefix
-    }
-  }
-
-  if (!lastData) {
-    throw new Error('No data found in SSE response');
-  }
-
-  return JSON.parse(lastData);
-}
-
-/**
- * Call an MCP tool through the gateway
- * Handles SSE (streaming) response format from --transport=streaming
- */
-async function callMcpGateway(
-  tool: string,
-  args: Record<string, unknown>
-): Promise<unknown> {
-  const response = await fetch(MCP_GATEWAY_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: Date.now(),
-      method: 'tools/call',
-      params: { name: tool, arguments: args }
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Gateway error: ${response.status} ${response.statusText}`);
-  }
-
-  // MCP Gateway with --transport=streaming returns SSE format
-  const contentType = response.headers.get('content-type') || '';
-  let result: { error?: { message?: string }; result?: unknown };
-
-  if (contentType.includes('text/event-stream') || contentType.includes('text/plain')) {
-    // Parse SSE response
-    const text = await response.text();
-    result = parseSSEResponse(text) as typeof result;
-  } else {
-    // Fallback to JSON for non-streaming responses
-    result = await response.json();
-  }
-
-  if (result.error) {
-    throw new Error(result.error.message || 'Gateway tool call failed');
-  }
-
-  return result.result;
-}
 
 // ============================================================================
 // Main Entry Point: Streaming Message Processing
@@ -401,7 +330,7 @@ async function executeToolLoop(
     }
 
     // Execute the tool
-    const toolEvent = await executeToolPlan(plan, routing.tool_mode, n_turn);
+    const toolEvent = await executeToolPlan(plan, routing.tool_name, n_turn);
     toolEvents.push(toolEvent);
 
     // Record in thread
@@ -495,37 +424,35 @@ async function planToolExecution(
 
 /**
  * Execute a tool plan and return ToolEvent
+ * Uses agent.executeTool for unified execution path
  */
 async function executeToolPlan(
   plan: ToolExecutionPlan,
-  toolMode: ToolMode,
+  namespace: ToolNamespace | null,
   n_turn: number
 ): Promise<ToolEvent> {
   const startTime = Date.now();
 
   try {
-    let result: unknown;
-    const args = JSON.parse(plan.payload);
+    // Use agent integration layer for tool execution
+    const toolResult = await executeTool(
+      namespace || 'neo4j',
+      plan.toolName,
+      plan.payload
+    );
 
-    if (toolMode === 'CodeMode') {
-      // Use MCP gateway code_mode
-      result = await callMcpGateway('run_tools_with_javascript', args);
-    } else if (plan.toolName.includes('neo4j')) {
-      // Execute neo4j queries directly for better performance
-      result = await executeNeo4jTool(plan.toolName, args);
-    } else {
-      // Use MCP gateway for other tools
-      result = await callMcpGateway(plan.toolName, args);
+    if (!toolResult.success) {
+      throw new Error(toolResult.error || 'Tool execution failed');
     }
 
-    const resultStr = JSON.stringify(result);
-    const stats = extractStats(result, plan.toolName);
+    const resultStr = JSON.stringify(toolResult.data);
+    const stats = extractStats(toolResult.data, plan.toolName);
 
     return {
       status_code: 200,
       status_description: 'Success',
       operation: plan.payload,
-      data: toSerializable(result),
+      data: toSerializable(toolResult.data),
       n_turn,
       stats: {
         ...stats,
@@ -546,42 +473,6 @@ async function executeToolPlan(
         duration_ms: Date.now() - startTime
       }
     };
-  }
-}
-
-/**
- * Execute Neo4j tools directly via neo4j-driver
- */
-async function executeNeo4jTool(
-  toolName: string,
-  args: Record<string, unknown>
-): Promise<unknown> {
-  const session = getNeo4jDriver().session();
-
-  try {
-    if (toolName === 'get_neo4j_schema') {
-      const schemaResult = await getSchemaForAgent();
-      return schemaResult.schema;
-    }
-
-    const query = args.query as string;
-    if (!query) {
-      throw new Error('Query is required');
-    }
-
-    if (toolName === 'write_neo4j_cypher') {
-      const result = await executeWriteCypher(query);
-      if (!result.success) {
-        throw new Error(result.error);
-      }
-      return result.raw;
-    }
-
-    // read_neo4j_cypher
-    const result = await session.run(query);
-    return result.records.map(r => toSerializable(r.toObject()));
-  } finally {
-    await session.close();
   }
 }
 
@@ -685,7 +576,8 @@ async function executeApprovedWriteWithPlan(
   try {
     thread.addApprovalResponse(true);
 
-    const toolEvent = await executeToolPlan(plan, ToolModeEnum.Mcp, 1);
+    // Write operations are always neo4j namespace
+    const toolEvent = await executeToolPlan(plan, 'neo4j', 1);
 
     if (toolEvent.status_code !== 200) {
       thread.addError(toolEvent.status_description, { tool: plan.toolName });

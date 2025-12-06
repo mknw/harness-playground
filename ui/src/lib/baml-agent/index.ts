@@ -8,6 +8,8 @@
  * - state.ts: Thread management and BAML type adapters
  * - server.ts: Server functions with multi-turn tool loop
  * - orchestrator.ts: Client-side state management
+ * - agent.ts: Tool execution integration layer
+ * - mcp-client.ts: MCP SDK client wrapper
  */
 
 // State management
@@ -38,3 +40,23 @@ export {
   type AgentMessage,
   type ProcessMessageOutput
 } from './orchestrator';
+
+// Agent integration layer
+export {
+  executeTool,
+  executeToolPlanDirect,
+  isReturnAction,
+  requiresWriteApproval,
+  getToolDisplayName,
+  getToolNamespace,
+  type ToolResult
+} from './agent';
+
+// MCP client (for advanced usage)
+export {
+  getMcpClient,
+  callTool as mcpCallTool,
+  listTools as mcpListTools,
+  closeMcpClient,
+  type ToolCallResult
+} from './mcp-client';
