@@ -37,19 +37,65 @@ class Thread {
 }
 ```
 
-### 2. BAML Functions (`agent.baml`)
+### 2. BAML Functions (Namespace Files)
 
-Structured LLM reasoning with type-safe outputs:
+Structured LLM reasoning with type-safe outputs, split into namespace-specific files:
 
-| Function | Purpose | Output |
-|----------|---------|--------|
-| `RouteUserMessage` | Intent detection & routing | `RoutingInterfaceEvent` |
-| `PlanNeo4jOperation` | Neo4j query planning | `ToolExecutionPlan` |
-| `PlanWebSearch` | Web search planning | `ToolExecutionPlan` |
-| `PlanCodeModeOperation` | Multi-tool JS composition | `ToolExecutionPlan` |
-| `CreateToolResponse` | Result synthesis | `string` |
+| File | Function | Purpose | Output |
+|------|----------|---------|--------|
+| `routing.baml` | `RouteUserMessage` | Intent detection & routing | `RoutingInterfaceEvent` |
+| `neo4j.baml` | `PlanNeo4jOperation` | Neo4j query planning | `Neo4jToolExecutionPlan` |
+| `web_search.baml` | `PlanWebSearch` | Web search planning | `WebSearchToolExecutionPlan` |
+| `code_mode.baml` | `PlanCodeModeOperation` | Multi-tool JS composition | `CodeModeToolExecutionPlan` |
+| `response.baml` | `CreateToolResponse` | Result synthesis | `string` |
 
-### 3. Server Functions (`server.ts`)
+Each namespace has its own enum with **Return** action for early loop exit:
+
+```baml
+enum Neo4jToolName {
+  Read @alias("read_neo4j_cypher")
+  Write @alias("write_neo4j_cypher")
+  Schema @alias("get_neo4j_schema")
+  Return @description("Stop loop and return accumulated results")
+}
+```
+
+### 3. Agent Integration Layer (`agent.ts`)
+
+Unified tool execution routing between direct Neo4j and MCP gateway:
+
+```typescript
+// Execute a tool based on namespace and plan
+export async function executeTool(
+  namespace: ToolNamespace,
+  toolName: string,
+  payload: string | Record<string, unknown>
+): Promise<ToolResult>
+
+// Helper functions
+export function isReturnAction(toolName: string): boolean
+export function requiresWriteApproval(toolName: string): boolean
+export function getToolDisplayName(toolName: string): string
+```
+
+### 4. MCP Client (`mcp-client.ts`)
+
+SDK-based client using `@modelcontextprotocol/sdk`:
+
+```typescript
+// Singleton client connection
+export async function getMcpClient(): Promise<Client>
+
+// Tool execution
+export async function callTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult>
+export async function listTools(): Promise<string[]>
+
+// Convenience wrappers
+export async function neo4jRead(query: string): Promise<ToolCallResult>
+export async function webSearch(query: string): Promise<ToolCallResult>
+```
+
+### 5. Server Functions (`server.ts`)
 
 SolidStart server functions with streaming:
 
@@ -74,7 +120,7 @@ async function executeToolLoop(
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                       USER MESSAGE                               │
+│                       USER MESSAGE                              │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -95,40 +141,45 @@ async function executeToolLoop(
                                               ▼
               ┌───────────────────────────────────────────────────┐
               │ Steps 4-10: Tool Execution Loop (max 5 turns)     │
-              │                                                    │
+              │                                                   │
               │  ┌─────────────────────────────────────────────┐  │
               │  │ Step 4: Plan* (BAML) - namespace-specific   │  │
               │  │ → PlanNeo4jOperation / PlanWebSearch / etc  │  │
-              │  │ → Returns: ToolExecutionPlan                 │  │
-              │  │   - reasoning, toolName, payload, end_tool   │  │
+              │  │ → Returns: ToolExecutionPlan                │  │
+              │  │   - reasoning, toolName, payload, isReturn  │  │
               │  └─────────────────────────────────────────────┘  │
-              │                       │                            │
-              │                       ▼                            │
+              │                       │                           │
+              │                       ▼                           │
               │  ┌─────────────────────────────────────────────┐  │
-              │  │ Step 5: Check Approval (for writes)         │  │
+              │  │ Step 5: Check for Return action             │  │
+              │  │ → If isReturn: exit loop immediately        │  │
+              │  └─────────────────────────────────────────────┘  │
+              │                       │                           │
+              │                       ▼                           │
+              │  ┌─────────────────────────────────────────────┐  │
+              │  │ Step 6: Check Approval (for writes)         │  │
               │  │ → If write: check approvalState             │  │
               │  │ → Return pending if approval needed         │  │
               │  └─────────────────────────────────────────────┘  │
-              │                       │                            │
-              │                       ▼                            │
+              │                       │                           │
+              │                       ▼                           │
               │  ┌─────────────────────────────────────────────┐  │
-              │  │ Step 6-8: Execute Tool                      │  │
+              │  │ Step 7-9: Execute Tool (via agent.ts)       │  │
               │  │ → Neo4j: direct neo4j-driver                │  │
-              │  │ → Web/Code: MCP Gateway (port 8811)         │  │
+              │  │ → Web/Code: MCP SDK client                  │  │
               │  │ → Returns: ToolEvent with stats             │  │
               │  └─────────────────────────────────────────────┘  │
-              │                       │                            │
-              │                       ▼                            │
-              │           ┌─────────────────────┐                  │
-              │           │ end_tool = true?    │                  │
-              │           │ OR n_turn >= 5?     │                  │
-              │           └─────────────────────┘                  │
-              │                 │         │                        │
-              │                 no        yes                      │
-              │                 │         │                        │
-              │                 └─────────┼────────────────────────│
-              │                           │                        │
-              └───────────────────────────┼────────────────────────┘
+              │                       │                           │
+              │                       ▼                           │
+              │           ┌─────────────────────┐                 │
+              │           │ n_turn >= 5?        │                 │
+              │           └─────────────────────┘                 │
+              │                 │         │                       │
+              │                 no        yes                     │
+              │                 │         │                       │
+              │                 └─────────┼───────────────────────│
+              │                           │                       │
+              └───────────────────────────┼───────────────────────┘
                                           │
                                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -149,8 +200,10 @@ async function executeToolLoop(
 | Namespace | Mode | Tools | Execution |
 |-----------|------|-------|-----------|
 | `neo4j` | Mcp | read_neo4j_cypher, write_neo4j_cypher, get_neo4j_schema | Direct neo4j-driver |
-| `web_search` | Mcp | web_search (DuckDuckGo), fetch | MCP Gateway |
-| `code_mode` | CodeMode | JavaScript composition | MCP Gateway code-mode |
+| `web_search` | Mcp | search (DuckDuckGo), fetch | MCP SDK Client |
+| `code_mode` | CodeMode | JavaScript composition | MCP SDK Client |
+
+All namespaces support the `Return` action for early loop exit.
 
 ## Streaming Events
 
@@ -192,7 +245,7 @@ Three approval levels for write operations:
 
 ### MCP Gateway
 
-Port: **8811** (configured in docker-compose.yaml and server.ts)
+Port: **8811** (configured in docker-compose.yaml and mcp-client.ts)
 
 ```yaml
 # docker-compose.yaml
@@ -212,8 +265,14 @@ mcp-gateway:
 
 | File | Purpose |
 |------|---------|
-| `ui/src/lib/utcp-baml-agent/state.ts` | Event types, Thread class, helpers |
-| `ui/src/lib/utcp-baml-agent/server.ts` | Server functions, tool execution |
-| `ui/src/lib/utcp-baml-agent/orchestrator.ts` | Client-side orchestration |
-| `ui/baml_src/agent.baml` | BAML function definitions |
+| `ui/src/lib/baml-agent/state.ts` | Event types, Thread class, BAML type adapters |
+| `ui/src/lib/baml-agent/server.ts` | Server functions, tool loop |
+| `ui/src/lib/baml-agent/agent.ts` | Tool execution integration layer |
+| `ui/src/lib/baml-agent/mcp-client.ts` | MCP SDK client wrapper |
+| `ui/src/lib/baml-agent/orchestrator.ts` | Client-side orchestration |
+| `ui/baml_src/routing.baml` | Message routing and intent detection |
+| `ui/baml_src/neo4j.baml` | Neo4j tool planning |
+| `ui/baml_src/web_search.baml` | Web search tool planning |
+| `ui/baml_src/code_mode.baml` | Code mode tool planning |
+| `ui/baml_src/response.baml` | Response generation |
 | `ui/src/components/ark-ui/ToolCallDisplay.tsx` | Tool call UI component |
