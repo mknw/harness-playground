@@ -68,6 +68,71 @@ export async function getSchema(credentials?: Neo4jCredentials): Promise<SchemaR
 }
 
 /**
+ * Get a formatted schema for the BAML agent
+ * Produces concise, LLM-friendly output with:
+ * - Node labels with their properties
+ * - Relationship patterns (start)-[TYPE]->(end)
+ */
+export async function getSchemaForAgent(credentials?: Neo4jCredentials): Promise<SchemaResult> {
+  "use server";
+
+  const session = getNeo4jDriver(credentials).session();
+  try {
+    // Get labels with their actual properties (sample 1 node per label)
+    const labelsQuery = `
+      CALL db.labels() YIELD label
+      CALL {
+        WITH label
+        MATCH (n) WHERE label IN labels(n)
+        RETURN keys(n) as props LIMIT 1
+      }
+      RETURN label, props
+    `;
+    const labelsResult = await session.run(labelsQuery);
+
+    // Get relationship patterns by querying actual data
+    // (db.schema.visualization returns virtual nodes that don't support startNode/endNode)
+    const relsQuery = `
+      MATCH (a)-[r]->(b)
+      WITH
+        [lbl IN labels(a) WHERE lbl <> 'UNIQUE IMPORT LABEL'][0] as startLabel,
+        type(r) as relType,
+        [lbl IN labels(b) WHERE lbl <> 'UNIQUE IMPORT LABEL'][0] as endLabel
+      WHERE startLabel IS NOT NULL AND endLabel IS NOT NULL
+      RETURN DISTINCT startLabel, relType, endLabel
+    `;
+    const relsResult = await session.run(relsQuery);
+
+    // Format as readable text
+    let schema = "Node Labels:\n";
+    for (const record of labelsResult.records) {
+      const label = record.get('label');
+      if (label === 'UNIQUE IMPORT LABEL') continue; // Skip APOC import label
+      const props = record.get('props') || [];
+      schema += `- ${label} (properties: ${props.join(', ')})\n`;
+    }
+
+    schema += "\nRelationships:\n";
+    for (const record of relsResult.records) {
+      const start = record.get('startLabel');
+      const rel = record.get('relType');
+      const end = record.get('endLabel');
+      if (start && rel && end) {
+        schema += `- (${start})-[${rel}]->(${end})\n`;
+      }
+    }
+
+    return { success: true, schema };
+  } catch (error) {
+    console.error('Failed to fetch agent schema:', error);
+    // Fallback to simplified schema
+    return getSimplifiedSchema(credentials);
+  } finally {
+    await session.close();
+  }
+}
+
+/**
  * Get a simplified schema representation
  * Useful for smaller context windows
  */

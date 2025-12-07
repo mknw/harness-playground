@@ -62,11 +62,15 @@ echo "// ============================================" >> "${OUTPUT_FILE}"
 echo "" >> "${OUTPUT_FILE}"
 
 # Export all nodes using APOC if available, otherwise use custom export
+# APOC returns cypherStatements as a quoted string - we need to:
+# 1. Skip the header line (tail -n +2)
+# 2. Remove leading/trailing quotes (sed)
+# 3. Unescape internal quotes (sed)
 docker exec ${CONTAINER_NAME} cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD} \
     "CALL apoc.export.cypher.all(null, {stream: true, format: 'cypher-shell'})
      YIELD cypherStatements
      RETURN cypherStatements" \
-    --format plain 2>/dev/null | tail -n +2 >> "${OUTPUT_FILE}" || {
+    --format plain 2>/dev/null | tail -n +2 | sed 's/^"//; s/"$//; s/\\"/"/g' >> "${OUTPUT_FILE}" || {
 
     echo "// APOC not available, using manual export..." >> "${OUTPUT_FILE}"
 
