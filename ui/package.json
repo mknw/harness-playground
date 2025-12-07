@@ -4,12 +4,13 @@
   "scripts": {
     "baml-test": "baml-cli test",
     "baml-generate": "baml-cli generate",
-    "dev": "vinxi dev",
+    "dev": "vinxi dev --port 3444",
     "build": "pnpm baml-generate & vinxi build",
     "start": "vinxi start"
   },
   "dependencies": {
     "@ark-ui/solid": "^5.26.2",
+    "@modelcontextprotocol/sdk": "^1.24.3",
     "@solidjs/router": "^0.15.3",
     "@solidjs/start": "^1.2.0",
     "@stackframe/js": "^2.8.48",
@@ -26,7 +27,8 @@
     "neo4j-driver": "^6.0.1",
     "solid-js": "^1.9.10",
     "unocss": "^66.5.4",
-    "vinxi": "^0.5.8"
+    "vinxi": "^0.5.8",
+    "zod": "^4.1.13"
   },
   "engines": {
     "node": ">=22"
@@ -34,12 +36,14 @@
   "devDependencies": {
     "@boundaryml/baml": "^0.214.0",
     "@eslint/js": "^9.38.0",
+    "@solid-devtools/debugger": "^0.28.1",
     "@types/node": "^24.9.2",
     "@unocss/eslint-config": "^66.5.4",
     "@unocss/preset-attributify": "^66.5.4",
     "@unocss/preset-wind4": "^66.5.4",
     "eslint": "^9.38.0",
     "eslint-plugin-solid": "^0.14.5",
+    "solid-devtools": "^0.34.4",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.2",
     "vite-plugin-wasm": "^3.5.0"
