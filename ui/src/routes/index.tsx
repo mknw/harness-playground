@@ -2,10 +2,12 @@ import { Splitter } from '@ark-ui/solid/splitter'
 import { createSignal } from 'solid-js'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
 import { SupportPanel } from '~/components/ark-ui/SupportPanel'
+import { createTelemetryStore } from '~/lib/baml-agent/telemetry-store'
 import type { ElementDefinition } from 'cytoscape'
 
 export default function Home() {
   const [graphElements, setGraphElements] = createSignal<ElementDefinition[]>([])
+  const telemetryStore = createTelemetryStore()
 
   return (
     <main h="[calc(100vh-4rem)]">
@@ -20,7 +22,10 @@ export default function Home() {
       >
         {/* Chat Panel */}
         <Splitter.Panel id="chat">
-          <ChatInterface onGraphUpdate={setGraphElements} />
+          <ChatInterface
+            onGraphUpdate={setGraphElements}
+            telemetryStore={telemetryStore}
+          />
         </Splitter.Panel>
 
         {/* Resize Trigger */}
@@ -35,7 +40,10 @@ export default function Home() {
 
         {/* Support Panel (Graph, Stats, Actions, Docs, Tools) */}
         <Splitter.Panel id="support">
-          <SupportPanel graphElements={graphElements()} />
+          <SupportPanel
+            graphElements={graphElements()}
+            telemetryStore={telemetryStore}
+          />
         </Splitter.Panel>
       </Splitter.Root>
     </main>

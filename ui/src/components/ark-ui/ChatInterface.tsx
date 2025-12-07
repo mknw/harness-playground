@@ -16,8 +16,10 @@ import { createSignal, onMount } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
-import { AgentOrchestrator } from '~/lib/utcp-baml-agent'
+import { AgentOrchestrator } from '~/lib/baml-agent'
 import type { ElementDefinition } from 'cytoscape'
+import type { TelemetryStore } from '~/lib/baml-agent/telemetry-store'
+import type { BAMLCallTelemetry, ToolCallTelemetry } from '~/lib/baml-agent/telemetry'
 
 // ============================================================================
 // Types
@@ -25,6 +27,7 @@ import type { ElementDefinition } from 'cytoscape'
 
 export interface ChatInterfaceProps {
   onGraphUpdate?: (elements: ElementDefinition[]) => void
+  telemetryStore?: TelemetryStore
 }
 
 // ============================================================================
@@ -76,6 +79,17 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       }
 
       setMessages([...messages(), assistantMessage])
+
+      // Route telemetry events to store
+      if (props.telemetryStore && result.events) {
+        for (const event of result.events) {
+          if (event.type === 'baml_telemetry') {
+            props.telemetryStore.addBAMLCall(event.data as BAMLCallTelemetry)
+          } else if (event.type === 'tool_telemetry') {
+            props.telemetryStore.addToolCall(event.data as ToolCallTelemetry)
+          }
+        }
+      }
 
       // Update graph visualization if we got graph data
       if (result.graphUpdate) {
