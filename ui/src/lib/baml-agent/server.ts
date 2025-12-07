@@ -37,6 +37,68 @@ import { getSchemaForAgent } from '../neo4j/queries';
 import { transformNeo4jToCytoscape, parseNeo4jResults } from '../graph/transform';
 import type { ElementDefinition } from 'cytoscape';
 import neo4j from 'neo4j-driver';
+import { Collector } from '@boundaryml/baml';
+import type { BAMLCallTelemetry, ToolCallTelemetry, BAMLFunctionName } from './telemetry';
+import { getNamespaceFromTool } from './telemetry';
+
+// ============================================================================
+// Telemetry Helpers
+// ============================================================================
+
+/** Generate a unique ID for telemetry events */
+function generateTelemetryId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** Create a BAML telemetry event from collector data */
+function createBAMLTelemetry(
+  functionName: BAMLFunctionName,
+  collector: Collector,
+  startTime: number,
+  status: 'success' | 'error' = 'success',
+  error?: string
+): BAMLCallTelemetry {
+  const lastCall = collector.last;
+
+  return {
+    id: generateTelemetryId('baml'),
+    functionName,
+    timestamp: new Date().toISOString(),
+    status,
+    usage: lastCall?.usage ? {
+      input_tokens: lastCall.usage.inputTokens || 0,
+      output_tokens: lastCall.usage.outputTokens || 0
+    } : undefined,
+    latency_ms: Date.now() - startTime,
+    error,
+    output: lastCall?.rawLlmResponse
+  };
+}
+
+/** Create a tool telemetry event */
+function createToolTelemetry(
+  toolName: string,
+  startTime: number,
+  status: 'success' | 'error' = 'success',
+  result?: unknown,
+  error?: string
+): ToolCallTelemetry {
+  const stats = extractStats(result, toolName);
+
+  return {
+    id: generateTelemetryId('tool'),
+    namespace: getNamespaceFromTool(toolName),
+    toolName,
+    timestamp: new Date().toISOString(),
+    status,
+    duration_ms: Date.now() - startTime,
+    result: stats.nodeCount !== undefined || stats.relationshipCount !== undefined
+      ? { nodeCount: stats.nodeCount, relationshipCount: stats.relationshipCount }
+      : undefined,
+    rawResult: result,
+    error
+  };
+}
 
 // ============================================================================
 // Serialization Helpers
@@ -169,12 +231,17 @@ export async function processAgentMessageStreaming(
   try {
     const { b } = await import('../../../baml_client');
 
+    // Create collector for this session
+    const collector = new Collector('agent-session');
+
     // ========================================
     // STEP 1: Route Message
     // ========================================
+    const routeStartTime = Date.now();
     const bamlRouting = await b.RouteUserMessage(
       message,
-      thread.getRecentHistory(10)
+      thread.getRecentHistory(10),
+      { collector }
     );
     const routing = fromBamlRouting(bamlRouting);
 
@@ -182,6 +249,13 @@ export async function processAgentMessageStreaming(
     events.push({
       type: 'routing',
       data: routing,
+      timestamp: new Date().toISOString()
+    });
+
+    // Emit BAML telemetry for RouteUserMessage
+    events.push({
+      type: 'baml_telemetry',
+      data: createBAMLTelemetry('RouteUserMessage', collector, routeStartTime),
       timestamp: new Date().toISOString()
     });
 
@@ -204,13 +278,17 @@ export async function processAgentMessageStreaming(
     // ========================================
     // STEP 2: Multi-Turn Tool Execution
     // ========================================
-    const { toolEvents, finalResponse, graphUpdate, needsApproval, pendingPlan } =
+    const { toolEvents, graphUpdate, needsApproval, pendingPlan, telemetryEvents } =
       await executeToolLoop(
         routing as unknown as RoutingInterfaceEvent,
         message,
         thread,
-        state
+        state,
+        collector
       );
+
+    // Add telemetry events from tool loop
+    events.push(...telemetryEvents);
 
     // Add tool events to stream
     for (const te of toolEvents) {
@@ -235,11 +313,20 @@ export async function processAgentMessageStreaming(
     // ========================================
     // STEP 3: Generate Final Response
     // ========================================
+    const responseStartTime = Date.now();
     const finalContent = await b.CreateToolResponse(
       JSON.stringify(toolEvents),
       message,
-      routing.intent
+      routing.intent,
+      { collector }
     );
+
+    // Emit BAML telemetry for CreateToolResponse
+    events.push({
+      type: 'baml_telemetry',
+      data: createBAMLTelemetry('CreateToolResponse', collector, responseStartTime),
+      timestamp: new Date().toISOString()
+    });
 
     const fullMessage = `${routing.response_text}\n\n${finalContent}`;
     thread.addAssistantMessage(fullMessage);
@@ -283,6 +370,7 @@ interface ToolLoopResult {
   graphUpdate?: ElementDefinition[];
   needsApproval?: boolean;
   pendingPlan?: ToolExecutionPlan;
+  telemetryEvents: StreamEvent[];
 }
 
 /**
@@ -292,9 +380,11 @@ async function executeToolLoop(
   routing: RoutingInterfaceEvent,
   message: string,
   thread: Thread,
-  approvalState: ApprovalState
+  approvalState: ApprovalState,
+  collector: Collector
 ): Promise<ToolLoopResult> {
   const toolEvents: ToolEvent[] = [];
+  const telemetryEvents: StreamEvent[] = [];
   let graphUpdate: ElementDefinition[] | undefined;
   let n_turn = 0;
 
@@ -305,12 +395,24 @@ async function executeToolLoop(
     const previousResults = prepareResultsForContext(toolEvents);
 
     // Plan next action based on tool namespace
+    const planStartTime = Date.now();
     const plan = await planToolExecution(
       routing,
       message,
       previousResults,
-      n_turn
+      n_turn,
+      collector
     );
+
+    // Determine which BAML planner was used and emit telemetry
+    const plannerName = getPlannerName(routing.tool_name);
+    if (plannerName) {
+      telemetryEvents.push({
+        type: 'baml_telemetry',
+        data: createBAMLTelemetry(plannerName, collector, planStartTime),
+        timestamp: new Date().toISOString()
+      });
+    }
 
     // Check for Return action - exit loop with accumulated results
     if (plan.isReturn) {
@@ -325,13 +427,28 @@ async function executeToolLoop(
         toolEvents,
         graphUpdate,
         needsApproval: true,
-        pendingPlan: plan
+        pendingPlan: plan,
+        telemetryEvents
       };
     }
 
     // Execute the tool
+    const toolStartTime = Date.now();
     const toolEvent = await executeToolPlan(plan, routing.tool_name, n_turn);
     toolEvents.push(toolEvent);
+
+    // Emit tool telemetry
+    telemetryEvents.push({
+      type: 'tool_telemetry',
+      data: createToolTelemetry(
+        plan.toolName,
+        toolStartTime,
+        toolEvent.status_code === 200 ? 'success' : 'error',
+        toolEvent.data,
+        toolEvent.status_code !== 200 ? toolEvent.status_description : undefined
+      ),
+      timestamp: new Date().toISOString()
+    });
 
     // Record in thread
     thread.addToolCall(plan.toolName, JSON.parse(plan.payload), routing.intent);
@@ -349,7 +466,17 @@ async function executeToolLoop(
     }
   }
 
-  return { toolEvents, graphUpdate };
+  return { toolEvents, graphUpdate, telemetryEvents };
+}
+
+/** Get BAML planner function name from namespace */
+function getPlannerName(namespace: ToolNamespace | null): BAMLFunctionName | null {
+  switch (namespace) {
+    case 'neo4j': return 'PlanNeo4jOperation';
+    case 'web_search': return 'PlanWebSearch';
+    case 'code_mode': return 'PlanCodeModeOperation';
+    default: return null;
+  }
 }
 
 // ============================================================================
@@ -363,7 +490,8 @@ async function planToolExecution(
   routing: RoutingInterfaceEvent,
   message: string,
   previousResults: string,
-  n_turn: number
+  n_turn: number,
+  collector: Collector
 ): Promise<ToolExecutionPlan> {
   const { b } = await import('../../../baml_client');
 
@@ -378,7 +506,8 @@ async function planToolExecution(
         routing.intent,
         schema,
         previousResults,
-        n_turn
+        n_turn,
+        { collector }
       );
       return fromNeo4jPlan(bamlPlan);
     }
@@ -388,7 +517,8 @@ async function planToolExecution(
         message,
         routing.intent,
         previousResults,
-        n_turn
+        n_turn,
+        { collector }
       );
       return fromWebSearchPlan(bamlPlan);
     }
@@ -408,7 +538,8 @@ async function planToolExecution(
         routing.intent,
         availableTools,
         previousResults,
-        n_turn
+        n_turn,
+        { collector }
       );
       return fromCodeModePlan(bamlPlan);
     }

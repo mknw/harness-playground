@@ -195,12 +195,23 @@ export interface ToolEvent {
 }
 
 /** Streaming event types for real-time UI updates */
-export type StreamEventType = 'routing' | 'planning' | 'executing' | 'processing' | 'complete' | 'error';
+export type StreamEventType =
+  | 'routing'
+  | 'planning'
+  | 'executing'
+  | 'processing'
+  | 'complete'
+  | 'error'
+  | 'baml_telemetry'   // BAML function call telemetry
+  | 'tool_telemetry';  // Tool execution telemetry
+
+// Import telemetry types
+import type { BAMLCallTelemetry, ToolCallTelemetry } from './telemetry';
 
 /** Wrapper for streaming events */
 export interface StreamEvent {
   type: StreamEventType;
-  data: RoutingInterfaceEvent | ToolExecutionPlan | ToolEvent | string;
+  data: RoutingInterfaceEvent | ToolExecutionPlan | ToolEvent | BAMLCallTelemetry | ToolCallTelemetry | string;
   timestamp: string;
 }
 

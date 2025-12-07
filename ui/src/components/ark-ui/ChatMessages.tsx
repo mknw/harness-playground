@@ -2,7 +2,7 @@
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
 import { For, Show, createEffect, createSignal } from 'solid-js'
 import type { ElementDefinition } from 'cytoscape'
-import type { ToolCallInfo } from '~/lib/utcp-baml-agent/server'
+import type { ToolCallInfo } from '~/lib/baml-agent/server'
 import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
 
