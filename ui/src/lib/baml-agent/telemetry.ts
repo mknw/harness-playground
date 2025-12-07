@@ -156,6 +156,11 @@ export function getEventHexColor(event: TimelineEvent): string {
   if (event.lane === 'interface') {
     return '#6366f1'; // cyber-500
   }
+  // Tools lane - check if it's a BAML call (Plan operations) or actual tool call
+  if (isBAMLCallTelemetry(event)) {
+    // Plan operations in tools lane - use a distinct color
+    return '#a855f7'; // purple-500 for Plan operations
+  }
   return namespaceHexColors[(event as ToolCallTelemetry).namespace];
 }
 
