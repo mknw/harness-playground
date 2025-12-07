@@ -98,41 +98,43 @@ User → ChatInterface → AgentOrchestrator → Server Functions → BAML Agent
 
 ---
 
-## Phase 4: Tool Execution 📝 NOT STARTED
+## Phase 4: Tool Execution 🔧 IN PROGRESS
 
 **Goal:** Enable agent to execute tools (Neo4j queries, web fetch, etc.)
 
-**Current State:** Agent can chat and respond to messages, but tool execution is not connected. The BAML agent generates queries but they are NOT executed against Neo4j.
+### Implemented
+- [x] Multi-turn tool loop with MAX_TOOL_TURNS = 5
+- [x] Namespace-specific planning (neo4j, web_search, code_mode)
+- [x] Direct neo4j-driver for Neo4j operations (bypassing MCP for reliability)
+- [x] MCP Gateway integration for web_search and fetch tools
+- [x] SSE response parsing for MCP Gateway streaming transport
+- [x] Tool routing classification (RouteUserMessage BAML function)
+- [x] Approval system for write operations (one_time, thread, tool_based)
+- [x] Token management with context pruning at 8000 tokens
 
-### What Exists (But Not Working)
-- `tools.ts` has handlers (`handleReadCypher`, `handleWriteCypher`, etc.)
-- `agent.ts` calls these handlers but connection may be broken
-- `lib/utcp/client.ts` has UTCP client configured for MCP gateway
-- Tool wrappers exist: `KGTools`, `WebTools`, `N8nTools`
+### Needs Debugging
+- [ ] Some tools fail during execution - investigate error handling
+- [ ] Tool routing may misclassify certain user intents
+- [ ] End-to-end testing for all tool namespaces
+- [ ] Error recovery and retry logic
 
-### What's Missing
-- [ ] Verify MCP Gateway is running and accessible
-- [ ] Debug tool execution flow: `BAML → Tool Handlers → UTCP → MCP → Neo4j`
-- [ ] Test `KGTools.readCypher()` and `KGTools.getSchema()` directly
-- [ ] Ensure UTCP client connects to MCP gateway properly
+### Architecture
 
-### Tasks to Complete
-- [ ] Debug and fix tool execution chain
-- [ ] Add logging to trace tool calls
-- [ ] Test read queries end-to-end
-- [ ] Test write queries with approval flow
-- [ ] Verify graph data transforms correctly to Cytoscape elements
+```
+BAML Agent → Tool Loop → Namespace Router
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+       ┌──────────┐    ┌──────────┐    ┌──────────┐
+       │ neo4j    │    │web_search│    │code_mode │
+       │(direct)  │    │(MCP 8811)│    │(MCP 8811)│
+       └──────────┘    └──────────┘    └──────────┘
+```
 
 **Key Files:**
-- `ui/src/lib/utcp-baml-agent/tools.ts` - Tool handlers (exist but may not work)
-- `ui/src/lib/utcp/client.ts` - UTCP client with MCP config
-- `ui/src/lib/config/endpoints.ts` - MCP gateway endpoint configuration
-
-**Debug Steps:**
-1. Check if MCP gateway is running (`localhost:3000` or Docker endpoint)
-2. Test `getUtcpClient()` initialization
-3. Test `KGTools.getSchema()` directly from a server function
-4. Add console logs to `handleReadCypher()` to trace execution
+- `ui/src/lib/utcp-baml-agent/server.ts:160-222` - SSE parsing, MCP Gateway calls
+- `ui/src/lib/utcp-baml-agent/server.ts:224-350` - executeToolLoop implementation
+- `ui/baml_src/agent.baml:70-91` - Routing rules for tool selection
 
 ---
 
@@ -310,9 +312,9 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
 - `@solidjs/start` - SolidJS framework
 
 ### External Services
-- Neo4j database (via Docker or cloud)
-- MCP Gateway (running on port 3000)
-- n8n (optional, for workflow automation)
+- Neo4j database (via Docker Compose, port 7687)
+- MCP Gateway (via Docker Compose, port 8811)
+- n8n (optional, for workflow automation, port 5678)
 
 ### Environment Variables
 - `GROQ_API_KEY` - For Groq LLM inference
@@ -332,22 +334,25 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
 ✅ Graph visualization with Cytoscape.js
 ✅ Direct Neo4j queries via manual Cypher input
 ✅ Schema fetching via neo4j-driver
+✅ Multi-turn tool loop architecture implemented
+✅ SSE response parsing for MCP Gateway streaming transport
+✅ Neo4j data versioning via Cypher dumps (scripts/)
 
-**What Does NOT Work (Yet):**
-❌ Agent cannot execute tools (queries not sent to Neo4j)
-❌ Read queries do not return data to graph visualization
-❌ Write approval flow untested end-to-end
-❌ UTCP → MCP → Neo4j connection not verified
+**What Needs Debugging:**
+🔧 Some tools fail during execution - needs investigation
+🔧 Tool routing classification may misroute certain requests
+🔧 End-to-end tool execution flow needs testing
 
 **What's Next:**
-📝 Tool execution (Phase 4) - Debug and connect tool handlers
-📝 Observability panel (Phase 6)
-📝 Advanced features (Phase 7)
+📝 Debug tool execution issues (Phase 4 refinement)
+📝 Observability panel (Phase 6) - BAML telemetry, token tracking
+📝 Advanced features (Phase 7) - Actions, Documents, Tools panels
 
 **Known Issues:**
 - BAML requires dynamic imports (no top-level imports in server-bundled code)
-- UTCP client may not connect to MCP gateway (needs debugging)
-- Tool handlers exist but execution chain is broken
+- MCP Gateway occasionally needs restart after config changes
+- Import from APOC export format needs manual processing
+- Tool execution has intermittent failures - debugging in progress
 
 ---
 
@@ -363,6 +368,6 @@ When working on this project:
 
 ---
 
-**Last Updated:** 2025-11-26
-**Version:** 0.1.0-alpha
-**Status:** Active Development - Phase 4 (Tool Execution) Not Started
+**Last Updated:** 2025-12-03
+**Version:** 0.2.0-alpha
+**Status:** Active Development - Phase 4 (Tool Execution) In Progress

@@ -29,8 +29,8 @@ All services communicate via a shared bridge network (`app-network`).
 
 ### MCP Gateway
 - **Image**: docker/mcp-gateway
-- **Ports**: 3000:3000
-- **MCP Servers**: neo4j-cypher, fetch
+- **Ports**: 8811:8811
+- **MCP Servers**: neo4j-cypher, fetch, web_search
 - **Transport**: streaming
 - **Dependencies**: Waits for Neo4j healthcheck
 

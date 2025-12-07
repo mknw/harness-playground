@@ -2,25 +2,89 @@
 
 The MCP Gateway is Docker's tool for managing and running MCP (Model Context Protocol) servers in containers. It provides a unified interface for AI clients to access multiple MCP tools through a single gateway.
 
-## Overview
+## Project-Specific Setup
+
+> **Important**: This project uses **Docker Compose** to run the MCP Gateway, NOT the `docker mcp gateway run` CLI command. This ensures a reproducible setup for VPS deployment.
+
+### How It Works in This Project
 
 ```
-AI Client → MCP Gateway → MCP Servers (Docker Containers)
+┌─────────────────────────────────────────────────────────────┐
+│  SolidStart UI / BAML Agent                                 │
+│  (calls MCP Gateway at http://localhost:8811/mcp)           │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  MCP Gateway (docker-compose service)                       │
+│  Port: 8811 | Transport: streaming                          │
+│  Config: docker-compose.yaml:37-56                          │
+└─────────────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+       ┌──────────┐    ┌──────────┐    ┌──────────┐
+       │neo4j-    │    │ fetch    │    │web_search│
+       │cypher    │    │          │    │(DuckDuck)│
+       └──────────┘    └──────────┘    └──────────┘
 ```
 
-The gateway:
-- Manages MCP server lifecycle in isolated Docker containers
-- Provides a unified interface for AI models to access tools
-- Handles authentication, secrets, and OAuth flows
-- Supports dynamic tool discovery and configuration
+### Configuration Files (Source of Truth)
 
-## Installation
+| File | Purpose | Verify |
+|------|---------|--------|
+| `docker-compose.yaml:37-56` | Gateway service definition | Port 8811, servers list |
+| `custom-catalog.yaml` | MCP server definitions with env mappings | neo4j-cypher, fetch, web_search |
+| `mcp-config.yaml` | Server connection parameters | Neo4j URI, credentials |
 
-### Prerequisites
-- Docker Desktop with MCP Toolkit feature enabled
-- OR standalone Docker engine
+### Current Docker Compose Configuration
 
-### As Docker CLI Plugin
+From `docker-compose.yaml`:
+
+```yaml
+mcp-gateway:
+  image: docker/mcp-gateway
+  restart: unless-stopped
+  command:
+    - --servers=neo4j-cypher,fetch,web_search
+    - --config=/mcp/config.yaml
+    - --catalog=/mcp/custom-catalog.yaml
+    - --transport=streaming
+    - --port=8811
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+    - ./mcp-config.yaml:/mcp/config.yaml:ro
+    - ./custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+  ports:
+    - "8811:8811"
+  networks:
+    - app-network
+  depends_on:
+    neo4j:
+      condition: service_healthy
+```
+
+### Starting the Gateway
+
+```bash
+# Start all services (including gateway)
+docker compose up -d
+
+# View gateway logs
+docker compose logs -f mcp-gateway
+
+# Restart gateway after config changes
+docker compose restart mcp-gateway
+```
+
+---
+
+## General MCP Gateway Reference
+
+The sections below are general reference documentation for the Docker MCP Gateway. For local development with Claude Desktop or other CLI usage, you can use the `docker mcp` CLI plugin.
+
+### CLI Plugin Installation (Optional)
+
 ```bash
 git clone https://github.com/docker/mcp-gateway.git
 cd mcp-gateway
@@ -33,16 +97,16 @@ After installation:
 docker mcp --help
 ```
 
-## Running the Gateway
+### CLI Usage (Not Used in This Project)
 
-### Basic Usage
+These commands are for reference only. This project uses Docker Compose instead.
 
 ```bash
 # Run with stdio transport (for single client like Claude Desktop)
 docker mcp gateway run
 
-# Run with HTTP streaming (for multiple clients, like n8n)
-docker mcp gateway run --port 3000 --transport streaming
+# Run with HTTP streaming
+docker mcp gateway run --port 8811 --transport streaming
 
 # Run specific servers only
 docker mcp gateway run --servers neo4j-cypher,fetch
@@ -55,42 +119,6 @@ docker mcp gateway run --verbose --log-calls
 
 # Dry run (test configuration without starting)
 docker mcp gateway run --verbose --dry-run
-```
-
-### Docker Compose Usage
-
-```yaml
-services:
-  mcp-gateway:
-    image: docker/mcp-gateway
-    command:
-      - --servers=neo4j-cypher,fetch
-      - --transport=streaming
-      - --port=3000
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    ports:
-      - "3000:3000"
-```
-
-### With Custom Catalog and Config
-
-```yaml
-services:
-  mcp-gateway:
-    image: docker/mcp-gateway
-    command:
-      - --servers=neo4j-cypher,fetch
-      - --config=/mcp/config.yaml
-      - --catalog=/mcp/custom-catalog.yaml
-      - --transport=streaming
-      - --port=3000
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./mcp-config.yaml:/mcp/config.yaml:ro
-      - ./custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
-    ports:
-      - "3000:3000"
 ```
 
 ## Command Line Flags
@@ -323,16 +351,16 @@ docker mcp workingset pull docker.io/org/my-set:v1.0
 ```
 
 ### n8n (Docker Compose)
-1. Use `--transport streaming --port 3000`
+1. Use `--transport streaming --port 8811`
 2. Configure MCP Client tool:
-   - Endpoint: `http://mcp-gateway:3000/mcp`
+   - Endpoint: `http://mcp-gateway:8811/mcp`
    - Transport: HTTP Streamable
    - Authentication: None
 
 ### Python Client
 ```python
 # Use streaming transport
-endpoint = "http://localhost:3000/mcp"
+endpoint = "http://localhost:8811/mcp"
 ```
 
 ## Troubleshooting
