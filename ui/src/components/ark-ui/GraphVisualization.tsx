@@ -21,6 +21,7 @@ import { runManualCypher, getNodeProperties } from '~/lib/neo4j/queries';
 
 export interface GraphVisualizationProps {
   elements: ElementDefinition[];
+  highlightedIds?: string[];
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void;
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
   onElementsChange?: (elements: ElementDefinition[]) => void;
@@ -157,6 +158,30 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
             'overlay-opacity': 0.2,
             'overlay-color': '#4f46e5'
           }
+        },
+
+        // Highlighted nodes (from latest query)
+        {
+          selector: 'node.highlighted',
+          style: {
+            'background-color': '#00ffff',
+            'border-color': '#00ffff',
+            'border-width': 4,
+            'overlay-opacity': 0.3,
+            'overlay-color': '#00ffff'
+          } as Record<string, string | number>
+        },
+
+        // Highlighted edges (from latest query)
+        {
+          selector: 'edge.highlighted',
+          style: {
+            'line-color': '#00ffff',
+            'target-arrow-color': '#00ffff',
+            'width': 3,
+            'overlay-opacity': 0.2,
+            'overlay-color': '#00ffff'
+          }
         }
       ],
 
@@ -257,6 +282,26 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
 
     // Fit to viewport with padding
     cy.fit(undefined, 50);
+  });
+
+  // Update highlighting when highlightedIds changes
+  createEffect(() => {
+    if (!cy) return;
+    const ids = props.highlightedIds || [];
+    const cyInstance = cy;
+
+    // Remove all existing highlights
+    cyInstance.elements().removeClass('highlighted');
+
+    // Add highlight class to new elements
+    if (ids.length > 0) {
+      ids.forEach(id => {
+        const el = cyInstance.$id(id);
+        if (el.length > 0) {
+          el.addClass('highlighted');
+        }
+      });
+    }
   });
 
   // Update layout when changed

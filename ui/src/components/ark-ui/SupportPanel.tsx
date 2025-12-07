@@ -26,10 +26,12 @@ export interface PromptStat {
 
 export interface SupportPanelProps {
   graphElements: ElementDefinition[];
+  highlightedIds?: string[];
   promptStats?: PromptStat[];
   telemetryStore?: TelemetryStore;
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void;
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
+  onClearGraph?: () => void;
 }
 
 // ============================================================================
@@ -124,12 +126,43 @@ export const SupportPanel = (props: SupportPanelProps) => {
         {/* Tab Content */}
         <div flex="1" overflow="hidden">
           {/* Graph Tab */}
-          <Tabs.Content value="graph" h="full">
-            <GraphVisualization
-              elements={props.graphElements}
-              onNodeClick={props.onNodeClick}
-              onEdgeClick={props.onEdgeClick}
-            />
+          <Tabs.Content value="graph" h="full" flex="~ col">
+            {/* Graph Controls Bar */}
+            <Show when={props.graphElements.length > 0}>
+              <div
+                flex="~"
+                items="center"
+                justify="between"
+                p="2 3"
+                bg="dark-bg-tertiary"
+                border="b dark-border-primary"
+              >
+                <div text="xs dark-text-secondary">
+                  {props.graphElements.filter(e => !e.data?.source).length} nodes,{' '}
+                  {props.graphElements.filter(e => e.data?.source).length} edges
+                </div>
+                <button
+                  onClick={() => props.onClearGraph?.()}
+                  p="x-2 y-1"
+                  text="xs red-400"
+                  bg="red-600/10 hover:red-600/20"
+                  border="1 red-500/30"
+                  rounded="md"
+                  cursor="pointer"
+                  transition="all"
+                >
+                  Clear Graph
+                </button>
+              </div>
+            </Show>
+            <div flex="1" overflow="hidden">
+              <GraphVisualization
+                elements={props.graphElements}
+                highlightedIds={props.highlightedIds}
+                onNodeClick={props.onNodeClick}
+                onEdgeClick={props.onEdgeClick}
+              />
+            </div>
           </Tabs.Content>
 
           {/* Observability Tab */}

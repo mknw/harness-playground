@@ -158,9 +158,8 @@ const TimelineRow = (props: {
   return (
     <div
       flex="~"
-      min-h="70px"
-      border="b dark-border-secondary/50"
-      style={{ position: "relative" }}
+      min-h="60px"
+      border="b dark-border-secondary/30"
     >
       {/* Interface Lane (left) */}
       <div
@@ -168,25 +167,12 @@ const TimelineRow = (props: {
         flex="~"
         justify="center"
         items="center"
-        border="r dark-border-secondary/50"
-        style={{ position: "relative" }}
+        border="r dark-border-secondary/30"
       >
         <Show when={isInterface()}>
           <EventNode event={props.event} onExpand={props.onExpand} />
         </Show>
-        <Show when={!isInterface()}>
-          {/* Connector line when event is in the other lane */}
-          <div
-            style={{
-              position: "absolute",
-              left: "50%",
-              top: "0",
-              bottom: "0",
-              width: "1px",
-              background: "rgba(63, 63, 70, 0.3)"
-            }}
-          />
-        </Show>
+        {/* Empty cell when event is in other lane - clean, no connector */}
       </div>
 
       {/* Tools Lane (right) */}
@@ -195,24 +181,11 @@ const TimelineRow = (props: {
         flex="~"
         justify="center"
         items="center"
-        style={{ position: "relative" }}
       >
         <Show when={!isInterface()}>
           <EventNode event={props.event} onExpand={props.onExpand} />
         </Show>
-        <Show when={isInterface()}>
-          {/* Connector line when event is in the other lane */}
-          <div
-            style={{
-              position: "absolute",
-              left: "50%",
-              top: "0",
-              bottom: "0",
-              width: "1px",
-              background: "rgba(63, 63, 70, 0.3)"
-            }}
-          />
-        </Show>
+        {/* Empty cell when event is in other lane - clean, no connector */}
       </div>
     </div>
   );

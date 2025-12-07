@@ -7,7 +7,26 @@ import type { ElementDefinition } from 'cytoscape'
 
 export default function Home() {
   const [graphElements, setGraphElements] = createSignal<ElementDefinition[]>([])
+  const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
   const telemetryStore = createTelemetryStore()
+
+  // Accumulate graph elements across calls (deduplicate by ID)
+  const accumulateGraphElements = (newElements: ElementDefinition[]) => {
+    setGraphElements(prev => {
+      const existingIds = new Set(prev.map(e => e.data?.id))
+      const uniqueNew = newElements.filter(e => !existingIds.has(e.data?.id))
+      return [...prev, ...uniqueNew]
+    })
+    // Track newly added IDs for highlighting
+    const newIds = newElements.map(e => e.data?.id).filter((id): id is string => !!id)
+    setHighlightedIds(newIds)
+  }
+
+  // Clear all graph elements
+  const clearGraph = () => {
+    setGraphElements([])
+    setHighlightedIds([])
+  }
 
   return (
     <main h="[calc(100vh-4rem)]">
@@ -23,7 +42,7 @@ export default function Home() {
         {/* Chat Panel */}
         <Splitter.Panel id="chat">
           <ChatInterface
-            onGraphUpdate={setGraphElements}
+            onGraphUpdate={accumulateGraphElements}
             telemetryStore={telemetryStore}
           />
         </Splitter.Panel>
@@ -42,6 +61,8 @@ export default function Home() {
         <Splitter.Panel id="support">
           <SupportPanel
             graphElements={graphElements()}
+            highlightedIds={highlightedIds()}
+            onClearGraph={clearGraph}
             telemetryStore={telemetryStore}
           />
         </Splitter.Panel>
