@@ -129,8 +129,9 @@ export function isInterfaceLane(event: TimelineEvent): event is BAMLCallTelemetr
 
 /** Get display label for any timeline event */
 export function getEventLabel(event: TimelineEvent): string {
-  if (event.lane === 'interface') {
-    return getBAMLFunctionLabel((event as BAMLCallTelemetry).functionName);
+  // Check event type, not lane - Plan operations are BAML calls in tools lane
+  if (isBAMLCallTelemetry(event)) {
+    return getBAMLFunctionLabel(event.functionName);
   }
   return getToolLabel((event as ToolCallTelemetry).toolName);
 }
