@@ -163,31 +163,37 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
 
 ---
 
-## Phase 6: Observability 📝 PLANNED
+## Phase 6: Observability ✅ PARTIAL - IMPROVEMENTS PLANNED
 
 **Goal:** Monitor and analyze BAML function performance
 
-### Tasks
-- [ ] PromptStats component
-  - Display BAML function calls
-  - Token usage tracking (input/output)
-  - Latency metrics
-  - Success/error rates
-- [ ] BAML telemetry integration
-  - Capture function execution metadata
-  - Store in-memory or localStorage
-  - Export capabilities
-- [ ] Observability tab implementation
-  - Real-time metrics display
-  - Historical trend charts
-  - Function-level breakdown
-- [ ] Performance optimization insights
+### Completed
+- [x] Vertical timeline with Interface/Tools lanes
+- [x] BAML function telemetry with token usage tracking
+- [x] Tool execution telemetry with namespace color coding
+- [x] Real-time metrics display in Observability tab
+- [x] EventDetailOverlay for inspecting event details
+- [x] Aggregated metrics (total calls, success rate, avg latency, total tokens)
+
+### Planned Improvements
+- [ ] **EventDetailOverlay enhancements**
+  - Add input parameters display for BAML functions
+  - Show tool payloads in detail overlay
+  - Display reasoning from planning functions
+- [ ] **Parsed view improvements**
+  - Collapsible sections for large JSON responses
+  - Chip/tag UI for key-value pairs
+  - Remove "```json" delimiter from Parsed view (only show in Raw)
+- [ ] **Performance optimization insights**
   - Identify slow prompts
   - Token usage optimization suggestions
+  - Historical trend charts
 
-**Key Files (To Create):**
-- `ui/src/components/ark-ui/PromptStats.tsx`
-- `ui/src/lib/telemetry/baml-tracker.ts`
+**Key Files:**
+- `ui/src/lib/baml-agent/telemetry.ts` - Telemetry types and helpers
+- `ui/src/lib/baml-agent/telemetry-store.ts` - State management for telemetry
+- `ui/src/components/ark-ui/ObservabilityPanel.tsx` - Timeline display
+- `ui/src/components/ark-ui/EventDetailOverlay.tsx` - Event detail view
 
 ---
 
@@ -205,11 +211,24 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
   - Upload to knowledge graph
   - Export graph data
 
-### Documents Panel
-- [ ] File upload interface
-- [ ] Google Drive integration (optional)
-- [ ] Document context management
-- [ ] RAG (Retrieval-Augmented Generation) integration
+### Documents Panel - Document Ingestion Feature
+- [ ] **Documents tab UI**
+  - File upload interface with drag-and-drop
+  - Document list with status indicators
+  - Preview panel for document contents
+- [ ] **BAML media integration**
+  - Use BAML media resources for document handling
+  - Support PDF, image, and text file processing
+  - Extract text and metadata from documents
+- [ ] **Knowledge graph ingestion**
+  - BAML function for document analysis
+  - Entity extraction from document content
+  - Relationship inference between entities
+  - Automatic node/edge creation in Neo4j
+- [ ] **Optional integrations**
+  - Google Drive document import
+  - URL content fetching and parsing
+  - RAG (Retrieval-Augmented Generation) for document Q&A
 
 ### Tools Panel
 - [ ] Tool selector UI
@@ -337,6 +356,9 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
 ✅ Multi-turn tool loop architecture implemented
 ✅ SSE response parsing for MCP Gateway streaming transport
 ✅ Neo4j data versioning via Cypher dumps (scripts/)
+✅ Observability panel with vertical timeline and telemetry
+✅ code_mode with execute-evaluate loop (ExecuteMCPScript + EvaluateScriptOutput)
+✅ MCP Gateway code-mode integration for JavaScript tool composition
 
 **What Needs Debugging:**
 🔧 Some tools fail during execution - needs investigation
@@ -345,7 +367,8 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
 
 **What's Next:**
 📝 Debug tool execution issues (Phase 4 refinement)
-📝 Observability panel (Phase 6) - BAML telemetry, token tracking
+📝 Observability improvements - inputs in detail overlay, collapsible parsed fields
+📝 Document ingestion feature (Phase 7) - BAML media, entity extraction
 📝 Advanced features (Phase 7) - Actions, Documents, Tools panels
 
 **Known Issues:**
@@ -353,6 +376,7 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
 - MCP Gateway occasionally needs restart after config changes
 - Import from APOC export format needs manual processing
 - Tool execution has intermittent failures - debugging in progress
+- LLM-based BAML tests are non-deterministic - some test failures are expected
 
 ---
 
@@ -368,6 +392,6 @@ When working on this project:
 
 ---
 
-**Last Updated:** 2025-12-03
-**Version:** 0.2.0-alpha
-**Status:** Active Development - Phase 4 (Tool Execution) In Progress
+**Last Updated:** 2025-12-12
+**Version:** 0.3.0-alpha
+**Status:** Active Development - Phase 4 (Tool Execution) + Phase 6 (Observability) In Progress
