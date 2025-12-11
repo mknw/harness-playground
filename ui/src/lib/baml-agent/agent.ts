@@ -10,7 +10,7 @@
  * - Return handling: Early exit from tool loops
  */
 
-import { callTool as mcpCallTool, type ToolCallResult } from './mcp-client';
+import { callTool as mcpCallTool } from './mcp-client';
 import { getNeo4jDriver } from '../neo4j/client';
 import { getSchemaForAgent, executeWriteCypher } from '../neo4j/queries';
 import type { ToolNamespace, ToolExecutionPlan } from './state';

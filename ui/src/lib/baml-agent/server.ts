@@ -22,6 +22,7 @@ import {
   type ToolExecutionPlan,
   type ToolEvent,
   type StreamEvent,
+  type ScriptExecutionEvent,
   MAX_TOOL_TURNS,
   estimateTokens,
   prepareResultsForContext,
@@ -30,7 +31,7 @@ import {
   fromBamlRouting,
   fromNeo4jPlan,
   fromWebSearchPlan,
-  fromCodeModePlan
+  fromMCPScriptPlan
 } from './state';
 import { executeTool } from './agent';
 import { getSchemaForAgent } from '../neo4j/queries';
@@ -388,6 +389,9 @@ async function executeToolLoop(
   let graphUpdate: ElementDefinition[] | undefined;
   let n_turn = 0;
 
+  // For code_mode, we track script execution events for evaluation
+  const scriptExecutionEvents: ScriptExecutionEvent[] = [];
+
   while (n_turn < MAX_TOOL_TURNS) {
     n_turn++;
 
@@ -456,13 +460,68 @@ async function executeToolLoop(
 
     // Extract graph data if neo4j query
     if (plan.toolName.includes('neo4j') && toolEvent.status_code === 200) {
-      const parsed = parseNeo4jResults({ records: toolEvent.data as any[] || [] });
+      const parsed = parseNeo4jResults({ records: toolEvent.data as unknown[] || [] });
       const newGraphData = toSerializable(transformNeo4jToCytoscape(
         parsed.nodes || [],
         parsed.relationships || []
       )) as ElementDefinition[];
 
       graphUpdate = [...(graphUpdate || []), ...newGraphData];
+    }
+
+    // For code_mode: evaluate the script output
+    if (routing.tool_name === 'code_mode') {
+      // Extract script from plan payload
+      try {
+        const payload = JSON.parse(plan.payload);
+        scriptExecutionEvents.push({
+          script: payload.script || '',
+          output: toolEvent.status_code === 200 ? JSON.stringify(toolEvent.data) : '',
+          error: toolEvent.status_code !== 200 ? toolEvent.status_description : null
+        });
+      } catch {
+        // Fallback if payload parsing fails
+        scriptExecutionEvents.push({
+          script: plan.payload,
+          output: toolEvent.status_code === 200 ? JSON.stringify(toolEvent.data) : '',
+          error: toolEvent.status_code !== 200 ? toolEvent.status_description : null
+        });
+      }
+
+      // Call EvaluateScriptOutput to check if we should continue
+      const { b } = await import('../../../baml_client');
+      const evalStartTime = Date.now();
+      const evaluation = await b.EvaluateScriptOutput(
+        routing.intent,
+        scriptExecutionEvents,
+        { collector }
+      );
+
+      // Emit telemetry for evaluation
+      telemetryEvents.push({
+        type: 'baml_telemetry',
+        data: createBAMLTelemetry('EvaluateScriptOutput', collector, evalStartTime),
+        timestamp: new Date().toISOString()
+      });
+
+      // If sufficient, exit the loop - the evaluation explanation will be used in response
+      if (evaluation.is_sufficient) {
+        // Store evaluation result in the last tool event for CreateToolResponse to use
+        toolEvents[toolEvents.length - 1] = {
+          ...toolEvents[toolEvents.length - 1],
+          data: {
+            result: toolEvent.data,
+            evaluation: {
+              is_sufficient: evaluation.is_sufficient,
+              explanation: evaluation.explanation
+            }
+          }
+        };
+        break;
+      }
+
+      // Not sufficient - the loop will continue with guidance from evaluation
+      // The previousResults will contain the evaluation feedback for the next iteration
     }
   }
 
@@ -474,7 +533,7 @@ function getPlannerName(namespace: ToolNamespace | null): BAMLFunctionName | nul
   switch (namespace) {
     case 'neo4j': return 'PlanNeo4jOperation';
     case 'web_search': return 'PlanWebSearch';
-    case 'code_mode': return 'PlanCodeModeOperation';
+    case 'code_mode': return 'ExecuteMCPScript';
     default: return null;
   }
 }
@@ -530,18 +589,44 @@ async function planToolExecution(
         'write_neo4j_cypher',
         'get_neo4j_schema',
         'search',
-        'fetch'
+        'fetch_content'
       ];
 
-      const bamlPlan = await b.PlanCodeModeOperation(
+      // Parse previous results to extract script execution events
+      const previousAttempts: ScriptExecutionEvent[] = [];
+      try {
+        const parsed = JSON.parse(previousResults);
+        if (Array.isArray(parsed)) {
+          for (const event of parsed) {
+            if (event.operation) {
+              // Extract script from operation payload
+              try {
+                const payload = JSON.parse(event.operation);
+                if (payload.script) {
+                  previousAttempts.push({
+                    script: payload.script,
+                    output: event.status_code === 200 ? JSON.stringify(event.data) : '',
+                    error: event.status_code !== 200 ? event.status_description : null
+                  });
+                }
+              } catch {
+                // Not a code_mode event, skip
+              }
+            }
+          }
+        }
+      } catch {
+        // Empty or invalid previous results
+      }
+
+      const bamlPlan = await b.ExecuteMCPScript(
         message,
         routing.intent,
         availableTools,
-        previousResults,
-        n_turn,
+        previousAttempts,
         { collector }
       );
-      return fromCodeModePlan(bamlPlan);
+      return fromMCPScriptPlan(bamlPlan);
     }
 
     default:
@@ -726,7 +811,7 @@ async function executeApprovedWriteWithPlan(
     // Get graph update if neo4j
     let graphUpdate: ElementDefinition[] | undefined;
     if (plan.toolName.includes('neo4j')) {
-      const parsed = parseNeo4jResults({ records: toolEvent.data as any[] || [] });
+      const parsed = parseNeo4jResults({ records: toolEvent.data as unknown[] || [] });
       graphUpdate = toSerializable(transformNeo4jToCytoscape(
         parsed.nodes || [],
         parsed.relationships || []

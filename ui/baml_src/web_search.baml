@@ -47,7 +47,7 @@ function PlanWebSearch(
     1. Determine the optimal search query to answer the user's intent
     2. Consider refining based on previous results
     3. If Search results lack detail, use Fetch to get content from specific URLs
-    4. End the loop when you have sufficient information
+    4. End the loop by selecting `Return` as tool_name, when you have sufficient information
 
     TOOL SELECTION:
     - Search: Web search with a query string

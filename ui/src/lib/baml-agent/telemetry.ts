@@ -14,7 +14,8 @@ export type BAMLFunctionName =
   | 'RouteUserMessage'
   | 'PlanNeo4jOperation'
   | 'PlanWebSearch'
-  | 'PlanCodeModeOperation'
+  | 'ExecuteMCPScript'
+  | 'EvaluateScriptOutput'
   | 'CreateToolResponse';
 
 /** Telemetry data captured for each BAML function call */
@@ -208,7 +209,8 @@ export function getBAMLFunctionLabel(name: BAMLFunctionName): string {
     RouteUserMessage: 'Route',
     PlanNeo4jOperation: 'Plan Neo4j',
     PlanWebSearch: 'Plan Search',
-    PlanCodeModeOperation: 'Plan Code',
+    ExecuteMCPScript: 'Execute Script',
+    EvaluateScriptOutput: 'Evaluate Output',
     CreateToolResponse: 'Response'
   };
   return labels[name] || name;

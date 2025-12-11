@@ -10,7 +10,7 @@
 
 import { For, Show, createMemo } from 'solid-js';
 import type { TelemetryStore } from '~/lib/baml-agent/telemetry-store';
-import type { TimelineEvent, BAMLCallTelemetry, ToolCallTelemetry } from '~/lib/baml-agent/telemetry';
+import type { TimelineEvent } from '~/lib/baml-agent/telemetry';
 import {
   getEventLabel,
   getEventDuration,

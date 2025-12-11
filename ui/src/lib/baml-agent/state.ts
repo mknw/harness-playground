@@ -15,12 +15,13 @@ import type {
   RoutingInterfaceEvent as BamlRoutingEvent,
   Neo4jToolExecutionPlan,
   WebSearchToolExecutionPlan,
-  CodeModeToolExecutionPlan,
+  MCPScriptPlan,
+  ScriptExecutionEvent,
+  ScriptEvaluationResult,
   ConversationMessage,
   ToolNamespace as BamlToolNamespace,
   Neo4jToolName,
-  WebSearchToolName,
-  CodeModeToolName
+  WebSearchToolName
 } from '../../../baml_client/types';
 
 // Import enums as values (not just types)
@@ -31,10 +32,11 @@ export type {
   ConversationMessage,
   Neo4jToolExecutionPlan,
   WebSearchToolExecutionPlan,
-  CodeModeToolExecutionPlan,
+  MCPScriptPlan,
+  ScriptExecutionEvent,
+  ScriptEvaluationResult,
   Neo4jToolName,
-  WebSearchToolName,
-  CodeModeToolName
+  WebSearchToolName
 };
 
 // Re-export enum
@@ -111,7 +113,7 @@ export function fromBamlRouting(event: BamlRoutingEvent): RoutingInterfaceEvent 
 export type BamlExecutionPlan =
   | Neo4jToolExecutionPlan
   | WebSearchToolExecutionPlan
-  | CodeModeToolExecutionPlan;
+  | MCPScriptPlan;
 
 /** Normalized tool execution plan for internal use */
 export interface ToolExecutionPlan {
@@ -161,22 +163,20 @@ export function fromWebSearchPlan(plan: WebSearchToolExecutionPlan): ToolExecuti
   };
 }
 
-/** Convert BAML CodeMode plan to normalized plan */
-export function fromCodeModePlan(plan: CodeModeToolExecutionPlan): ToolExecutionPlan {
-  const isReturn = plan.tool_name === 'Return';
-  // Map enum to actual tool name
-  const toolNameMap: Record<string, string> = {
-    'Execute': 'run_tools_with_javascript',
-    'Return': 'Return'
-  };
-
+/** Convert BAML MCPScriptPlan to normalized plan */
+export function fromMCPScriptPlan(plan: MCPScriptPlan): ToolExecutionPlan {
   return {
     reasoning: plan.reasoning,
-    toolName: toolNameMap[plan.tool_name] || plan.tool_name,
-    payload: plan.payload ? JSON.stringify(plan.payload) : '{}',
+    toolName: 'run_tools_with_javascript',
+    payload: JSON.stringify({ script: plan.script }),
     description: plan.description,
-    isReturn
+    isReturn: false  // MCPScriptPlan always executes - evaluation happens separately
   };
+}
+
+/** @deprecated Use fromMCPScriptPlan instead - kept for backward compatibility */
+export function fromCodeModePlan(plan: MCPScriptPlan): ToolExecutionPlan {
+  return fromMCPScriptPlan(plan);
 }
 
 /** Step 8 output: Result from tool execution */
