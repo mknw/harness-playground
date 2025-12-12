@@ -163,11 +163,17 @@ export function fromWebSearchPlan(plan: WebSearchToolExecutionPlan): ToolExecuti
   };
 }
 
+/**
+ * Code-mode tool name in the MCP Gateway
+ * This must match the tool created via mcp__kg-agent-mcp-gateway__code-mode
+ */
+export const CODE_MODE_TOOL_NAME = 'code-mode-kg-agent-executor';
+
 /** Convert BAML MCPScriptPlan to normalized plan */
 export function fromMCPScriptPlan(plan: MCPScriptPlan): ToolExecutionPlan {
   return {
     reasoning: plan.reasoning,
-    toolName: 'run_tools_with_javascript',
+    toolName: CODE_MODE_TOOL_NAME,
     payload: JSON.stringify({ script: plan.script }),
     description: plan.description,
     isReturn: false  // MCPScriptPlan always executes - evaluation happens separately

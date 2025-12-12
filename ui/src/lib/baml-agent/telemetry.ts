@@ -224,7 +224,7 @@ export function getToolLabel(toolName: string): string {
     get_neo4j_schema: 'Get Schema',
     search: 'Web Search',
     fetch: 'Fetch URL',
-    run_tools_with_javascript: 'Run JS'
+    'code-mode-kg-agent-executor': 'Run JS'
   };
   return labels[toolName] || toolName;
 }
