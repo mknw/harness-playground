@@ -254,10 +254,46 @@ export const EventDetailOverlay = (props: EventDetailOverlayProps) => {
               </div>
             </Show>
 
+            {/* Input Parameters (for BAML calls) */}
+            <Show when={isBAML() && bamlEvent().input}>
+              <div>
+                <div text="xs dark-text-tertiary" m="b-1" font="medium">Input Parameters</div>
+                <div
+                  bg="dark-bg-tertiary"
+                  p="3"
+                  rounded="md"
+                  overflow="auto"
+                  max-h="200px"
+                >
+                  {Object.entries(bamlEvent().input || {}).map(([key, value]) => (
+                    <div m="b-2" class="last:mb-0">
+                      <div
+                        text="xs neon-purple"
+                        font="mono medium"
+                        m="b-1"
+                      >
+                        {key}
+                      </div>
+                      <pre
+                        text="xs dark-text-secondary"
+                        font="mono"
+                        style={{ "white-space": "pre-wrap", "word-break": "break-word" }}
+                        p="2"
+                        bg="dark-bg-primary"
+                        rounded="sm"
+                      >
+                        {typeof value === 'string' ? value : formatJson(value)}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Show>
+
             {/* Payload (for tools) */}
             <Show when={!isBAML() && toolEvent().payload}>
               <div>
-                <div text="xs dark-text-tertiary" m="b-1" font="medium">Payload</div>
+                <div text="xs dark-text-tertiary" m="b-1" font="medium">Tool Payload</div>
                 <pre
                   bg="dark-bg-tertiary"
                   p="3"

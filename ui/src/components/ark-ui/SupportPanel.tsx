@@ -9,6 +9,7 @@ import { Tabs } from '@ark-ui/solid/tabs';
 import { Show, createSignal } from 'solid-js';
 import { GraphVisualization } from './GraphVisualization';
 import { ObservabilityPanel } from './ObservabilityPanel';
+import { ToolsPanel } from './ToolsPanel';
 import type { ElementDefinition } from 'cytoscape';
 import type { TelemetryStore } from '~/lib/baml-agent/telemetry-store';
 
@@ -114,10 +115,15 @@ export const SupportPanel = (props: SupportPanelProps) => {
           <Tabs.Trigger
             value="tools"
             p="x-4 y-2"
-            text="sm dark-text-tertiary"
-            cursor="not-allowed"
-            opacity="50"
-            disabled
+            text="sm dark-text-primary"
+            cursor="pointer"
+            border="b-2 transparent"
+            transition="all"
+            data-state={selectedTab() === 'tools' ? 'active' : 'inactive'}
+            style={{
+              "border-bottom-color": selectedTab() === 'tools' ? '#ff6600' : 'transparent',
+              "color": selectedTab() === 'tools' ? '#ff6600' : '#a1a1aa'
+            }}
           >
             Tools
           </Tabs.Trigger>
@@ -221,14 +227,9 @@ export const SupportPanel = (props: SupportPanelProps) => {
             />
           </Tabs.Content>
 
-          {/* Tools Tab (Future) */}
+          {/* Tools Tab */}
           <Tabs.Content value="tools" h="full">
-            <PlaceholderPanel
-              icon="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-              title="Tool Selector"
-              description="UTCP tool discovery, enable/disable tools, and code-mode composition"
-              phase="Phase 8"
-            />
+            <ToolsPanel />
           </Tabs.Content>
         </div>
       </Tabs.Root>

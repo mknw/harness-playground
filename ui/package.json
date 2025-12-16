@@ -6,7 +6,9 @@
     "baml-generate": "baml-cli generate",
     "dev": "vinxi dev --port 3444",
     "build": "pnpm baml-generate & vinxi build",
-    "start": "vinxi start"
+    "start": "vinxi start",
+    "test": "vitest",
+    "test:run": "vitest run"
   },
   "dependencies": {
     "@ark-ui/solid": "^5.26.2",
@@ -37,15 +39,19 @@
     "@boundaryml/baml": "^0.214.0",
     "@eslint/js": "^9.38.0",
     "@solid-devtools/debugger": "^0.28.1",
+    "@solidjs/testing-library": "^0.8.10",
     "@types/node": "^24.9.2",
     "@unocss/eslint-config": "^66.5.4",
     "@unocss/preset-attributify": "^66.5.4",
     "@unocss/preset-wind4": "^66.5.4",
     "eslint": "^9.38.0",
     "eslint-plugin-solid": "^0.14.5",
+    "jsdom": "^27.3.0",
     "solid-devtools": "^0.34.4",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.2",
-    "vite-plugin-wasm": "^3.5.0"
+    "vite-plugin-solid": "^2.11.10",
+    "vite-plugin-wasm": "^3.5.0",
+    "vitest": "^4.0.15"
   }
 }

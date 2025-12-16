@@ -46,8 +46,9 @@ services:
       - --verbose
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./mcp-config.yaml:/mcp/config.yaml:ro
-      - ./custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+      - ./configs/mcp-config.yaml:/mcp/config.yaml:ro
+      - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+      - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
       - ./docker-config.json:/root/.docker/config.json:ro
     ports:
       - "8811:8811"

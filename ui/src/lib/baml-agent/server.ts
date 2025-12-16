@@ -23,6 +23,9 @@ import {
   type ToolEvent,
   type StreamEvent,
   type ScriptExecutionEvent,
+  type CodedToolReference,
+  type ToolCompositionPlan,
+  type EvaluationWithPersistence,
   MAX_TOOL_TURNS,
   estimateTokens,
   prepareResultsForContext,
@@ -31,8 +34,11 @@ import {
   fromBamlRouting,
   fromNeo4jPlan,
   fromWebSearchPlan,
-  fromMCPScriptPlan
+  fromMCPScriptPlan,
+  fromToolCompositionPlan
 } from './state';
+import { getToolConfig } from './tool-config';
+import { getCodedToolsForPlanner, saveCodedTool, getCodedTool } from './tool-repository';
 import { executeTool } from './agent';
 import { getSchemaForAgent } from '../neo4j/queries';
 import { transformNeo4jToCytoscape, parseNeo4jResults } from '../graph/transform';
@@ -57,7 +63,8 @@ function createBAMLTelemetry(
   collector: Collector,
   startTime: number,
   status: 'success' | 'error' = 'success',
-  error?: string
+  error?: string,
+  input?: Record<string, unknown>
 ): BAMLCallTelemetry {
   const lastCall = collector.last;
 
@@ -72,7 +79,8 @@ function createBAMLTelemetry(
     } : undefined,
     latency_ms: Date.now() - startTime,
     error,
-    output: lastCall?.rawLlmResponse
+    output: lastCall?.rawLlmResponse,
+    input
   };
 }
 
@@ -256,7 +264,10 @@ export async function processAgentMessageStreaming(
     // Emit BAML telemetry for RouteUserMessage
     events.push({
       type: 'baml_telemetry',
-      data: createBAMLTelemetry('RouteUserMessage', collector, routeStartTime),
+      data: createBAMLTelemetry('RouteUserMessage', collector, routeStartTime, 'success', undefined, {
+        message,
+        history_length: thread.getRecentHistory(10).length
+      }),
       timestamp: new Date().toISOString()
     });
 
@@ -325,7 +336,11 @@ export async function processAgentMessageStreaming(
     // Emit BAML telemetry for CreateToolResponse
     events.push({
       type: 'baml_telemetry',
-      data: createBAMLTelemetry('CreateToolResponse', collector, responseStartTime),
+      data: createBAMLTelemetry('CreateToolResponse', collector, responseStartTime, 'success', undefined, {
+        tool_events_count: toolEvents.length,
+        user_message: message,
+        intent: routing.intent
+      }),
       timestamp: new Date().toISOString()
     });
 
@@ -376,8 +391,47 @@ interface ToolLoopResult {
 
 /**
  * Execute tools in a loop until done or max turns reached
+ * Branches based on execution mode (static vs code)
  */
 async function executeToolLoop(
+  routing: RoutingInterfaceEvent,
+  message: string,
+  thread: Thread,
+  approvalState: ApprovalState,
+  collector: Collector
+): Promise<ToolLoopResult> {
+  // Get current tool configuration
+  const toolConfig = await getToolConfig();
+
+  // When execution mode is 'code', ALWAYS use the code mode planner flow
+  // This allows the planner to orchestrate any tools (neo4j, web_search, etc.)
+  // regardless of what namespace the initial routing suggested
+  if (toolConfig.executionMode === 'code') {
+    return executeCodeModeWithPlanner(
+      routing,
+      message,
+      thread,
+      approvalState,
+      toolConfig.selectedTools,
+      collector
+    );
+  }
+
+  // Static mode: use namespace-specific planners (PlanNeo4jOperation, PlanWebSearch, ExecuteMCPScript)
+  return executeStaticModeLoop(
+    routing,
+    message,
+    thread,
+    approvalState,
+    collector
+  );
+}
+
+/**
+ * Static mode: Use namespace-specific planners (PlanNeo4jOperation, PlanWebSearch, ExecuteMCPScript)
+ * This is the original executeToolLoop implementation
+ */
+async function executeStaticModeLoop(
   routing: RoutingInterfaceEvent,
   message: string,
   thread: Thread,
@@ -413,7 +467,12 @@ async function executeToolLoop(
     if (plannerName) {
       telemetryEvents.push({
         type: 'baml_telemetry',
-        data: createBAMLTelemetry(plannerName, collector, planStartTime),
+        data: createBAMLTelemetry(plannerName, collector, planStartTime, 'success', undefined, {
+          intent: routing.intent,
+          tool_name: routing.tool_name,
+          turn: n_turn,
+          previous_results_count: previousResults.length
+        }),
         timestamp: new Date().toISOString()
       });
     }
@@ -500,7 +559,11 @@ async function executeToolLoop(
       // Emit telemetry for evaluation
       telemetryEvents.push({
         type: 'baml_telemetry',
-        data: createBAMLTelemetry('EvaluateScriptOutput', collector, evalStartTime),
+        data: createBAMLTelemetry('EvaluateScriptOutput', collector, evalStartTime, 'success', undefined, {
+          intent: routing.intent,
+          attempts_count: scriptExecutionEvents.length,
+          last_output_length: scriptExecutionEvents[scriptExecutionEvents.length - 1]?.output?.length || 0
+        }),
         timestamp: new Date().toISOString()
       });
 
@@ -523,6 +586,208 @@ async function executeToolLoop(
       // Not sufficient - the loop will continue with guidance from evaluation
       // The previousResults will contain the evaluation feedback for the next iteration
     }
+  }
+
+  return { toolEvents, graphUpdate, telemetryEvents };
+}
+
+/**
+ * Code mode with planner: Uses PlanToolComposition → Execute → EvaluateAndPersist
+ * This is the new flow that can reuse coded tools from the repository
+ */
+async function executeCodeModeWithPlanner(
+  routing: RoutingInterfaceEvent,
+  message: string,
+  thread: Thread,
+  approvalState: ApprovalState,
+  selectedTools: string[],
+  collector: Collector
+): Promise<ToolLoopResult> {
+  const { b } = await import('../../../baml_client');
+
+  const toolEvents: ToolEvent[] = [];
+  const telemetryEvents: StreamEvent[] = [];
+  let graphUpdate: ElementDefinition[] | undefined;
+  const scriptExecutionEvents: ScriptExecutionEvent[] = [];
+
+  // Get coded tools from repository for planner context
+  const codedTools = await getCodedToolsForPlanner();
+
+  for (let n_turn = 1; n_turn <= MAX_TOOL_TURNS; n_turn++) {
+    // ========================================
+    // STEP 1: Plan with PlanToolComposition
+    // ========================================
+    const planStartTime = Date.now();
+    const plan = await b.PlanToolComposition(
+      message,
+      routing.intent,
+      selectedTools,
+      codedTools,
+      scriptExecutionEvents,
+      { collector }
+    );
+
+    // Emit telemetry for PlanToolComposition
+    telemetryEvents.push({
+      type: 'baml_telemetry',
+      data: createBAMLTelemetry('ExecuteMCPScript', collector, planStartTime, 'success', undefined, {
+        intent: routing.intent,
+        turn: n_turn,
+        use_existing_tool: plan.use_existing_tool,
+        existing_tool_name: plan.existing_tool_name,
+        coded_tools_count: codedTools.length,
+        should_save: plan.should_save
+      }),
+      timestamp: new Date().toISOString()
+    });
+
+    // ========================================
+    // STEP 2: Get or create script to execute
+    // ========================================
+    let script: string;
+    let shouldSave = plan.should_save;
+    let toolNameToSave = plan.tool_name_to_save;
+    let toolDescription = plan.tool_description;
+
+    if (plan.use_existing_tool && plan.existing_tool_name) {
+      // Reuse existing coded tool from repository
+      const codedTool = await getCodedTool(plan.existing_tool_name);
+      if (!codedTool) {
+        // Tool not found - fall back to new script
+        script = plan.new_script || '';
+      } else {
+        script = codedTool.script;
+        // Don't save if reusing existing tool
+        shouldSave = false;
+      }
+    } else {
+      // Use new script from planner
+      script = plan.new_script || '';
+    }
+
+    if (!script) {
+      // No script to execute - error condition
+      toolEvents.push({
+        status_code: 400,
+        status_description: 'No script provided by planner',
+        operation: JSON.stringify({ error: 'empty_script' }),
+        data: null,
+        n_turn
+      });
+      break;
+    }
+
+    // Convert plan to ToolExecutionPlan for execution
+    const executionPlan = fromToolCompositionPlan(plan, script);
+
+    // Check if approval needed for writes
+    if (requiresApproval(executionPlan, approvalState)) {
+      thread.addApprovalRequest(executionPlan.payload, executionPlan.reasoning);
+
+      return {
+        toolEvents,
+        graphUpdate,
+        needsApproval: true,
+        pendingPlan: executionPlan,
+        telemetryEvents
+      };
+    }
+
+    // ========================================
+    // STEP 3: Execute the script
+    // ========================================
+    const toolStartTime = Date.now();
+    const toolEvent = await executeToolPlan(executionPlan, 'code_mode', n_turn);
+    toolEvents.push(toolEvent);
+
+    // Emit tool telemetry
+    telemetryEvents.push({
+      type: 'tool_telemetry',
+      data: createToolTelemetry(
+        executionPlan.toolName,
+        toolStartTime,
+        toolEvent.status_code === 200 ? 'success' : 'error',
+        toolEvent.data,
+        toolEvent.status_code !== 200 ? toolEvent.status_description : undefined
+      ),
+      timestamp: new Date().toISOString()
+    });
+
+    // Record in thread
+    thread.addToolCall(executionPlan.toolName, { script }, routing.intent);
+    thread.addToolResponse(executionPlan.toolName, toolEvent);
+
+    // Track script execution for next iteration
+    scriptExecutionEvents.push({
+      script,
+      output: toolEvent.status_code === 200 ? JSON.stringify(toolEvent.data) : '',
+      error: toolEvent.status_code !== 200 ? toolEvent.status_description : null
+    });
+
+    // ========================================
+    // STEP 4: Evaluate and potentially persist
+    // ========================================
+    const evalStartTime = Date.now();
+    const evaluation = await b.EvaluateAndPersist(
+      routing.intent,
+      scriptExecutionEvents[scriptExecutionEvents.length - 1],
+      shouldSave,
+      toolNameToSave || null,
+      toolDescription || null,
+      { collector }
+    );
+
+    // Emit telemetry for EvaluateAndPersist
+    telemetryEvents.push({
+      type: 'baml_telemetry',
+      data: createBAMLTelemetry('EvaluateScriptOutput', collector, evalStartTime, 'success', undefined, {
+        intent: routing.intent,
+        should_save: shouldSave,
+        tool_name_to_save: toolNameToSave,
+        script_length: script.length,
+        turn: n_turn
+      }),
+      timestamp: new Date().toISOString()
+    });
+
+    // ========================================
+    // STEP 5: Save to repository if indicated
+    // ========================================
+    if (evaluation.tool_saved && toolNameToSave && toolDescription) {
+      try {
+        await saveCodedTool({
+          name: toolNameToSave,
+          description: toolDescription,
+          script
+        });
+        console.log(`[CodeMode] Saved tool to repository: ${toolNameToSave}`);
+      } catch (saveError) {
+        console.error('[CodeMode] Failed to save tool:', saveError);
+        // Don't fail the overall execution if save fails
+      }
+    }
+
+    // ========================================
+    // STEP 6: Check if sufficient
+    // ========================================
+    if (evaluation.is_sufficient) {
+      // Store evaluation result in the last tool event for CreateToolResponse
+      toolEvents[toolEvents.length - 1] = {
+        ...toolEvents[toolEvents.length - 1],
+        data: {
+          result: toolEvent.data,
+          evaluation: {
+            is_sufficient: evaluation.is_sufficient,
+            explanation: evaluation.explanation,
+            tool_saved: evaluation.tool_saved,
+            saved_tool_name: evaluation.saved_tool_name
+          }
+        }
+      };
+      break;
+    }
+
+    // Not sufficient - continue loop with feedback from evaluation
   }
 
   return { toolEvents, graphUpdate, telemetryEvents };

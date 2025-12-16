@@ -39,6 +39,8 @@ export interface BAMLCallTelemetry {
   error?: string;
   /** Raw output from the BAML function (for expansion view) */
   output?: unknown;
+  /** Input parameters passed to the BAML function */
+  input?: Record<string, unknown>;
 }
 
 // ============================================================================

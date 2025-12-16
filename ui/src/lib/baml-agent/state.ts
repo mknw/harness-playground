@@ -21,7 +21,11 @@ import type {
   ConversationMessage,
   ToolNamespace as BamlToolNamespace,
   Neo4jToolName,
-  WebSearchToolName
+  WebSearchToolName,
+  // New types for code_mode planner flow
+  CodedToolReference,
+  ToolCompositionPlan,
+  EvaluationWithPersistence
 } from '../../../baml_client/types';
 
 // Import enums as values (not just types)
@@ -36,7 +40,11 @@ export type {
   ScriptExecutionEvent,
   ScriptEvaluationResult,
   Neo4jToolName,
-  WebSearchToolName
+  WebSearchToolName,
+  // New types for code_mode planner flow
+  CodedToolReference,
+  ToolCompositionPlan,
+  EvaluationWithPersistence
 };
 
 // Re-export enum
@@ -183,6 +191,17 @@ export function fromMCPScriptPlan(plan: MCPScriptPlan): ToolExecutionPlan {
 /** @deprecated Use fromMCPScriptPlan instead - kept for backward compatibility */
 export function fromCodeModePlan(plan: MCPScriptPlan): ToolExecutionPlan {
   return fromMCPScriptPlan(plan);
+}
+
+/** Convert BAML ToolCompositionPlan to normalized plan for execution */
+export function fromToolCompositionPlan(plan: ToolCompositionPlan, script: string): ToolExecutionPlan {
+  return {
+    reasoning: plan.reasoning,
+    toolName: CODE_MODE_TOOL_NAME,
+    payload: JSON.stringify({ script }),
+    description: plan.status_message,
+    isReturn: false  // ToolCompositionPlan always executes - evaluation happens separately
+  };
 }
 
 /** Step 8 output: Result from tool execution */

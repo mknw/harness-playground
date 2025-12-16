@@ -138,6 +138,50 @@ BAML Agent → Tool Loop → Namespace Router
 
 ---
 
+## Phase 4.1: Code Mode Flow Optimization 📝 PLANNED
+
+**Goal:** Optimize the code mode execution flow for reliability and observability
+
+### Task 1: Evaluator Loop Prevention
+- [ ] Add MAX_EVALUATION_RETRIES limit to prevent infinite loops
+- [ ] Implement exponential backoff for retry attempts
+- [ ] Add "give up gracefully" logic after N failed attempts
+- [ ] Track evaluation history to detect repeated failures
+
+### Task 2: Intermediate Logging for Evaluator
+- [ ] Log script execution output at each turn
+- [ ] Capture and store intermediate results for evaluation context
+- [ ] Add structured logging for debugging failed scripts
+- [ ] Emit telemetry events for each evaluation decision
+
+### Task 3: Context Management for Previous Attempts
+- [ ] Provide rich context about previous errors to evaluator
+- [ ] Include script diff between attempts
+- [ ] Summarize what was tried and what failed
+- [ ] Limit context size to prevent token overflow
+
+### Task 4: Tools Panel Global Catalog
+- [ ] Fix global catalog showing only 11 tools (should show 50+)
+- [ ] Implement tool "Configure" button with overlay
+  - MCP server description
+  - Tool descriptions for each server
+  - Credentials/parameters input (session-scoped)
+- [ ] Store configuration in session state (not persisted)
+
+### Task 5: Context Filtering for BAML Functions
+- [ ] Audit each BAML function's context needs
+- [ ] Implement event filtering in orchestrator.ts
+- [ ] Create parametrized context builders per function type
+- [ ] Ensure no function receives more context than needed
+
+### Task 6: Type Consolidation
+- [ ] Analyze `ProcessMessageOutput` (orchestrator.ts) vs `ProcessMessageResult` (server.ts)
+- [ ] Determine if consolidation is appropriate or if layering is intentional
+- [ ] Remove actual redundancies where found
+- [ ] Document architectural decisions for type separation
+
+---
+
 ## Phase 5: Neo4j Direct Integration ✅ COMPLETE
 
 **Goal:** Use neo4j-driver for direct Neo4j operations, reserve UTCP for agentic workflows
@@ -230,19 +274,26 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
   - URL content fetching and parsing
   - RAG (Retrieval-Augmented Generation) for document Q&A
 
-### Tools Panel
-- [ ] Tool selector UI
+### Tools Panel ✅ COMPLETE
+- [x] Tool selector UI
   - Display discovered tools
   - Enable/disable toggles
-  - Authentication status indicators
-- [ ] Code-mode composition
-  - Create custom tool chains
-  - Save/load tool compositions
+  - Execution mode switch (Static/Code)
+  - Catalog mode switch (Minimal/Global)
+- [x] Code-mode composition
+  - PlanToolComposition BAML function for tool planning
+  - EvaluateAndPersist BAML function for evaluation and storage
+  - Coded tools repository in Neo4j
+  - Save/load tool compositions from repository
 
-**Key Files (To Create):**
-- `ui/src/components/ark-ui/ActionsPanel.tsx`
-- `ui/src/components/ark-ui/DocumentsPanel.tsx`
-- `ui/src/components/ark-ui/ToolsPanel.tsx`
+**Key Files:**
+- `ui/src/components/ark-ui/ToolsPanel.tsx` ✅
+- `ui/src/lib/baml-agent/tool-config.ts` ✅
+- `ui/src/lib/baml-agent/tool-repository.ts` ✅
+- `ui/baml_src/planner.baml` ✅
+- `configs/mcp-config.yaml` - MCP Gateway configuration
+- `configs/custom-catalog.yaml` - Minimal catalog
+- `configs/catalog.yaml` - Full Docker MCP catalog
 
 ---
 
@@ -359,17 +410,29 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
 ✅ Observability panel with vertical timeline and telemetry
 ✅ code_mode with execute-evaluate loop (ExecuteMCPScript + EvaluateScriptOutput)
 ✅ MCP Gateway code-mode integration for JavaScript tool composition
+✅ Tools tab with execution mode toggle (Static/Code)
+✅ Catalog mode switching (Minimal/Global)
+✅ Tool selection checkboxes with server-side state
+✅ PlanToolComposition BAML function for code mode planning
+✅ EvaluateAndPersist BAML function for evaluation + repository storage
+✅ Coded tools repository in Neo4j (CodedTool nodes)
+✅ Config files consolidated in configs/ directory
 
 **What Needs Debugging:**
 🔧 Some tools fail during execution - needs investigation
 🔧 Tool routing classification may misroute certain requests
 🔧 End-to-end tool execution flow needs testing
+🔧 MCP Gateway hot-swap implementation (placeholder)
 
 **What's Next:**
 📝 Debug tool execution issues (Phase 4 refinement)
+📝 Implement actual MCP Gateway hot-swap for catalog switching
 📝 Observability improvements - inputs in detail overlay, collapsible parsed fields
 📝 Document ingestion feature (Phase 7) - BAML media, entity extraction
-📝 Advanced features (Phase 7) - Actions, Documents, Tools panels
+📝 Advanced features (Phase 7) - Actions, Documents panels
+📝 Code mode flow optimization (see Phase 4.1 below)
+📝 Tools Panel enhancements - configure buttons, global catalog expansion
+📝 Context management refactoring - reduce redundancy, optimize BAML inputs
 
 **Known Issues:**
 - BAML requires dynamic imports (no top-level imports in server-bundled code)
@@ -377,6 +440,7 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
 - Import from APOC export format needs manual processing
 - Tool execution has intermittent failures - debugging in progress
 - LLM-based BAML tests are non-deterministic - some test failures are expected
+- MCP Gateway hot-swap is placeholder - currently just updates local state
 
 ---
 
@@ -392,6 +456,6 @@ When working on this project:
 
 ---
 
-**Last Updated:** 2025-12-12
-**Version:** 0.3.0-alpha
-**Status:** Active Development - Phase 4 (Tool Execution) + Phase 6 (Observability) In Progress
+**Last Updated:** 2025-12-16
+**Version:** 0.4.1-alpha
+**Status:** Active Development - Code Mode Fixed, Phase 4.1 Planned
