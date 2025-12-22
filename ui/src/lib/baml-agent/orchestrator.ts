@@ -60,6 +60,7 @@ export class AgentOrchestrator {
    * Returns streaming events for real-time UI updates
    */
   async processMessage(userMessage: string): Promise<ProcessMessageOutput> {
+    "use server"
     try {
       // Call server function (multi-turn tool loop happens server-side)
       const result = await processAgentMessageStreaming(userMessage, this.threadEvents);

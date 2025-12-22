@@ -2,13 +2,11 @@ import { Splitter } from '@ark-ui/solid/splitter'
 import { createSignal } from 'solid-js'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
 import { SupportPanel } from '~/components/ark-ui/SupportPanel'
-import { createTelemetryStore } from '~/lib/baml-agent/telemetry-store'
 import type { ElementDefinition } from 'cytoscape'
 
 export default function Home() {
   const [graphElements, setGraphElements] = createSignal<ElementDefinition[]>([])
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
-  const telemetryStore = createTelemetryStore()
 
   // Accumulate graph elements across calls (deduplicate by ID)
   const accumulateGraphElements = (newElements: ElementDefinition[]) => {
@@ -43,7 +41,6 @@ export default function Home() {
         <Splitter.Panel id="chat">
           <ChatInterface
             onGraphUpdate={accumulateGraphElements}
-            telemetryStore={telemetryStore}
           />
         </Splitter.Panel>
 
@@ -63,7 +60,6 @@ export default function Home() {
             graphElements={graphElements()}
             highlightedIds={highlightedIds()}
             onClearGraph={clearGraph}
-            telemetryStore={telemetryStore}
           />
         </Splitter.Panel>
       </Splitter.Root>

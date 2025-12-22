@@ -8,10 +8,8 @@
 import { Tabs } from '@ark-ui/solid/tabs';
 import { Show, createSignal } from 'solid-js';
 import { GraphVisualization } from './GraphVisualization';
-import { ObservabilityPanel } from './ObservabilityPanel';
 import { ToolsPanel } from './ToolsPanel';
 import type { ElementDefinition } from 'cytoscape';
-import type { TelemetryStore } from '~/lib/baml-agent/telemetry-store';
 
 // ============================================================================
 // Types
@@ -29,7 +27,6 @@ export interface SupportPanelProps {
   graphElements: ElementDefinition[];
   highlightedIds?: string[];
   promptStats?: PromptStat[];
-  telemetryStore?: TelemetryStore;
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void;
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
   onClearGraph?: () => void;
@@ -171,40 +168,37 @@ export const SupportPanel = (props: SupportPanelProps) => {
             </div>
           </Tabs.Content>
 
-          {/* Observability Tab */}
+          {/* Observability Tab - OTel based (console output) */}
           <Tabs.Content value="stats" h="full">
-            <Show
-              when={props.telemetryStore}
-              fallback={
-                <div flex="~" items="center" justify="center" h="full" bg="dark-bg-primary">
-                  <div text="center">
-                    <svg
-                      width="64"
-                      height="64"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                      style={{"margin":"0 auto", "color":"#4f46e5", "opacity":"0.5"}}
-                    >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                      />
-                    </svg>
-                    <div text="lg dark-text-secondary" font="medium" m="t-4">
-                      Observability Panel
-                    </div>
-                    <div text="sm dark-text-tertiary" m="t-2" max-w="sm">
-                      No telemetry store available
-                    </div>
-                  </div>
+            <div flex="~" items="center" justify="center" h="full" bg="dark-bg-primary">
+              <div text="center">
+                <svg
+                  width="64"
+                  height="64"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  style={{"margin":"0 auto", "color":"#4f46e5", "opacity":"0.5"}}
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                  />
+                </svg>
+                <div text="lg dark-text-secondary" font="medium" m="t-4">
+                  OpenTelemetry Observability
                 </div>
-              }
-            >
-              <ObservabilityPanel store={props.telemetryStore!} />
-            </Show>
+                <div text="sm dark-text-tertiary" m="t-2" max-w="sm">
+                  Telemetry spans are output to the console via ConsoleSpanExporter.
+                  Check your terminal for span data.
+                </div>
+                <div text="xs neon-cyan" m="t-4">
+                  Using @opentelemetry/sdk-node
+                </div>
+              </div>
+            </div>
           </Tabs.Content>
 
           {/* Actions Tab (Future) */}

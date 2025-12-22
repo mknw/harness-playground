@@ -3,23 +3,24 @@
  *
  * Main chat interface that coordinates:
  * - User message input
- * - Agent processing (via server functions)
+ * - Agent processing (via API route or inline server function)
  * - Message display with tool calls
  * - Graph visualization updates
  *
  * Architecture:
- * - Creates AgentOrchestrator synchronously (no async init)
- * - Schema is fetched lazily when needed (server-side)
+ * - Uses harness-patterns via server wrapper
+ * - Telemetry handled by OpenTelemetry (no store prop)
+ * - Generic extractors for graph data
  */
 
 import { createSignal, onMount } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
-import { AgentOrchestrator } from '~/lib/baml-agent'
+import { AgentOrchestrator } from '~/lib/harness-patterns'
+import type { OrchestratorResult } from '~/lib/harness-patterns'
+import { extractGraphFromToolEvents } from '~/lib/graph/extractors'
 import type { ElementDefinition } from 'cytoscape'
-import type { TelemetryStore } from '~/lib/baml-agent/telemetry-store'
-import type { BAMLCallTelemetry, ToolCallTelemetry } from '~/lib/baml-agent/telemetry'
 
 // ============================================================================
 // Types
@@ -27,7 +28,6 @@ import type { BAMLCallTelemetry, ToolCallTelemetry } from '~/lib/baml-agent/tele
 
 export interface ChatInterfaceProps {
   onGraphUpdate?: (elements: ElementDefinition[]) => void
-  telemetryStore?: TelemetryStore
 }
 
 // ============================================================================
@@ -39,11 +39,27 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const [isProcessing, setIsProcessing] = createSignal(false)
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
 
-  // Create orchestrator synchronously - NO async initialization needed
-  const orchestrator = new AgentOrchestrator()
+  // Server wrapper - "use server" INSIDE the function (SolidJS requirement)
+  const processMessageServer = async (message: string): Promise<OrchestratorResult> => {
+    "use server"
+    const orchestrator = new AgentOrchestrator()
+    return orchestrator.processMessage(message)
+  }
+
+  const approveOperationServer = async (): Promise<OrchestratorResult> => {
+    "use server"
+    const orchestrator = new AgentOrchestrator()
+    return orchestrator.approveOperation()
+  }
+
+  const rejectOperationServer = async (reason?: string): Promise<OrchestratorResult> => {
+    "use server"
+    const orchestrator = new AgentOrchestrator()
+    return orchestrator.rejectOperation(reason)
+  }
 
   onMount(() => {
-    // Add welcome message (no async init required)
+    // Add welcome message
     const welcomeMessage: Message = {
       id: Date.now().toString(),
       role: 'assistant',
@@ -65,41 +81,35 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     setIsProcessing(true)
 
     try {
-      // Process message with agent (two-step flow happens server-side)
-      const result = await orchestrator.processMessage(content)
+      // Process message via server wrapper
+      const result = await processMessageServer(content)
 
-      // Convert AgentMessage to Message
+      // Build assistant message
       const assistantMessage: Message = {
-        id: result.response.id,
-        role: result.response.role,
-        content: result.response.content,
-        timestamp: result.response.timestamp,
-        toolCall: result.response.toolCall,
-        graphData: result.response.graphData
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: result.response,
+        timestamp: new Date(),
+        // Map pending approval to toolCall for UI display
+        toolCall: result.needsApproval && result.pendingPlan ? {
+          type: 'neo4j',
+          status: 'pending',
+          tool: result.pendingPlan.toolName,
+          cypher: extractCypherFromPayload(result.pendingPlan.payload),
+          explanation: result.pendingPlan.reasoning,
+          isReadOnly: false
+        } : undefined
       }
 
       setMessages([...messages(), assistantMessage])
 
-      // Route telemetry events to store
-      if (props.telemetryStore && result.events) {
-        for (const event of result.events) {
-          if (event.type === 'baml_telemetry') {
-            props.telemetryStore.addBAMLCall(event.data as BAMLCallTelemetry)
-          } else if (event.type === 'tool_telemetry') {
-            props.telemetryStore.addToolCall(event.data as ToolCallTelemetry)
-          }
+      // Extract and update graph from toolEvents (generic extractor)
+      if (result.toolEvents && result.toolEvents.length > 0) {
+        const graphElements = extractGraphFromToolEvents(result.toolEvents)
+        console.log('[ChatInterface] Extracted graph elements:', graphElements.length)
+        if (graphElements.length > 0) {
+          props.onGraphUpdate?.(graphElements)
         }
-      }
-
-      // Update graph visualization if we got graph data
-      if (result.graphUpdate) {
-        console.log('[ChatInterface] Graph update received:', result.graphUpdate.length, 'elements')
-        if (result.graphUpdate.length > 0) {
-          console.log('[ChatInterface] First element:', JSON.stringify(result.graphUpdate[0], null, 2))
-        }
-        props.onGraphUpdate?.(result.graphUpdate)
-      } else {
-        console.log('[ChatInterface] No graph update in result')
       }
     } catch (error) {
       console.error('Error processing message:', error)
@@ -120,15 +130,15 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     setIsProcessing(true)
 
     try {
-      // Execute the write query
-      const { graphUpdate, toolCall } = await orchestrator.executeWriteQuery()
+      // Execute the approved operation
+      const result = await approveOperationServer()
 
       // Update the message with executed tool call
       setMessages(messages().map(msg => {
         if (msg.id === messageId && msg.toolCall) {
           return {
             ...msg,
-            toolCall: toolCall || { ...msg.toolCall, status: 'executed' as const }
+            toolCall: { ...msg.toolCall, status: 'executed' as const }
           }
         }
         return msg
@@ -138,14 +148,17 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       const successMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: `Write operation completed successfully! ${graphUpdate.length} graph elements were affected.`,
+        content: result.response,
         timestamp: new Date()
       }
       setMessages([...messages(), successMessage])
 
-      // Update graph visualization
-      if (graphUpdate.length > 0) {
-        props.onGraphUpdate?.(graphUpdate)
+      // Extract and update graph
+      if (result.toolEvents && result.toolEvents.length > 0) {
+        const graphElements = extractGraphFromToolEvents(result.toolEvents)
+        if (graphElements.length > 0) {
+          props.onGraphUpdate?.(graphElements)
+        }
       }
     } catch (error) {
       console.error('Error executing write query:', error)
@@ -175,8 +188,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
   const handleRejectWrite = async (messageId: string) => {
     try {
-      // Notify orchestrator of rejection
-      const rejectionMessage = await orchestrator.rejectPendingWrite()
+      // Reject the pending operation
+      const result = await rejectOperationServer()
 
       // Update the message to show rejection in tool call
       setMessages(messages().map(msg => {
@@ -193,7 +206,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       const responseMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: rejectionMessage,
+        content: result.response,
         timestamp: new Date()
       }
       setMessages([...messages(), responseMessage])
@@ -226,4 +239,20 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       </div>
     </div>
   )
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Extract cypher query from plan payload
+ */
+function extractCypherFromPayload(payload: string): string | undefined {
+  try {
+    const parsed = JSON.parse(payload)
+    return parsed.query
+  } catch {
+    return payload
+  }
 }
