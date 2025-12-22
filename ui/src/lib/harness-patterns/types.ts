@@ -112,16 +112,13 @@ export interface ScriptEvaluationResult {
 // Orchestrator Output (sent to client)
 // ============================================================================
 
-export interface TelemetrySummary {
-  totalDuration_ms: number;
-  turnsUsed: number;
-  toolCalls: number;
-  exitReason: ExitReason;
-}
-
+/**
+ * Result from orchestrator - NO telemetry (OTel handles it).
+ * toolEvents provided for client-side processing (graph extraction, etc.)
+ */
 export interface OrchestratorResult {
   response: string;
-  telemetry: TelemetrySummary;
+  toolEvents?: ToolEvent[];
   needsApproval?: boolean;
   pendingPlan?: ToolExecutionPlan;
 }

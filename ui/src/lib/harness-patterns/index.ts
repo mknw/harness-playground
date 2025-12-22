@@ -18,7 +18,6 @@ export type {
   CodedTool,
   ScriptExecutionEvent,
   ScriptEvaluationResult,
-  TelemetrySummary,
   OrchestratorResult,
   ExitReason,
   PlannerFn,
@@ -28,7 +27,9 @@ export type {
 export { MAX_TOOL_TURNS } from './types';
 
 // Server-only exports (will fail if imported on client)
-export { AgentOrchestrator } from './orchestrator.server';
+// Orchestrator is the base class for custom implementations
+// AgentOrchestrator is the default implementation
+export { Orchestrator, AgentOrchestrator } from './orchestrator.server';
 export {
   simpleLoop,
   executorEvaluatorLoop,
