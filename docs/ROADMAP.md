@@ -24,10 +24,11 @@ This roadmap tracks the development of the knowledge graph agent system, which c
 **Key Files:**
 - `ui/src/lib/config/endpoints.ts` - Environment-aware endpoints
 - `ui/baml_src/clients.baml` - Groq/OpenAI client config
-- `ui/baml_src/agent.baml` - BAML agent functions
-- `ui/src/lib/utcp/client.ts` - UTCP client with MCP integration
+- `ui/baml_src/routing.baml` - Message routing and intent detection
+- `ui/baml_src/neo4j.baml` - Neo4j query planning
+- `ui/baml_src/code_mode.baml` - Code mode tool composition
 - `ui/src/lib/graph/transform.ts` - Neo4j → Cytoscape transformation
-- `ui/src/lib/utcp-baml-agent/server.ts` - Server functions (replaced API routes)
+- `ui/src/lib/baml-agent/server.ts` - Server functions (replaced API routes)
 
 ---
 
@@ -81,11 +82,11 @@ This roadmap tracks the development of the knowledge graph agent system, which c
 - [x] Error handling and user feedback
 
 **Key Files:**
-- `ui/src/lib/utcp-baml-agent/orchestrator.ts` - Client-side orchestrator
-- `ui/src/lib/utcp-baml-agent/server.ts` - Server functions (processAgentMessage, etc.)
-- `ui/src/lib/utcp-baml-agent/agent.ts` - Agent loop (BAML reasoning)
-- `ui/src/lib/utcp-baml-agent/state.ts` - Thread state management
-- `ui/src/lib/utcp-baml-agent/tools.ts` - Tool handlers (UTCP calls)
+- `ui/src/lib/baml-agent/orchestrator.ts` - Client-side orchestrator
+- `ui/src/lib/baml-agent/server.ts` - Server functions (processAgentMessage, etc.)
+- `ui/src/lib/baml-agent/agent.ts` - Tool execution integration layer
+- `ui/src/lib/baml-agent/state.ts` - Thread state management
+- `ui/src/lib/baml-agent/mcp-client.ts` - MCP SDK client wrapper
 
 **Architecture (12-Factor-Agents Pattern):**
 ```
@@ -132,9 +133,9 @@ BAML Agent → Tool Loop → Namespace Router
 ```
 
 **Key Files:**
-- `ui/src/lib/utcp-baml-agent/server.ts:160-222` - SSE parsing, MCP Gateway calls
-- `ui/src/lib/utcp-baml-agent/server.ts:224-350` - executeToolLoop implementation
-- `ui/baml_src/agent.baml:70-91` - Routing rules for tool selection
+- `ui/src/lib/baml-agent/server.ts` - SSE parsing, MCP Gateway calls, executeToolLoop
+- `ui/src/lib/baml-agent/mcp-client.ts` - MCP SDK client with callTool wrapper
+- `ui/baml_src/routing.baml` - Routing rules for tool selection
 
 ---
 
@@ -456,6 +457,6 @@ When working on this project:
 
 ---
 
-**Last Updated:** 2025-12-16
-**Version:** 0.4.1-alpha
-**Status:** Active Development - Code Mode Fixed, Phase 4.1 Planned
+**Last Updated:** 2025-12-22
+**Version:** 0.4.2-alpha
+**Status:** Active Development - Harness Patterns Framework Added

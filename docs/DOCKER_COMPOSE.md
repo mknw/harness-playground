@@ -65,7 +65,9 @@ env:
 
 ### Configuration Files
 
-1. **mcp-config.yaml**: Contains connection parameters
+All MCP configuration files are located in the `configs/` directory:
+
+1. **configs/mcp-config.yaml**: Contains connection parameters
    ```yaml
    neo4j-cypher:
      uri: bolt://neo4j:7687  # Uses Docker service name
@@ -75,16 +77,19 @@ env:
      read_only: false
    ```
 
-2. **custom-catalog.yaml**: Custom catalog definition with corrected environment variable mappings
+2. **configs/custom-catalog.yaml**: Custom catalog definition with corrected environment variable mappings
    - Includes **neo4j-cypher** server with fixed NEO4J_URI mapping
    - Includes **fetch** server for web content retrieval
    - Uses SHA256 digests for image references (e.g., `mcp/fetch@sha256:...`)
 
-3. **docker-compose.yaml**: Mounts both configuration files read-only
+3. **configs/catalog.yaml**: Full Docker MCP catalog for global mode
+
+4. **docker-compose.yaml**: Mounts all configuration files read-only
    ```yaml
    volumes:
-     - ./mcp-config.yaml:/mcp/config.yaml:ro
-     - ./custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+     - ./configs/mcp-config.yaml:/mcp/config.yaml:ro
+     - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+     - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
    ```
 
 ## Important Notes

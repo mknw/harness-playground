@@ -20,10 +20,23 @@
 | [baml_agent/ARCHITECTURE.md](baml_agent/ARCHITECTURE.md) | Streaming agent architecture | 13-step flow, tool namespaces, approval system |
 
 **Source files:**
-- `ui/src/lib/utcp-baml-agent/server.ts` - Server functions, tool execution
-- `ui/src/lib/utcp-baml-agent/state.ts` - Thread events, serialization
-- `ui/src/lib/utcp-baml-agent/orchestrator.ts` - Client-side orchestration
-- `ui/baml_src/agent.baml` - BAML function definitions
+- `ui/src/lib/baml-agent/server.ts` - Server functions, tool execution
+- `ui/src/lib/baml-agent/state.ts` - Thread events, serialization
+- `ui/src/lib/baml-agent/orchestrator.ts` - Client-side orchestration
+- `ui/baml_src/routing.baml` - Message routing
+- `ui/baml_src/neo4j.baml` - Neo4j planning
+- `ui/baml_src/code_mode.baml` - Code mode planning
+
+### Harness Patterns Framework
+
+| Document | Description | Key Sections |
+|----------|-------------|--------------|
+| [../ui/src/lib/harness-patterns/README.md](../ui/src/lib/harness-patterns/README.md) | Server-side orchestration framework | Patterns, Orchestrator base class, OpenTelemetry |
+
+**Source files:**
+- `ui/src/lib/harness-patterns/orchestrator.server.ts` - Base Orchestrator class
+- `ui/src/lib/harness-patterns/patterns.server.ts` - Tool execution patterns
+- `ui/src/lib/harness-patterns/types.ts` - Type definitions
 
 ### UI Frontend
 
@@ -49,8 +62,8 @@
 
 **Source files:**
 - `docker-compose.yaml` - Service definitions
-- `mcp-config.yaml` - MCP server parameters
-- `custom-catalog.yaml` - Custom MCP catalog
+- `configs/mcp-config.yaml` - MCP server parameters
+- `configs/custom-catalog.yaml` - Custom MCP catalog
 
 ### MCP Gateway
 
@@ -90,8 +103,8 @@
 | File | Purpose | Verify |
 |------|---------|--------|
 | `docker-compose.yaml` | Docker service orchestration | Ports, volumes, depends_on |
-| `mcp-config.yaml` | MCP server connection params | Neo4j URI, credentials |
-| `custom-catalog.yaml` | Custom MCP server definitions | Image digests, env mappings |
+| `configs/mcp-config.yaml` | MCP server connection params | Neo4j URI, credentials |
+| `configs/custom-catalog.yaml` | Custom MCP server definitions | Image digests, env mappings |
 | `.mcp.json` | Claude Code MCP integration | Gateway URL (port 8811) |
 | `ui/baml_src/clients.baml` | BAML LLM client config | Groq, OpenAI settings |
 
@@ -129,15 +142,21 @@ kg-agent/
 │   └── baml_agent/
 │       └── ARCHITECTURE.md   # Agent architecture
 ├── ui/                       # SolidStart frontend
-│   ├── baml_src/             # BAML definitions
-│   └── src/lib/utcp-baml-agent/  # Agent implementation
+│   ├── baml_src/             # BAML definitions (routing, neo4j, code_mode, etc.)
+│   └── src/lib/
+│       ├── baml-agent/       # Agent implementation
+│       ├── harness-patterns/ # Server-side orchestration framework
+│       ├── graph/            # Graph transformation utilities
+│       └── neo4j/            # Direct Neo4j driver client
+├── configs/                  # MCP and catalog configurations
+│   ├── mcp-config.yaml       # MCP server parameters
+│   ├── custom-catalog.yaml   # Custom MCP catalog
+│   └── catalog.yaml          # Full Docker MCP catalog
 ├── scripts/                  # Utility scripts
 ├── neo4j_dumps/              # Graph data exports
-├── docker-compose.yaml       # Service orchestration
-├── custom-catalog.yaml       # MCP catalog
-└── mcp-config.yaml           # MCP configuration
+└── docker-compose.yaml       # Service orchestration
 ```
 
 ---
 
-**Last Updated:** 2025-12-03
+**Last Updated:** 2025-12-22

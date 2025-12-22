@@ -432,6 +432,12 @@ pnpm eslint     # Run linter
 ui/
 ├── eslint.config.ts              # ESLint rules
 ├── uno.config.ts                 # UnoCSS config + theme
+├── baml_src/                     # BAML function definitions
+│   ├── clients.baml              # LLM client config
+│   ├── routing.baml              # Message routing
+│   ├── neo4j.baml                # Neo4j planning
+│   ├── code_mode.baml            # Code mode composition
+│   └── response.baml             # Response generation
 ├── src/
 │   ├── shims.d.ts                # TypeScript augmentation
 │   ├── routes/
@@ -446,11 +452,36 @@ ui/
 │   │       ├── ChatSidebar.tsx        # Thread history sidebar
 │   │       ├── ChatMessages.tsx       # Message display area
 │   │       ├── ChatInput.tsx          # Autoresize textarea
+│   │       ├── GraphVisualization.tsx # Cytoscape graph display
+│   │       ├── SupportPanel.tsx       # Tabbed support panel
+│   │       ├── ObservabilityPanel.tsx # Telemetry timeline
+│   │       ├── EventDetailOverlay.tsx # Event detail modal
+│   │       ├── ToolsPanel.tsx         # Tool configuration UI
+│   │       ├── ToolCallDisplay.tsx    # Tool call status display
+│   │       ├── EnvVarManager.tsx      # Environment variable config
 │   │       └── KnowledgeGraphPanel.tsx # Graph visualization panel
-│   └── lib/auth/
-│       ├── client.ts             # StackClientApp
-│       ├── server.ts             # Server auth helpers
-│       └── allowList.ts          # Email access control
+│   └── lib/
+│       ├── auth/                  # Authentication
+│       │   ├── client.ts          # StackClientApp
+│       │   ├── server.ts          # Server auth helpers
+│       │   └── allowList.ts       # Email access control
+│       ├── baml-agent/            # Agent implementation
+│       │   ├── server.ts          # Server functions
+│       │   ├── orchestrator.ts    # Client orchestrator
+│       │   ├── state.ts           # Thread state
+│       │   ├── mcp-client.ts      # MCP SDK client
+│       │   ├── telemetry.ts       # Telemetry types
+│       │   └── tool-config.ts     # Tool configuration
+│       ├── harness-patterns/      # Server-side orchestration
+│       │   ├── orchestrator.server.ts
+│       │   ├── patterns.server.ts
+│       │   └── types.ts
+│       ├── graph/                 # Graph utilities
+│       │   ├── transform.ts       # Neo4j → Cytoscape
+│       │   └── extractors.ts      # Event data extractors
+│       └── neo4j/                 # Direct Neo4j client
+│           ├── client.ts
+│           └── queries.ts
 ```
 
 ---
