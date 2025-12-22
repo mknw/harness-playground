@@ -23,9 +23,6 @@ import {
   type ToolEvent,
   type StreamEvent,
   type ScriptExecutionEvent,
-  type CodedToolReference,
-  type ToolCompositionPlan,
-  type EvaluationWithPersistence,
   MAX_TOOL_TURNS,
   estimateTokens,
   prepareResultsForContext,
@@ -646,8 +643,8 @@ async function executeCodeModeWithPlanner(
     // ========================================
     let script: string;
     let shouldSave = plan.should_save;
-    let toolNameToSave = plan.tool_name_to_save;
-    let toolDescription = plan.tool_description;
+    const toolNameToSave = plan.tool_name_to_save;
+    const toolDescription = plan.tool_description;
 
     if (plan.use_existing_tool && plan.existing_tool_name) {
       // Reuse existing coded tool from repository

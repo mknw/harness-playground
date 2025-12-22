@@ -10,8 +10,8 @@
  * These tests verify the fix for the MCPScriptPlan vs ToolCompositionPlan issue.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { ToolConfig, ExecutionMode, CatalogMode } from '../tool-config';
+import { describe, it, expect, beforeEach } from 'vitest';
+import type { ToolConfig, ExecutionMode } from '../tool-config';
 import type { ToolCompositionPlan, EvaluationWithPersistence, ScriptExecutionEvent } from '../../../../baml_client';
 
 // ============================================================================
@@ -70,7 +70,7 @@ describe('Code Mode Flow - Routing Logic', () => {
 
   function shouldUseCodeModePlanner(
     executionMode: ExecutionMode,
-    toolName: 'neo4j' | 'web_search' | 'code_mode' | null
+    _toolName: 'neo4j' | 'web_search' | 'code_mode' | null
   ): boolean {
     // This mirrors the logic in server.ts executeToolLoop
     // When execution mode is 'code', ALWAYS use the code mode planner

@@ -101,6 +101,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                       <div
                         text="sm"
                         class="prose-chat"
+                        // eslint-disable-next-line solid/no-innerhtml
                         innerHTML={marked.parse(message.content) as string}
                       />
                     </Show>

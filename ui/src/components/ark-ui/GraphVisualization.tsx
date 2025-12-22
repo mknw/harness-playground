@@ -216,7 +216,6 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     });
 
     // Click on background to close panel
-    // eslint-disable-next-line solid/reactivity
     cy.on('tap', (evt) => {
       if (evt.target === cy) {
         setSelectedNode(null);

@@ -269,18 +269,23 @@ const EmptyState = () => (
 // ============================================================================
 
 export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
-  const { state, expandEvent, collapseEvent, deleteEvent, getEvent } = props.store;
+  // Access store methods via props to maintain reactivity
+  const state = () => props.store.state;
+  const expandEvent = (id: string) => props.store.expandEvent(id);
+  const collapseEvent = () => props.store.collapseEvent();
+  const deleteEvent = (id: string) => props.store.deleteEvent(id);
+  const getEvent = (id: string) => props.store.getEvent(id);
 
   // Merge and sort ALL events chronologically (oldest first)
   // Interface lane: RouteUserMessage, CreateToolResponse
   // Tools lane: Plan* operations + all tool calls
   const timelineEvents = createMemo(() => {
     const all: TimelineEvent[] = [
-      ...state.bamlCalls.map(c => ({
+      ...state().bamlCalls.map(c => ({
         ...c,
         lane: isInterfaceFunction(c.functionName) ? 'interface' as const : 'tools' as const
       })),
-      ...state.toolCalls.map(c => ({ ...c, lane: 'tools' as const }))
+      ...state().toolCalls.map(c => ({ ...c, lane: 'tools' as const }))
     ];
     return all.sort((a, b) =>
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
@@ -289,8 +294,9 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
 
   // Get expanded event
   const expandedEvent = createMemo(() => {
-    if (!state.expandedEventId) return null;
-    return getEvent(state.expandedEventId);
+    const id = state().expandedEventId;
+    if (!id) return null;
+    return getEvent(id);
   });
 
   const handleDelete = (id: string) => {
@@ -330,7 +336,7 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
         <EventDetailOverlay
           event={expandedEvent()!}
           onClose={collapseEvent}
-          onDelete={() => handleDelete(state.expandedEventId!)}
+          onDelete={() => handleDelete(state().expandedEventId!)}
         />
       </Show>
     </div>

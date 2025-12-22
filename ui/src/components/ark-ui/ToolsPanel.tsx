@@ -9,7 +9,7 @@
 
 import { Switch } from '@ark-ui/solid/switch';
 import { Checkbox } from '@ark-ui/solid/checkbox';
-import { createSignal, createResource, For, Show, createEffect } from 'solid-js';
+import { createSignal, createResource, For, Show } from 'solid-js';
 import {
   getToolConfig,
   setExecutionMode,
@@ -18,8 +18,7 @@ import {
   getAvailableTools,
   MINIMAL_TOOLS,
   type ExecutionMode,
-  type CatalogMode,
-  type ToolConfig
+  type CatalogMode
 } from '~/lib/baml-agent/tool-config';
 import { fetchCodedTools, type CodedTool } from '~/lib/baml-agent/tool-repository';
 
@@ -34,8 +33,8 @@ export const ToolsPanel = () => {
   const [selectedTools, setSelectedToolsLocal] = createSignal<string[]>([...MINIMAL_TOOLS]);
   const [isLoading, setIsLoading] = createSignal(false);
 
-  // Fetch initial config
-  const [config] = createResource(async () => {
+  // Fetch initial config (resource used for side effects)
+  const [_config] = createResource(async () => {
     const cfg = await getToolConfig();
     setExecutionModeLocal(cfg.executionMode);
     setCatalogModeLocal(cfg.catalogMode);
@@ -215,7 +214,7 @@ export const ToolsPanel = () => {
                 >
                   <Checkbox.Root
                     checked={isToolSelected(tool)}
-                    onCheckedChange={(details) => {
+                    onCheckedChange={(_details) => {
                       // Prevent propagation handled via onClick guard above
                       handleToolToggle(tool);
                     }}

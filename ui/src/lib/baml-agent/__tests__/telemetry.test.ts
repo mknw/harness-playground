@@ -23,8 +23,7 @@ import {
   type BAMLCallTelemetry,
   type ToolCallTelemetry,
   type TimelineEvent,
-  type BAMLFunctionName,
-  type ToolNamespace
+  type BAMLFunctionName
 } from '../telemetry';
 
 describe('telemetry', () => {

@@ -7,7 +7,7 @@
  */
 
 import { Portal } from 'solid-js/web';
-import { Show, createSignal, createMemo } from 'solid-js';
+import { Show, For, createSignal, createMemo } from 'solid-js';
 import { ToggleGroup } from '@ark-ui/solid/toggle-group';
 import { marked } from 'marked';
 import type { TelemetryEvent, BAMLCallTelemetry, ToolCallTelemetry } from '~/lib/baml-agent/telemetry';
@@ -80,13 +80,14 @@ export const EventDetailOverlay = (props: EventDetailOverlayProps) => {
           .replace(/\\n/g, '\n')
           .replace(/\\t/g, '\t')
           .replace(/\\r/g, '');
-      case 'marked':
+      case 'marked': {
         // Parse as markdown
         const parsed = text
           .replace(/\\n/g, '\n')
           .replace(/\\t/g, '\t')
           .replace(/\\r/g, '');
         return marked.parse(parsed) as string;
+      }
     }
   };
 
@@ -265,27 +266,29 @@ export const EventDetailOverlay = (props: EventDetailOverlayProps) => {
                   overflow="auto"
                   max-h="200px"
                 >
-                  {Object.entries(bamlEvent().input || {}).map(([key, value]) => (
-                    <div m="b-2" class="last:mb-0">
-                      <div
-                        text="xs neon-purple"
-                        font="mono medium"
-                        m="b-1"
-                      >
-                        {key}
+                  <For each={Object.entries(bamlEvent().input || {})}>
+                    {([key, value]) => (
+                      <div m="b-2" class="last:mb-0">
+                        <div
+                          text="xs neon-purple"
+                          font="mono medium"
+                          m="b-1"
+                        >
+                          {key}
+                        </div>
+                        <pre
+                          text="xs dark-text-secondary"
+                          font="mono"
+                          style={{ "white-space": "pre-wrap", "word-break": "break-word" }}
+                          p="2"
+                          bg="dark-bg-primary"
+                          rounded="sm"
+                        >
+                          {typeof value === 'string' ? value : formatJson(value)}
+                        </pre>
                       </div>
-                      <pre
-                        text="xs dark-text-secondary"
-                        font="mono"
-                        style={{ "white-space": "pre-wrap", "word-break": "break-word" }}
-                        p="2"
-                        bg="dark-bg-primary"
-                        rounded="sm"
-                      >
-                        {typeof value === 'string' ? value : formatJson(value)}
-                      </pre>
-                    </div>
-                  ))}
+                    )}
+                  </For>
                 </div>
               </div>
             </Show>
@@ -379,7 +382,7 @@ export const EventDetailOverlay = (props: EventDetailOverlayProps) => {
 
                 {/* Content display */}
                 <Show when={textFormat() === 'marked'}>
-                  {/* Markdown rendered as HTML */}
+                  {/* Markdown rendered as HTML - innerHTML intentional for markdown */}
                   <div
                     bg="dark-bg-tertiary"
                     p="3"
@@ -389,6 +392,7 @@ export const EventDetailOverlay = (props: EventDetailOverlayProps) => {
                     max-h="400px"
                     overflow="auto"
                     class="prose prose-invert prose-sm max-w-none"
+                    // eslint-disable-next-line solid/no-innerhtml
                     innerHTML={formatText(outputContent()!)}
                   />
                 </Show>
