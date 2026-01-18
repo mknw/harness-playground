@@ -1,49 +1,158 @@
 /**
  * Harness Patterns - Public API
  *
- * Server-side agentic tool execution patterns.
+ * Functional, composable framework for agentic tool execution.
  */
 
-// Types (safe to import anywhere)
+// ============================================================================
+// Core Types
+// ============================================================================
+
 export type {
-  ThreadEvent,
-  SerializedThread,
-  PlannerContext,
-  ToolExecutionPlan,
-  ToolEvent,
+  // Context Types
+  UnifiedContext,
+  PatternScope,
+  ContextEvent,
+  EventType,
+  EventView,
+  ScopedPattern,
+  ConfiguredPattern,
+  CtxStatus,
+  HarnessResult,
+
+  // Configuration Types
+  PatternConfig,
+  ViewConfig,
+  CommitStrategy,
+  TrackHistory,
+
+  // Controller/Critic Types (BAML function signatures)
+  ControllerFn,
+  CriticFn,
+  CodeModeControllerFn,
+
+  // BAML Types (re-exported)
+  ControllerAction,
+  CriticResult,
+  ScriptExecutionEvent,
+
+  // Pattern Config Types
+  SimpleLoopConfig,
+  ActorCriticConfig,
+  SynthesizerConfig,
+  SynthesizerMode,
+  SynthesizerInput,
+  SynthesisFn,
+  SynthesizerData,
+
+  // Loop History Types
+  LoopHistory,
+  LoopIteration,
+  WithLoopHistory,
+
+  // Event Data Payloads
+  UserMessageEventData,
+  AssistantMessageEventData,
+  ToolCallEventData,
+  ToolResultEventData,
+  ControllerActionEventData,
+  CriticResultEventData,
+  PatternEnterEventData,
+  PatternExitEventData,
+  ApprovalRequestEventData,
+  ApprovalResponseEventData,
+  ErrorEventData,
+
+  // Approval Types
+  ApprovalRequest,
+  WithApproval,
+
+  // Infrastructure types
   MCPToolDescription,
   ToolCallResult,
-  PatternResult,
-  CodeModeResult,
-  CodedTool,
-  ScriptExecutionEvent,
-  ScriptEvaluationResult,
-  OrchestratorResult,
-  ExitReason,
-  PlannerFn,
-  EvaluatorFn
-} from './types';
+  ToolSet
+} from './types'
 
-export { MAX_TOOL_TURNS } from './types';
+export {
+  MAX_TOOL_TURNS,
+  MAX_RETRIES,
+  DEFAULT_TRACK_HISTORY,
+  DEFAULT_COMMIT_STRATEGY
+} from './types'
 
-// Server-only exports (will fail if imported on client)
-// Orchestrator is the base class for custom implementations
-// AgentOrchestrator is the default implementation
-export { Orchestrator, AgentOrchestrator } from './orchestrator.server';
+// ============================================================================
+// Tools
+// ============================================================================
+
+export { Tools, ToolsFrom } from './tools.server'
+
+// ============================================================================
+// Router
+// ============================================================================
+
+export { router, type Routes, type RoutePatterns, type RouterData } from './router.server'
+
+// ============================================================================
+// Harness
+// ============================================================================
+
+export {
+  harness,
+  resumeHarness,
+  continueSession,
+  type HarnessData,
+  type HarnessResultScoped
+} from './harness.server'
+
+// ============================================================================
+// Patterns
+// ============================================================================
+
 export {
   simpleLoop,
-  executorEvaluatorLoop,
-  codeModeLoop,
-  withResponse
-} from './patterns.server';
+  actorCritic,
+  withApproval,
+  approvalPredicates,
+  chain,
+  synthesizer,
+  configurePattern,
+  type SimpleLoopData,
+  type ActorCriticData,
+  type ApprovalPredicate,
+  type WithApprovalData
+} from './patterns'
+
+// EventView
+export { EventViewImpl, createEventView } from './patterns'
+
+// ============================================================================
+// Context Helpers
+// ============================================================================
+
 export {
-  neo4jOp,
-  webSearchOp,
-  codePlannerOp,
-  evaluateScriptOp,
-  createResponseOp,
-  routeMessageOp
-} from './planners.server';
-export { Thread } from './state.server';
-export { callTool, listTools, getMcpClient, closeMcpClient } from './mcp-client.server';
-export { assertServer, ServerOnlyError } from './assert.server';
+  createContext,
+  serializeContext,
+  deserializeContext,
+  createScope,
+  createEvent,
+  shouldTrack,
+  trackEvent,
+  commitEvents,
+  enterPattern,
+  exitPattern,
+  setError,
+  setDone,
+  setPaused,
+  generateId,
+  resolveConfig,
+  getDefaultTrackHistory,
+  getDefaultCommitStrategy
+} from './context.server'
+
+// ============================================================================
+// Infrastructure (Server-only)
+// ============================================================================
+
+export { callTool, listTools, getMcpClient, closeMcpClient } from './mcp-client.server'
+export { assertServer, ServerOnlyError } from './assert.server'
+export { routeMessageOp } from './routing.server'

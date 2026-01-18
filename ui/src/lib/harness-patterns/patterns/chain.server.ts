@@ -1,0 +1,152 @@
+/**
+ * Chain Pattern
+ *
+ * Composes multiple patterns into a single sequence.
+ */
+
+import { trace, SpanStatusCode } from '@opentelemetry/api'
+import { assertServerOnImport } from '../assert.server'
+import type {
+  UnifiedContext,
+  PatternScope,
+  ConfiguredPattern,
+  PatternConfig
+} from '../types'
+import {
+  createScope,
+  commitEvents,
+  enterPattern,
+  exitPattern,
+  resolveConfig,
+  setError
+} from '../context.server'
+import { createEventView } from './event-view.server'
+
+assertServerOnImport()
+
+const tracer = trace.getTracer('harness-patterns.chain')
+
+/**
+ * Execute configured patterns in sequence with proper scope lifecycle.
+ *
+ * For each pattern:
+ * 1. Creates isolated PatternScope
+ * 2. Creates EventView based on pattern's viewConfig
+ * 3. Adds pattern_enter event
+ * 4. Executes pattern function
+ * 5. Commits events based on commitStrategy
+ * 6. Adds pattern_exit event
+ * 7. Passes data forward
+ *
+ * @param ctx - UnifiedContext to execute in
+ * @param patterns - ConfiguredPatterns to execute in sequence
+ * @returns Updated UnifiedContext
+ *
+ * @example
+ * const agent = harness(neo4jLoop, webLoop, synth)
+ * // harness uses chain internally
+ */
+export async function chain<T extends Record<string, unknown>>(
+  ctx: UnifiedContext<T>,
+  patterns: ConfiguredPattern<T>[]
+): Promise<UnifiedContext<T>> {
+  if (patterns.length === 0) {
+    return ctx
+  }
+
+  return tracer.startActiveSpan('pattern.chain', async (span) => {
+    span.setAttribute('patternCount', patterns.length)
+
+    try {
+      let currentData = ctx.data
+
+      for (let i = 0; i < patterns.length; i++) {
+        const pattern = patterns[i]
+
+        // Stop if status changed from running
+        if (ctx.status !== 'running') {
+          span.addEvent('chain.earlyExit', {
+            index: i,
+            patternId: pattern.config.patternId,
+            status: ctx.status
+          })
+          break
+        }
+
+        const patternId = pattern.config.patternId!
+        span.addEvent('chain.pattern.enter', { index: i, patternId })
+
+        // 1. Create isolated scope for this pattern
+        const scope = createScope<T>(patternId, currentData)
+
+        // 2. Create view based on pattern's viewConfig
+        const view = createEventView(ctx, pattern.config.viewConfig)
+
+        // 3. Add pattern_enter event
+        enterPattern(ctx, patternId, pattern.name)
+
+        try {
+          // 4. Execute pattern
+          const result = await pattern.fn(scope, view)
+
+          // 5. Commit events based on strategy
+          commitEvents(ctx, result, pattern.config.commitStrategy!)
+
+          // 6. Pass data forward
+          currentData = result.data
+
+          span.addEvent('chain.pattern.exit', {
+            index: i,
+            patternId,
+            status: ctx.status,
+            eventsCommitted: result.events.length
+          })
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error)
+          setError(ctx, msg, patternId)
+          span.addEvent('chain.pattern.error', { index: i, patternId, error: msg })
+        }
+
+        // 7. Add pattern_exit event
+        exitPattern(ctx, patternId)
+      }
+
+      // Update final data
+      ctx.data = currentData
+
+      span.setStatus({
+        code: ctx.status === 'error' ? SpanStatusCode.ERROR : SpanStatusCode.OK
+      })
+
+      return ctx
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      span.setStatus({ code: SpanStatusCode.ERROR, message: msg })
+      setError(ctx, msg, 'chain')
+      return ctx
+    } finally {
+      span.end()
+    }
+  })
+}
+
+/**
+ * Create a ConfiguredPattern from a ScopedPattern function.
+ *
+ * @param name - Pattern name for tracing
+ * @param fn - Scoped pattern function
+ * @param config - Pattern configuration
+ * @returns ConfiguredPattern ready for chain
+ */
+export function configurePattern<T extends Record<string, unknown>>(
+  name: string,
+  fn: ConfiguredPattern<T>['fn'],
+  config?: PatternConfig
+): ConfiguredPattern<T> {
+  const resolved = resolveConfig(name, config)
+  return {
+    name,
+    fn,
+    config: resolved
+  }
+}

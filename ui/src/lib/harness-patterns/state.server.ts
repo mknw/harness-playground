@@ -6,20 +6,9 @@
  */
 
 import { assertServerOnImport } from './assert.server';
-import type {
-  ThreadEvent,
-  SerializedThread,
-  ToolEvent,
-  ToolExecutionPlan
-} from './types';
+import type { ThreadEvent, SerializedThread } from './types';
 
 assertServerOnImport();
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-const MAX_THREAD_TOKENS = 8000;
 
 // ============================================================================
 // Thread Class
@@ -129,38 +118,4 @@ export class Thread {
   static fromJSON(events: SerializedThread): Thread {
     return new Thread(events);
   }
-}
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
-export function requiresApproval(plan: ToolExecutionPlan): boolean {
-  return plan.toolName.toLowerCase().includes('write');
-}
-
-export function prepareResultsForContext(toolEvents: ToolEvent[]): string {
-  const serialized = JSON.stringify(toolEvents);
-  if (estimateTokens(serialized) <= MAX_THREAD_TOKENS) {
-    return serialized;
-  }
-
-  // Prune older events, keep last 2 full
-  const pruned = toolEvents.map((event, index) => {
-    if (index < toolEvents.length - 2) {
-      return {
-        status_code: event.status_code,
-        operation: event.operation,
-        n_turn: event.n_turn,
-        data: '[pruned]'
-      };
-    }
-    return event;
-  });
-
-  return JSON.stringify(pruned);
 }
