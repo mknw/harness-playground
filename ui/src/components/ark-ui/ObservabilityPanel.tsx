@@ -2,26 +2,19 @@
  * ObservabilityPanel Component
  *
  * Vertical timeline display with two lanes:
- * - Interface Lane: BAML function telemetry
- * - Tools Lane: Tool execution telemetry with namespace color coding
+ * - Interface Lane: Harness/Router spans
+ * - Tools Lane: Pattern/Decider spans
  *
  * Events are displayed chronologically from top (oldest) to bottom (newest).
  */
 
-import { For, Show, createMemo } from 'solid-js';
-import type { TelemetryStore } from '~/lib/baml-agent/telemetry-store';
-import type { TimelineEvent } from '~/lib/baml-agent/telemetry';
-import {
-  getEventLabel,
-  getEventDuration,
-  getEventHexColor,
-  statusColors,
-  isInterfaceFunction
-} from '~/lib/baml-agent/telemetry';
-import { EventDetailOverlay } from './EventDetailOverlay';
+import { For, Show, createMemo } from 'solid-js'
+import type { TelemetryStore } from '~/lib/otel'
+import type { SpanData, SpanStatus } from '~/lib/otel'
+import { statusColors, getSpanColor, getSpanLabel } from '~/lib/otel'
 
 interface ObservabilityPanelProps {
-  store: TelemetryStore;
+  store: TelemetryStore
 }
 
 // ============================================================================
@@ -29,7 +22,7 @@ interface ObservabilityPanelProps {
 // ============================================================================
 
 const SummaryBar = (props: { store: TelemetryStore }) => {
-  const metrics = () => props.store.metrics();
+  const metrics = () => props.store.metrics()
 
   return (
     <div
@@ -40,7 +33,7 @@ const SummaryBar = (props: { store: TelemetryStore }) => {
       gap="4"
     >
       <div flex="~" items="center" gap="2">
-        <span text="xs dark-text-tertiary">Calls:</span>
+        <span text="xs dark-text-tertiary">Spans:</span>
         <span text="sm dark-text-primary" font="mono">{metrics().totalCalls}</span>
       </div>
 
@@ -59,16 +52,9 @@ const SummaryBar = (props: { store: TelemetryStore }) => {
         <span text="sm dark-text-primary" font="mono">{metrics().avgLatency_ms}ms</span>
       </div>
 
-      <div flex="~" items="center" gap="2">
-        <span text="xs dark-text-tertiary">Tokens:</span>
-        <span text="sm neon-cyan" font="mono">
-          {metrics().totalTokens.input + metrics().totalTokens.output}
-        </span>
-      </div>
-
-      <Show when={props.store.state.bamlCalls.length > 0 || props.store.state.toolCalls.length > 0}>
+      <Show when={props.store.state.spans.length > 0}>
         <button
-          onClick={() => props.store.clearTelemetry()}
+          onClick={() => props.store.clearSpans()}
           m="l-auto"
           p="x-2 y-1"
           text="xs red-400"
@@ -82,19 +68,24 @@ const SummaryBar = (props: { store: TelemetryStore }) => {
         </button>
       </Show>
     </div>
-  );
-};
+  )
+}
 
 // ============================================================================
 // Timeline Event Node Component
 // ============================================================================
 
 const EventNode = (props: {
-  event: TimelineEvent;
-  onExpand: (id: string) => void;
+  span: SpanData
+  onExpand: (id: string) => void
 }) => {
-  const duration = () => getEventDuration(props.event);
-  const hexColor = () => getEventHexColor(props.event);
+  const hexColor = () => getSpanColor(props.span.name)
+  const label = () => getSpanLabel(props.span.name)
+
+  // Map status for display
+  const displayStatus = (): SpanStatus => {
+    return props.span.status
+  }
 
   return (
     <div
@@ -106,19 +97,19 @@ const EventNode = (props: {
       bg="transparent hover:dark-bg-hover"
       rounded="md"
       transition="all"
-      onClick={() => props.onExpand(props.event.id)}
+      onClick={() => props.onExpand(props.span.id)}
       w="full"
     >
-      {/* Status indicator with glow */}
+      {/* Status indicator */}
       <div
         w="3"
         h="3"
         rounded="full"
-        bg={statusColors[props.event.status]}
+        bg={statusColors[displayStatus()]}
         shadow="sm"
       />
 
-      {/* Event label - using inline style for dynamic color */}
+      {/* Event label */}
       <div
         style={{
           color: hexColor(),
@@ -132,28 +123,28 @@ const EventNode = (props: {
           'white-space': 'nowrap'
         }}
       >
-        {getEventLabel(props.event)}
+        {label()}
       </div>
 
       {/* Duration */}
-      <Show when={duration()}>
+      <Show when={props.span.duration_ms}>
         <div text="xs dark-text-tertiary" font="mono">
-          {duration()}ms
+          {Math.round(props.span.duration_ms!)}ms
         </div>
       </Show>
     </div>
-  );
-};
+  )
+}
 
 // ============================================================================
 // Timeline Row Component
 // ============================================================================
 
 const TimelineRow = (props: {
-  event: TimelineEvent;
-  onExpand: (id: string) => void;
+  span: SpanData
+  onExpand: (id: string) => void
 }) => {
-  const isInterface = () => props.event.lane === 'interface';
+  const isInterface = () => props.span.lane === 'interface'
 
   return (
     <div
@@ -170,9 +161,8 @@ const TimelineRow = (props: {
         border="r dark-border-secondary/30"
       >
         <Show when={isInterface()}>
-          <EventNode event={props.event} onExpand={props.onExpand} />
+          <EventNode span={props.span} onExpand={props.onExpand} />
         </Show>
-        {/* Empty cell when event is in other lane - clean, no connector */}
       </div>
 
       {/* Tools Lane (right) */}
@@ -183,13 +173,12 @@ const TimelineRow = (props: {
         items="center"
       >
         <Show when={!isInterface()}>
-          <EventNode event={props.event} onExpand={props.onExpand} />
+          <EventNode span={props.span} onExpand={props.onExpand} />
         </Show>
-        {/* Empty cell when event is in other lane - clean, no connector */}
       </div>
     </div>
-  );
-};
+  )
+}
 
 // ============================================================================
 // Lane Headers Component
@@ -229,7 +218,7 @@ const LaneHeaders = () => (
       <span text="xs dark-text-primary" font="medium">Tools</span>
     </div>
   </div>
-);
+)
 
 // ============================================================================
 // Empty State Component
@@ -256,58 +245,152 @@ const EmptyState = () => (
       <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
     <div text="sm dark-text-secondary" m="t-3">
-      No events yet
+      No spans yet
     </div>
     <div text="xs dark-text-tertiary" m="t-1">
       Send a message to see the timeline
     </div>
   </div>
-);
+)
+
+// ============================================================================
+// Span Detail Overlay Component
+// ============================================================================
+
+const SpanDetailOverlay = (props: {
+  span: SpanData
+  onClose: () => void
+  onDelete: () => void
+}) => {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: "0",
+        "background-color": "rgba(13, 17, 23, 0.95)",
+        "backdrop-filter": "blur(4px)",
+        "z-index": "50",
+        display: "flex",
+        "flex-direction": "column",
+        overflow: "hidden"
+      }}
+    >
+      {/* Header */}
+      <div
+        flex="~"
+        items="center"
+        justify="between"
+        p="4"
+        border="b dark-border-primary"
+      >
+        <div flex="~ col" gap="1">
+          <span text="sm dark-text-primary" font="medium">
+            {props.span.name}
+          </span>
+          <span text="xs dark-text-tertiary">
+            {props.span.duration_ms ? `${Math.round(props.span.duration_ms)}ms` : 'pending'}
+          </span>
+        </div>
+        <div flex="~" gap="2">
+          <button
+            onClick={props.onDelete}
+            p="2"
+            text="red-400"
+            bg="red-600/10 hover:red-600/20"
+            rounded="md"
+            cursor="pointer"
+          >
+            Delete
+          </button>
+          <button
+            onClick={props.onClose}
+            p="2"
+            text="dark-text-secondary"
+            bg="dark-bg-hover hover:dark-bg-tertiary"
+            rounded="md"
+            cursor="pointer"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div flex="1" overflow="auto" p="4">
+        {/* Attributes */}
+        <Show when={Object.keys(props.span.attributes).length > 0}>
+          <div m="b-4">
+            <div text="xs dark-text-tertiary" m="b-2">Attributes</div>
+            <pre
+              text="xs dark-text-primary"
+              bg="dark-bg-tertiary"
+              p="3"
+              rounded="md"
+              overflow="auto"
+            >
+              {JSON.stringify(props.span.attributes, null, 2)}
+            </pre>
+          </div>
+        </Show>
+
+        {/* Events */}
+        <Show when={props.span.events.length > 0}>
+          <div>
+            <div text="xs dark-text-tertiary" m="b-2">Events</div>
+            <For each={props.span.events}>
+              {(event) => (
+                <div
+                  p="2"
+                  m="b-2"
+                  bg="dark-bg-tertiary"
+                  rounded="md"
+                >
+                  <div text="xs neon-cyan" font="medium">{event.name}</div>
+                  <Show when={event.attributes}>
+                    <pre text="xs dark-text-secondary" m="t-1">
+                      {JSON.stringify(event.attributes, null, 2)}
+                    </pre>
+                  </Show>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
+      </div>
+    </div>
+  )
+}
 
 // ============================================================================
 // Main Panel Component
 // ============================================================================
 
 export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
-  // Access store methods via props to maintain reactivity
-  const state = () => props.store.state;
-  const expandEvent = (id: string) => props.store.expandEvent(id);
-  const collapseEvent = () => props.store.collapseEvent();
-  const deleteEvent = (id: string) => props.store.deleteEvent(id);
-  const getEvent = (id: string) => props.store.getEvent(id);
+  const state = () => props.store.state
 
-  // Merge and sort ALL events chronologically (oldest first)
-  // Interface lane: RouteUserMessage, CreateToolResponse
-  // Tools lane: Plan* operations + all tool calls
-  const timelineEvents = createMemo(() => {
-    const all: TimelineEvent[] = [
-      ...state().bamlCalls.map(c => ({
-        ...c,
-        lane: isInterfaceFunction(c.functionName) ? 'interface' as const : 'tools' as const
-      })),
-      ...state().toolCalls.map(c => ({ ...c, lane: 'tools' as const }))
-    ];
-    return all.sort((a, b) =>
-      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
-  });
+  // Sort spans chronologically (oldest first)
+  const timelineSpans = createMemo(() => {
+    return [...state().spans].sort((a, b) => a.startTime - b.startTime)
+  })
 
-  // Get expanded event
-  const expandedEvent = createMemo(() => {
-    const id = state().expandedEventId;
-    if (!id) return null;
-    return getEvent(id);
-  });
+  // Get expanded span
+  const expandedSpan = createMemo(() => {
+    const id = state().expandedSpanId
+    if (!id) return null
+    return props.store.getSpan(id)
+  })
 
+  const handleExpand = (id: string) => props.store.expandSpan(id)
+  const handleClose = () => props.store.collapseSpan()
   const handleDelete = (id: string) => {
-    deleteEvent(id);
-    collapseEvent();
-  };
+    props.store.deleteSpan(id)
+    props.store.collapseSpan()
+  }
 
-  const hasEvents = () => timelineEvents().length > 0;
+  const hasSpans = () => timelineSpans().length > 0
 
   return (
-    <div flex="~ col" h="full" bg="dark-bg-primary" overflow="hidden">
+    <div flex="~ col" h="full" bg="dark-bg-primary" overflow="hidden" position="relative">
       {/* Summary Bar */}
       <SummaryBar store={props.store} />
 
@@ -317,28 +400,28 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
       {/* Timeline Container */}
       <div flex="1" overflow="auto">
         <Show
-          when={hasEvents()}
+          when={hasSpans()}
           fallback={<EmptyState />}
         >
-          <For each={timelineEvents()}>
-            {(event) => (
+          <For each={timelineSpans()}>
+            {(span) => (
               <TimelineRow
-                event={event}
-                onExpand={expandEvent}
+                span={span}
+                onExpand={handleExpand}
               />
             )}
           </For>
         </Show>
       </div>
 
-      {/* Event Detail Overlay */}
-      <Show when={expandedEvent()}>
-        <EventDetailOverlay
-          event={expandedEvent()!}
-          onClose={collapseEvent}
-          onDelete={() => handleDelete(state().expandedEventId!)}
+      {/* Span Detail Overlay */}
+      <Show when={expandedSpan()}>
+        <SpanDetailOverlay
+          span={expandedSpan()!}
+          onClose={handleClose}
+          onDelete={() => handleDelete(state().expandedSpanId!)}
         />
       </Show>
     </div>
-  );
-};
+  )
+}

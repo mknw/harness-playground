@@ -3,23 +3,21 @@
  *
  * Main chat interface that coordinates:
  * - User message input
- * - Agent processing (via API route or inline server function)
+ * - Agent processing via server actions
  * - Message display with tool calls
  * - Graph visualization updates
  *
  * Architecture:
- * - Uses harness-patterns via server wrapper
- * - Telemetry handled by OpenTelemetry (no store prop)
- * - Generic extractors for graph data
+ * - Uses harness-client server actions
+ * - Telemetry handled by OpenTelemetry
+ * - Session ID per component instance
  */
 
-import { createSignal, onMount } from 'solid-js'
+import { createSignal, createUniqueId, onMount, onCleanup } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
-import { AgentOrchestrator } from '~/lib/harness-patterns'
-import type { OrchestratorResult } from '~/lib/harness-patterns'
-import { extractGraphFromToolEvents } from '~/lib/graph/extractors'
+import { processMessage, approveAction, rejectAction, clearSession } from '~/lib/harness-client'
 import type { ElementDefinition } from 'cytoscape'
 
 // ============================================================================
@@ -35,28 +33,15 @@ export interface ChatInterfaceProps {
 // ============================================================================
 
 export const ChatInterface = (props: ChatInterfaceProps) => {
+  const sessionId = createUniqueId()
   const [messages, setMessages] = createSignal<Message[]>([])
   const [isProcessing, setIsProcessing] = createSignal(false)
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
 
-  // Server wrapper - "use server" INSIDE the function (SolidJS requirement)
-  const processMessageServer = async (message: string): Promise<OrchestratorResult> => {
-    "use server"
-    const orchestrator = new AgentOrchestrator()
-    return orchestrator.processMessage(message)
-  }
-
-  const approveOperationServer = async (): Promise<OrchestratorResult> => {
-    "use server"
-    const orchestrator = new AgentOrchestrator()
-    return orchestrator.approveOperation()
-  }
-
-  const rejectOperationServer = async (reason?: string): Promise<OrchestratorResult> => {
-    "use server"
-    const orchestrator = new AgentOrchestrator()
-    return orchestrator.rejectOperation(reason)
-  }
+  onCleanup(() => {
+    // Clean up session when component unmounts
+    clearSession(sessionId)
+  })
 
   onMount(() => {
     // Add welcome message
@@ -81,8 +66,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     setIsProcessing(true)
 
     try {
-      // Process message via server wrapper
-      const result = await processMessageServer(content)
+      // Process message via server action
+      const result = await processMessage(sessionId, content)
 
       // Build assistant message
       const assistantMessage: Message = {
@@ -91,26 +76,16 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         content: result.response,
         timestamp: new Date(),
         // Map pending approval to toolCall for UI display
-        toolCall: result.needsApproval && result.pendingPlan ? {
+        toolCall: result.status === 'paused' && result.data.pendingAction ? {
           type: 'neo4j',
           status: 'pending',
-          tool: result.pendingPlan.toolName,
-          cypher: extractCypherFromPayload(result.pendingPlan.payload),
-          explanation: result.pendingPlan.reasoning,
+          tool: result.data.pendingAction.action,
+          explanation: result.data.pendingAction.reason,
           isReadOnly: false
         } : undefined
       }
 
       setMessages([...messages(), assistantMessage])
-
-      // Extract and update graph from toolEvents (generic extractor)
-      if (result.toolEvents && result.toolEvents.length > 0) {
-        const graphElements = extractGraphFromToolEvents(result.toolEvents)
-        console.log('[ChatInterface] Extracted graph elements:', graphElements.length)
-        if (graphElements.length > 0) {
-          props.onGraphUpdate?.(graphElements)
-        }
-      }
     } catch (error) {
       console.error('Error processing message:', error)
 
@@ -131,7 +106,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
     try {
       // Execute the approved operation
-      const result = await approveOperationServer()
+      const result = await approveAction(sessionId)
 
       // Update the message with executed tool call
       setMessages(messages().map(msg => {
@@ -152,14 +127,6 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         timestamp: new Date()
       }
       setMessages([...messages(), successMessage])
-
-      // Extract and update graph
-      if (result.toolEvents && result.toolEvents.length > 0) {
-        const graphElements = extractGraphFromToolEvents(result.toolEvents)
-        if (graphElements.length > 0) {
-          props.onGraphUpdate?.(graphElements)
-        }
-      }
     } catch (error) {
       console.error('Error executing write query:', error)
 
@@ -189,7 +156,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const handleRejectWrite = async (messageId: string) => {
     try {
       // Reject the pending operation
-      const result = await rejectOperationServer()
+      const result = await rejectAction(sessionId)
 
       // Update the message to show rejection in tool call
       setMessages(messages().map(msg => {
@@ -239,20 +206,4 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       </div>
     </div>
   )
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/**
- * Extract cypher query from plan payload
- */
-function extractCypherFromPayload(payload: string): string | undefined {
-  try {
-    const parsed = JSON.parse(payload)
-    return parsed.query
-  } catch {
-    return payload
-  }
 }

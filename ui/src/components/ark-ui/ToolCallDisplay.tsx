@@ -12,7 +12,7 @@
 
 import { Collapsible } from '@ark-ui/solid/collapsible'
 import { Show } from 'solid-js'
-import type { ToolCallInfo } from '~/lib/baml-agent/server'
+import type { ToolCallInfo } from './types'
 
 interface ToolCallDisplayProps {
   toolCall: ToolCallInfo

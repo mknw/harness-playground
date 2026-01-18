@@ -2,7 +2,7 @@
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
 import { For, Show, createEffect, createSignal } from 'solid-js'
 import type { ElementDefinition } from 'cytoscape'
-import type { ToolCallInfo } from '~/lib/baml-agent/server'
+import type { ToolCallInfo } from './types'
 import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
 
@@ -102,7 +102,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                         text="sm"
                         class="prose-chat"
                         // eslint-disable-next-line solid/no-innerhtml
-                        innerHTML={marked.parse(message.content) as string}
+                        innerHTML={marked.parse(message.content ?? '') as string}
                       />
                     </Show>
 

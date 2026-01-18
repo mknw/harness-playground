@@ -1,48 +1,24 @@
-// code_mode.baml - Multi-tool JavaScript composition
+// code_mode.baml - Multi-tool JavaScript composition controller
 // Handles complex operations that require combining multiple MCP tools
 //
 // Workflow:
-// 1. ExecuteMCPScript generates and runs JavaScript that calls MCP tools
-// 2. EvaluateScriptOutput evaluates if the output answers the user's intent
-// 3. If not sufficient, EvaluateScriptOutput provides guidance for retry
-
-// ============================================================================
-// Data Models
-// ============================================================================
-
-/// Output from a single script execution attempt
-class ScriptExecutionEvent {
-  script string @description("The JavaScript code that was executed")
-  output string @description("The output/result from running the script")
-  error string? @description("Error message if script failed, null if successful")
-}
-
-/// The script to execute
-class MCPScriptPlan {
-  reasoning string @description("Step-by-step thought process (Chain of Thought)")
-  script string @description("JavaScript code to execute that calls MCP tools")
-  description string @description("User-facing status message shown during execution")
-}
-
-/// Evaluation result after checking script output
-class ScriptEvaluationResult {
-  is_sufficient bool @description("True if the output adequately answers the user's intent")
-  explanation string @description("Why the result is sufficient, OR what's missing and how to improve")
-  suggested_approach string? @description("If not sufficient: guidance for next script attempt. null if sufficient")
-}
+// 1. CodeModeController generates JavaScript that calls MCP tools
+// 2. Pattern executes the script
+// 3. CodeModeCritic evaluates if the output answers the user's intent
+// 4. If not sufficient, critic provides guidance for retry
 
 // ============================================================================
 // Functions
 // ============================================================================
 
-/// Generate a JavaScript script that calls MCP tools to fulfill the user's intent
-/// This function is called once per attempt - errors are handled by EvaluateScriptOutput
-function ExecuteMCPScript(
+/// Controller that generates a JavaScript script to orchestrate MCP tool calls
+/// Returns ControllerAction with tool_name="code-mode-executor"
+function CodeModeController(
   user_message: string,
   intent: string,
   available_tools: string[],
   previous_attempts: ScriptExecutionEvent[]
-) -> MCPScriptPlan {
+) -> ControllerAction {
   client GroqWithFallback
   prompt #"
     You are a Code Mode Agent that writes JavaScript to orchestrate MCP tool calls.
@@ -102,31 +78,27 @@ function ExecuteMCPScript(
     }
     return searchResults;
 
-    // Loop through results
-    const items = JSON.parse(read_neo4j_cypher({query: 'MATCH (n) RETURN n.id LIMIT 3'}));
-    const details = [];
-    for (const item of items) {
-      const info = read_neo4j_cypher({query: 'MATCH (n) WHERE n.id = "' + item.id + '" RETURN n'});
-      details.push(JSON.parse(info));
-    }
-    return JSON.stringify(details);
+    OUTPUT FORMAT:
+    - tool_name: Always "code-mode-executor"
+    - tool_args: JSON string containing the script: '{"script": "const x = 1;\\nreturn x;"}'
+    - is_final: false (critic determines completion)
 
     CRITICAL JSON OUTPUT RULE:
-    When outputting the script field, you MUST escape ALL newlines as \n within the JSON string.
-    The script must be a SINGLE LINE in the JSON output with \n for newlines.
-    Example: "const x = 1;\nconst y = 2;\nreturn x + y;"
+    When outputting tool_args, you MUST escape ALL newlines as \\n within the JSON string.
+    The script must be a SINGLE LINE in the JSON output with \\n for newlines.
+    Example: '{"script": "const x = 1;\\nconst y = 2;\\nreturn x + y;"}'
     DO NOT use actual line breaks inside the JSON string value.
 
     {{ ctx.output_format }}
   "#
 }
 
-/// Evaluate whether the script output sufficiently answers the user's intent
-/// Returns evaluation with explanation and optional guidance for retry
-function EvaluateScriptOutput(
+/// Critic that evaluates whether script output answers the user's intent
+/// Returns CriticResult with evaluation and optional retry guidance
+function CodeModeCritic(
   intent: string,
   previous_attempts: ScriptExecutionEvent[]
-) -> ScriptEvaluationResult {
+) -> CriticResult {
   client GroqWithFallback
   prompt #"
     You are evaluating whether MCP script execution results answer a user's intent.
@@ -174,150 +146,23 @@ function EvaluateScriptOutput(
 }
 
 // ============================================================================
-// Extended Evaluation with Persistence
-// ============================================================================
-
-/// Extended evaluation result that also handles tool persistence
-class EvaluationWithPersistence {
-  is_sufficient bool @description("True if the output adequately answers the user's intent")
-  explanation string @description("Why the result is sufficient, OR what's missing and how to improve")
-  suggested_approach string? @description("If not sufficient: guidance for next script attempt. null if sufficient")
-  tool_saved bool @description("True if the tool was saved to repository")
-  saved_tool_name string? @description("Name of the saved tool (if tool_saved=true)")
-}
-
-/// Evaluate script output AND handle persistence decision
-/// This extends EvaluateScriptOutput with tool repository integration
-function EvaluateAndPersist(
-  intent: string,
-  execution_result: ScriptExecutionEvent,
-  should_save: bool,
-  tool_name: string?,
-  tool_description: string?
-) -> EvaluationWithPersistence {
-  client GroqWithFallback
-  prompt #"
-    You are evaluating MCP script execution and deciding on persistence.
-
-    USER INTENT: {{ intent }}
-
-    EXECUTION RESULT:
-    Script executed:
-    ```javascript
-    {{ execution_result.script }}
-    ```
-    {% if execution_result.error %}
-    RESULT: ERROR
-    {{ execution_result.error }}
-    {% else %}
-    RESULT: SUCCESS
-    {{ execution_result.output }}
-    {% endif %}
-
-    PERSISTENCE REQUEST:
-    Should save to repository: {{ should_save }}
-    Suggested tool name: {{ tool_name }}
-    Suggested description: {{ tool_description }}
-
-    YOUR TASKS:
-
-    1. EVALUATE THE OUTPUT
-       - Does the output answer the user's intent?
-       - Is the data complete enough to formulate a useful response?
-       - Did any errors occur that prevent answering the intent?
-
-    2. DECIDE ON PERSISTENCE
-       - ONLY save if ALL of these are true:
-         a) should_save was requested (should_save=true)
-         b) Execution was successful (no error)
-         c) The script produced useful results
-       - If saving: confirm tool_saved=true, provide saved_tool_name
-
-    IF SUFFICIENT (is_sufficient = true):
-    - Provide a clear explanation of why the output answers the intent
-    - Set suggested_approach to null
-    - Confirm persistence decision
-
-    IF NOT SUFFICIENT (is_sufficient = false):
-    - Explain what's missing or went wrong
-    - Provide specific guidance in suggested_approach for the next attempt
-    - Do NOT save failed scripts (tool_saved=false)
-
-    {{ ctx.output_format }}
-  "#
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 
-test EvaluateAndPersist_Success_ShouldSave {
-  functions [EvaluateAndPersist]
-  args {
-    intent "Get the graph schema"
-    execution_result {
-      script: "return get_neo4j_schema()",
-      output: "{\"nodes\": [\"Person\", \"Tech\"], \"relationships\": [\"USES\"]}",
-      error: null
-    }
-    should_save true
-    tool_name "get_graph_overview"
-    tool_description "Fetches the Neo4j graph schema"
-  }
-  @@assert( {{ this.is_sufficient == true }} )
-  @@assert( {{ this.tool_saved == true }} )
-  @@assert( {{ this.saved_tool_name == "get_graph_overview" }} )
-}
-
-test EvaluateAndPersist_Success_NoSave {
-  functions [EvaluateAndPersist]
-  args {
-    intent "Count nodes named exactly 'test123'"
-    execution_result {
-      script: "return read_neo4j_cypher({query: 'MATCH (n) WHERE n.name = \"test123\" RETURN count(n)'})",
-      output: "[{\"count(n)\": 0}]",
-      error: null
-    }
-    should_save false
-    tool_name null
-    tool_description null
-  }
-  @@assert( {{ this.is_sufficient == true }} )
-  @@assert( {{ this.tool_saved == false }} )
-}
-
-test EvaluateAndPersist_Error_NoSave {
-  functions [EvaluateAndPersist]
-  args {
-    intent "Get user data"
-    execution_result {
-      script: "return read_neo4j_cypher({query: 'MATCH (n:User) RETURN n'})",
-      output: "",
-      error: "Connection refused"
-    }
-    should_save true
-    tool_name "get_users"
-    tool_description "Get all users"
-  }
-  @@assert( {{ this.is_sufficient == false }} )
-  @@assert( {{ this.tool_saved == false }} )
-  @@assert( {{ this.suggested_approach != null }} )
-}
-
-test ExecuteMCPScript_Simple_Query {
-  functions [ExecuteMCPScript]
+test CodeModeController_Simple_Query {
+  functions [CodeModeController]
   args {
     user_message "Show me what's in the graph"
     intent "Query the knowledge graph to see its contents"
     available_tools ["read_neo4j_cypher", "get_neo4j_schema"]
     previous_attempts []
   }
-  @@assert( {{ this.script.length > 10 }} )
-  @@assert( {{ this.reasoning.length > 0 }} )
+  @@assert( {{ this.tool_name == "code-mode-executor" }} )
+  @@assert( {{ this.is_final == false }} )
 }
 
-test ExecuteMCPScript_With_Previous_Error {
-  functions [ExecuteMCPScript]
+test CodeModeController_With_Previous_Error {
+  functions [CodeModeController]
   args {
     user_message "Count all nodes"
     intent "Get a count of nodes in the graph"
@@ -330,11 +175,11 @@ test ExecuteMCPScript_With_Previous_Error {
       }
     ]
   }
-  @@assert( {{ this.script.length > 10 }} )
+  @@assert( {{ this.tool_name == "code-mode-executor" }} )
 }
 
-test EvaluateScriptOutput_Sufficient {
-  functions [EvaluateScriptOutput]
+test CodeModeCritic_Sufficient {
+  functions [CodeModeCritic]
   args {
     intent "Count nodes in the graph"
     previous_attempts [
@@ -348,8 +193,8 @@ test EvaluateScriptOutput_Sufficient {
   @@assert( {{ this.is_sufficient == true }} )
 }
 
-test EvaluateScriptOutput_Insufficient {
-  functions [EvaluateScriptOutput]
+test CodeModeCritic_Insufficient {
+  functions [CodeModeCritic]
   args {
     intent "Find all Person nodes with their relationships"
     previous_attempts [

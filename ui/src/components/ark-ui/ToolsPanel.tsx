@@ -17,10 +17,11 @@ import {
   toggleTool,
   getAvailableTools,
   MINIMAL_TOOLS,
+  fetchCodedTools,
   type ExecutionMode,
-  type CatalogMode
-} from '~/lib/baml-agent/tool-config';
-import { fetchCodedTools, type CodedTool } from '~/lib/baml-agent/tool-repository';
+  type CatalogMode,
+  type CodedTool
+} from '~/lib/tool-config';
 
 // ============================================================================
 // Component

@@ -1,15 +1,34 @@
 /**
  * Generic Event Extractors
  *
- * Tool-agnostic extraction of data from ToolEvents.
+ * Tool-agnostic extraction of data from tool events.
  * Each extractor handles a specific data format.
  *
  * This design allows adding new extractors for different data sources
  * without changing the core harness-patterns library.
  */
 
-import type { ToolEvent } from '~/lib/harness-patterns';
 import type { ElementDefinition } from 'cytoscape';
+
+// ============================================================================
+// Tool Event Type (local definition)
+// ============================================================================
+
+/**
+ * Generic tool event structure for extractors.
+ * Matches the shape of events from tool execution.
+ */
+export interface ToolEvent {
+  status_code: number;
+  status_description: string;
+  operation: string;
+  data: unknown;
+  n_turn: number;
+  stats?: {
+    duration_ms?: number;
+    token_count?: number;
+  };
+}
 import {
   parseNeo4jResults,
   transformNeo4jToCytoscape
