@@ -1,459 +1,443 @@
 # Harness Patterns
 
-A lean, composable framework for server-side agentic tool execution patterns.
+Functional, composable framework for agentic tool execution.
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    orchestrator.server.ts                       │
-│  High-level API: simpleNeo4jLoop, webSearchLoop, codeModeLoop   │
-│  Returns: { response, telemetry } to client                     │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      patterns.server.ts                         │
-│  Composable patterns with OpenTelemetry spans                   │
-│  SimpleLoop, ExecutorEvaluator, CodeMode                        │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-┌──────────────────────────┐    ┌──────────────────────────┐
-│   planners.server.ts     │    │   mcp-client.server.ts   │
-│  BAML function wrappers  │    │  MCP SDK tool execution  │
-│  (neo4jOp, webSearchOp,  │    │  (callTool, listTools)   │
-│   mcpOp, codePlannerOp)  │    │                          │
-└──────────────────────────┘    └──────────────────────────┘
+BAML Functions ──┐
+                 ├──► Patterns ──► Router ──► Harness ──► Agent
+MCP Tools ───────┘
 ```
 
-## Design Principles
+**Key Principle**: BAML functions are passed directly to patterns. No intermediate wrappers needed.
 
-### 1. Server-Only Execution
-
-All harness-patterns code runs exclusively on the server. Files use `.server.ts` suffix.
-Only the final response and telemetry summary are sent to the client.
+## Core Concepts
 
 ```typescript
-// Server-side check
-function assertServer() {
-  if (typeof window !== 'undefined') {
-    throw new Error('harness-patterns must run on server');
-  }
+// BAML functions are passed directly to patterns (bind to preserve 'this' context)
+simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema })
+actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all)
+
+// Patterns compose into routers
+router(routes, { neo4j: pattern1, web: pattern2 })
+
+// Harness chains patterns and executes them
+harness(router(...), synthesizer({ mode: 'thread' }))
+```
+
+## UnifiedContext Architecture
+
+The framework uses **UnifiedContext** as the single source of truth for session state:
+
+- **Session Persistence** - Serialize/deserialize full session state
+- **Pattern Isolation** - Each pattern works in isolated scope, commits on completion
+- **Flexible Event Querying** - Select events by pattern, type, recency via `EventView`
+
+### Core Types
+
+```typescript
+// Source of truth for session state
+interface UnifiedContext<T> {
+  sessionId: string
+  createdAt: number
+  events: ContextEvent[]      // Full event stream
+  status: CtxStatus           // 'running' | 'paused' | 'done' | 'error'
+  error?: string
+  data: T                     // Accumulated pattern data
+  input: string               // Current user input
+}
+
+// Events tagged with pattern origin
+interface ContextEvent {
+  type: EventType
+  ts: number
+  patternId: string
+  data: unknown
+}
+
+type EventType =
+  | 'user_message' | 'assistant_message'
+  | 'tool_call' | 'tool_result'
+  | 'controller_action' | 'critic_result'
+  | 'pattern_enter' | 'pattern_exit'
+  | 'approval_request' | 'approval_response'
+  | 'error'
+
+// Isolated workspace for each pattern
+interface PatternScope<T> {
+  id: string
+  events: ContextEvent[]      // Local events (not yet committed)
+  data: T
+  startTime: number
+}
+
+// Pattern function signature
+type ScopedPattern<T> = (scope: PatternScope<T>, view: EventView) => Promise<PatternScope<T>>
+
+// ConfiguredPattern wraps pattern with metadata
+interface ConfiguredPattern<T> {
+  name: string
+  fn: ScopedPattern<T>
+  config: ResolvedConfig
 }
 ```
 
-### 2. OpenTelemetry Integration
-
-- **BAML functions**: Use built-in OpenTelemetry compatibility (automatic spans)
-- **Patterns**: Create explicit spans via `@opentelemetry/api`
-- **No context providers**: Telemetry flows through OTel, not React context
+### BAML Types
 
 ```typescript
-import { trace } from '@opentelemetry/api';
+// Controller output (standardized across all BAML controllers)
+interface ControllerAction {
+  reasoning: string      // Chain-of-thought
+  tool_name: string      // Tool to call or 'Return'
+  tool_args: string      // JSON payload
+  status: string         // User-facing message
+  is_final: boolean      // Exit loop flag
+}
 
-const tracer = trace.getTracer('harness-patterns');
+// Critic result for actor-critic pattern
+interface CriticResult {
+  is_sufficient: boolean
+  explanation: string
+  suggested_approach?: string
+}
+```
 
-async function simpleLoop(ctx: PlannerContext, options: SimpleLoopOptions) {
-  return tracer.startActiveSpan('pattern.simpleLoop', async (span) => {
-    span.setAttribute('maxTurns', options.maxTurns);
-    span.setAttribute('serverName', options.serverName);
-    try {
-      // ... pattern logic
-      return result;
-    } finally {
-      span.end();
+## API Reference
+
+### `Tools()`
+
+Fetch MCP tools and group by server namespace.
+
+```typescript
+const tools = await Tools()
+tools.neo4j  // ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
+tools.web    // ['search', 'fetch', 'fetch_content']
+tools.all    // all tool names
+```
+
+### `simpleLoop(controller, tools, config?)`
+
+ReAct-style decide-execute loop. Calls BAML controller directly.
+
+```typescript
+simpleLoop(b.Neo4jController.bind(b), tools.neo4j, {
+  patternId: 'neo4j-query',
+  schema,
+  maxTurns: 5
+})
+
+interface SimpleLoopConfig extends PatternConfig {
+  schema?: string       // Injected as 5th param to controller
+  maxTurns?: number     // Default: 5
+}
+```
+
+**How it works:**
+1. Extract params from context: `input`, `intent`, `previous_results`, `turn`
+2. Call BAML controller with extracted params (+ optional schema)
+3. Execute returned tool via MCP
+4. Loop until `is_final` or max turns
+
+### `actorCritic(actor, critic, tools, config?)`
+
+Generate-evaluate loop with retry. For code mode workflows.
+
+```typescript
+actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all, {
+  patternId: 'code-mode',
+  maxRetries: 3
+})
+
+interface ActorCriticConfig extends PatternConfig {
+  maxRetries?: number   // Default: 3
+}
+```
+
+**How it works:**
+1. Actor generates script/action
+2. Execute via MCP
+3. Critic evaluates result
+4. Retry with feedback if insufficient
+5. Exit when sufficient or max retries
+
+### `withApproval(pattern, predicate)`
+
+Wrap pattern to pause for user approval on matching actions.
+
+```typescript
+withApproval(
+  simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema }),
+  approvalPredicates.writes
+)
+
+// Built-in predicates
+approvalPredicates.writes     // tool_name includes 'write'
+approvalPredicates.deletes    // tool_name includes 'delete'
+approvalPredicates.mutations  // write, delete, create, update, insert, remove
+```
+
+### `synthesizer(config)`
+
+Synthesizes final response from previous pattern's output using BAML `CreateToolResponse`.
+
+```typescript
+synthesizer({ mode: 'thread', patternId: 'response-synth' })
+
+// Three modes
+synthesizer({ mode: 'message' })   // Receives only response string
+synthesizer({ mode: 'response' })  // Receives { data, response } object
+synthesizer({ mode: 'thread' })    // Receives full loop history
+
+// Custom synthesis function
+synthesizer({
+  mode: 'response',
+  synthesize: async (input) => `Found: ${input.response}`
+})
+```
+
+### `router(routes, patterns)`
+
+Route input to patterns based on intent classification via BAML.
+
+```typescript
+const routes = {
+  neo4j: 'Database queries and graph operations',
+  web_search: 'Web lookups and information retrieval',
+  code_mode: 'Multi-tool script composition'
+}
+
+router(routes, {
+  neo4j: neo4jPattern,
+  web_search: webPattern,
+  code_mode: codePattern
+})
+```
+
+### `chain(ctx, patterns)`
+
+Sequential composition of patterns within a UnifiedContext.
+
+```typescript
+await chain(ctx, [pattern1, pattern2, pattern3])
+```
+
+### `harness(...patterns)`
+
+Compose patterns into a callable agent.
+
+```typescript
+const agent = harness(routerPattern, synthesizerPattern)
+const result = await agent('Show me all Person nodes', sessionId)
+
+interface HarnessResultScoped<T> {
+  response: string
+  data: T
+  status: 'running' | 'paused' | 'done' | 'error'
+  duration_ms: number
+  context: UnifiedContext<T>
+  serialized: string  // JSON for session persistence
+}
+```
+
+### `resumeHarness(serialized, patterns, approved)`
+
+Resume a paused harness after approval/rejection.
+
+```typescript
+const resumed = await resumeHarness(serializedContext, patterns, true)
+```
+
+### `continueSession(serialized, patterns, newInput)`
+
+Continue a session with new user input.
+
+```typescript
+const continued = await continueSession(serializedContext, patterns, 'Follow-up question')
+```
+
+## EventView Query API
+
+Fluent API for filtering events from UnifiedContext:
+
+```typescript
+const view = createEventView(ctx)
+
+// Pattern selectors
+view.fromPattern('neo4j-query')
+view.fromPatterns(['neo4j-query', 'web-enrich'])
+view.fromLastPattern()
+view.fromAll()
+
+// Type selectors
+view.ofType('tool_result')
+view.ofTypes(['tool_call', 'tool_result'])
+view.tools()      // Shorthand: tool_call + tool_result
+view.messages()   // Shorthand: user_message + assistant_message
+view.actions()    // Shorthand: controller_action
+
+// Quantity selectors
+view.last(5)
+view.first(3)
+view.since(timestamp)
+
+// Execution
+view.get()        // ContextEvent[]
+view.serialize()  // XML format for LLM
+view.exists()     // boolean
+view.count()      // number
+```
+
+## Configuration System
+
+Two orthogonal configuration axes:
+
+| Axis | Controls | Options |
+|------|----------|---------|
+| **commitStrategy** | *When* to commit | `'always'`, `'on-success'`, `'last'`, `'never'` |
+| **trackHistory** | *What types* to track | `true`, `false`, `EventType`, or `EventType[]` |
+
+```typescript
+interface PatternConfig {
+  patternId?: string
+  commitStrategy?: CommitStrategy
+  trackHistory?: TrackHistory
+  viewConfig?: ViewConfig
+}
+```
+
+**Defaults by pattern:**
+- `simpleLoop`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
+- `actorCritic`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
+- `synthesizer`: `trackHistory: 'assistant_message'`, `commitStrategy: 'always'`
+
+## Full Example
+
+```typescript
+import { b } from '../../../baml_client'
+import {
+  harness,
+  router,
+  simpleLoop,
+  actorCritic,
+  synthesizer,
+  withApproval,
+  approvalPredicates,
+  Tools,
+  callTool
+} from '../harness-patterns'
+
+async function getSchema(): Promise<string> {
+  const result = await callTool('get_neo4j_schema', {})
+  return result.success ? JSON.stringify(result.data) : ''
+}
+
+async function createPatterns() {
+  const tools = await Tools()
+  const schema = await getSchema()
+
+  // Bind BAML methods to preserve 'this' context
+  const neo4jController = b.Neo4jController.bind(b)
+  const webController = b.WebSearchController.bind(b)
+  const codeController = b.CodeModeController.bind(b)
+  const codeCritic = b.CodeModeCritic.bind(b)
+
+  const neo4jPattern = withApproval(
+    simpleLoop(neo4jController, tools.neo4j ?? [], {
+      patternId: 'neo4j-query',
+      schema
+    }),
+    approvalPredicates.writes
+  )
+
+  const webPattern = simpleLoop(webController, tools.web ?? [], {
+    patternId: 'web-search'
+  })
+
+  const codePattern = actorCritic(codeController, codeCritic, tools.all, {
+    patternId: 'code-mode'
+  })
+
+  const routerPattern = router(
+    {
+      neo4j: 'Database queries and graph operations',
+      web_search: 'Web lookups and information retrieval',
+      code_mode: 'Multi-tool script composition'
+    },
+    {
+      neo4j: neo4jPattern,
+      web_search: webPattern,
+      code_mode: codePattern
     }
-  });
+  )
+
+  const responseSynth = synthesizer({
+    mode: 'thread',
+    patternId: 'response-synth'
+  })
+
+  return [routerPattern, responseSynth]
 }
+
+// Usage
+const patterns = await createPatterns()
+const agent = harness(...patterns)
+const result = await agent('Show me all Person nodes', 'session-123')
 ```
 
-### 3. Standalone Module
+## OpenTelemetry
 
-No `"use server"` directives. This module will be packaged independently.
-Server-side enforcement is via runtime checks, not framework directives.
+All patterns include built-in OTel tracing with `CompactSpanExporter`:
 
-### 4. Tool-Agnostic Operations
-
-Read/Write are abstract operations. BAML `@alias` handles mapping:
-```baml
-enum Neo4jToolName {
-  Read @alias("read_neo4j_cypher")
-  Write @alias("write_neo4j_cypher")
-}
+```
+[router] → neo4j (intent: "Query graph data")
+[simpleLoop] neo4j-query ✓ (1234ms)
+  [tool] read_neo4j_cypher ✓ (456ms)
+[harness] Session cl-3 completed in 1500ms
 ```
 
-### 5. MCP-First Execution
-
-All tool execution routes through MCP gateway. No direct driver calls.
-
----
+Span names:
+- `harness.run` - Top-level span
+- `harness.resume` - Resume from paused state
+- `harness.continue` - Continue session with new input
+- `router` - Intent classification
+- `pattern.simpleLoop` - Decide-execute loop
+- `pattern.actorCritic` - Generate-evaluate loop
+- `pattern.withApproval` - Approval flow
+- `pattern.chain` - Sequential composition
+- `pattern.synthesizer` - Response synthesis
+- `controller` / `actor` / `critic` - BAML function calls
+- `tool.call` - MCP tool execution
 
 ## File Structure
 
 ```
 harness-patterns/
-├── index.ts                    # Public exports
-├── types.ts                    # Shared types/interfaces
-├── assert.server.ts            # Server-side assertion utilities
-├── state.server.ts             # Thread class, serialization
-├── mcp-client.server.ts        # MCP SDK wrapper
-├── planners.server.ts          # BAML operation wrappers
-├── patterns.server.ts          # Composable loop patterns + OTel spans
-├── orchestrator.server.ts      # High-level API surface
-└── README.md
+├── index.ts              # Public exports
+├── types.ts              # Core types (UnifiedContext, PatternScope, etc.)
+├── context.server.ts     # Context factory and helpers
+├── tools.server.ts       # Tools() wrapper
+├── router.server.ts      # router()
+├── harness.server.ts     # harness(), resumeHarness(), continueSession()
+├── patterns/
+│   ├── index.ts
+│   ├── simpleLoop.server.ts
+│   ├── actorCritic.server.ts
+│   ├── withApproval.server.ts
+│   ├── chain.server.ts
+│   ├── synthesizer.server.ts
+│   └── event-view.server.ts  # EventViewImpl
+├── state.server.ts       # Thread (conversation history)
+├── mcp-client.server.ts  # callTool(), listTools()
+├── routing.server.ts     # BAML router integration
+└── assert.server.ts      # Server-only guards
 ```
 
----
-
-## Module Specifications
-
-### `types.ts`
-
-Shared types (no server-side code):
-
-```typescript
-// Thread context for planners
-export interface PlannerContext {
-  thread: Thread;
-  intent: string;
-  previousResults?: ToolEvent[];
-  turn: number;
-}
-
-// Consistent pattern output
-export interface PatternResult {
-  toolEvents: ToolEvent[];
-  finalResult: unknown;
-  threadEvents?: SerializedThread;
-  metadata: {
-    turnsUsed: number;
-    exitReason: 'return' | 'max_turns' | 'error' | 'approval_needed';
-  };
-}
-
-// MCP tool description
-export interface MCPToolDescription {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-// Tool execution plan
-export interface ToolExecutionPlan {
-  reasoning: string;
-  toolName: string;
-  payload: string;
-  description: string;
-  isReturn: boolean;
-}
-
-// Tool event from execution
-export interface ToolEvent {
-  status_code: number;
-  status_description: string;
-  operation: string;
-  data: unknown;
-  n_turn: number;
-  stats?: {
-    duration_ms?: number;
-    token_count?: number;
-  };
-}
-
-// Final output to client
-export interface OrchestratorResult {
-  response: string;
-  telemetry: TelemetrySummary;
-  needsApproval?: boolean;
-  pendingPlan?: ToolExecutionPlan;
-}
-
-export interface TelemetrySummary {
-  totalDuration_ms: number;
-  turnsUsed: number;
-  toolCalls: number;
-  exitReason: string;
-}
-```
-
-### `assert.server.ts`
-
-Runtime server-side enforcement:
-
-```typescript
-export function assertServer(): void {
-  if (typeof window !== 'undefined') {
-    throw new Error('harness-patterns must run on server');
-  }
-}
-
-export function assertServerOnImport(): void {
-  assertServer();
-}
-```
-
-### `mcp-client.server.ts`
-
-MCP SDK wrapper (server-only):
-
-```typescript
-import { assertServerOnImport } from './assert.server';
-assertServerOnImport();
-
-export async function getMcpClient(): Promise<Client>;
-export async function callTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult>;
-export async function listTools(): Promise<MCPToolDescription[]>;
-export async function closeMcpClient(): Promise<void>;
-```
-
-### `planners.server.ts`
-
-BAML operation wrappers with OTel spans:
-
-```typescript
-import { assertServerOnImport } from './assert.server';
-import { trace } from '@opentelemetry/api';
-assertServerOnImport();
-
-const tracer = trace.getTracer('harness-patterns.planners');
-
-export async function neo4jOp(ctx: PlannerContext): Promise<ToolExecutionPlan>;
-export async function webSearchOp(ctx: PlannerContext): Promise<ToolExecutionPlan>;
-export async function mcpOp(
-  ctx: PlannerContext,
-  serverName: string,
-  tools?: MCPToolDescription[]
-): Promise<ToolExecutionPlan>;
-export async function codePlannerOp(
-  ctx: PlannerContext,
-  availableTools: MCPToolDescription[],
-  existingCodedTools: CodedTool[]
-): Promise<ToolExecutionPlan>;
-export async function evaluateScriptOp(
-  intent: string,
-  executionEvents: ScriptExecutionEvent[]
-): Promise<ScriptEvaluationResult>;
-export async function createResponseOp(
-  toolResults: ToolEvent[],
-  intent: string
-): Promise<string>;
-```
-
-### `patterns.server.ts`
-
-Composable patterns with OpenTelemetry instrumentation:
-
-```typescript
-import { assertServerOnImport } from './assert.server';
-import { trace, SpanStatusCode } from '@opentelemetry/api';
-assertServerOnImport();
-
-const tracer = trace.getTracer('harness-patterns.patterns');
-
-// Pattern 1: Simple Loop
-export async function simpleLoop(
-  context: PlannerContext,
-  options: {
-    plannerOp: PlannerFn;
-    serverName: string;
-    maxTurns: number;
-  }
-): Promise<PatternResult> {
-  return tracer.startActiveSpan('pattern.simpleLoop', async (span) => {
-    span.setAttribute('pattern.type', 'simpleLoop');
-    span.setAttribute('pattern.maxTurns', options.maxTurns);
-    span.setAttribute('pattern.serverName', options.serverName);
-
-    try {
-      // ... loop logic with child spans per turn
-      span.setStatus({ code: SpanStatusCode.OK });
-      return result;
-    } catch (error) {
-      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-      throw error;
-    } finally {
-      span.end();
-    }
-  });
-}
-
-// Pattern 2: Executor-Evaluator Loop
-export async function executorEvaluatorLoop(
-  context: PlannerContext,
-  mcpToolInfo: MCPToolDescription[],
-  options: {
-    serverNames: string[];
-    maxTurns: number;
-    executor?: PlannerFn;
-    evaluator?: EvaluatorFn;
-  }
-): Promise<PatternResult>;
-
-// Pattern 3: Code Mode Loop
-export async function codeModeLoop(
-  context: PlannerContext,
-  options: {
-    maxTurns: number;
-    createTools: boolean;
-    existingCodedTools: CodedTool[];
-    mcpTools: MCPToolDescription[];
-  }
-): Promise<PatternResult & { newCodedTools?: CodedTool[] }>;
-
-// Pattern 4: Response Wrapper
-export async function withResponse(
-  patternResult: PatternResult,
-  intent: string,
-  responseCallback?: typeof createResponseOp
-): Promise<PatternResult & { response: string }>;
-```
-
-### `orchestrator.server.ts`
-
-High-level API returning only response + telemetry to client:
-
-```typescript
-import { assertServerOnImport } from './assert.server';
-import { trace } from '@opentelemetry/api';
-assertServerOnImport();
-
-const tracer = trace.getTracer('harness-patterns.orchestrator');
-
-export class AgentOrchestrator {
-  private thread: Thread;
-  private pendingPlan: ToolExecutionPlan | null = null;
-
-  constructor() {
-    assertServer();
-    this.thread = new Thread();
-  }
-
-  // All methods return OrchestratorResult (response + telemetry only)
-  async processMessage(message: string): Promise<OrchestratorResult>;
-  async neo4jLoop(message: string): Promise<OrchestratorResult>;
-  async webSearchLoop(message: string): Promise<OrchestratorResult>;
-  async codeModeLoop(message: string): Promise<OrchestratorResult>;
-
-  // Approval flow
-  hasPendingApproval(): boolean;
-  async approveOperation(): Promise<OrchestratorResult>;
-  async rejectOperation(reason?: string): Promise<OrchestratorResult>;
-
-  // State management
-  clearConversation(): void;
-}
-```
-
----
-
-## OpenTelemetry Span Hierarchy
-
-```
-orchestrator.processMessage
-├── routing.RouteUserMessage          (BAML auto-span)
-├── pattern.simpleLoop
-│   ├── turn.1
-│   │   ├── planner.neo4jOp
-│   │   │   └── baml.PlanNeo4jOperation  (BAML auto-span)
-│   │   └── mcp.callTool
-│   ├── turn.2
-│   │   └── ...
-│   └── turn.N
-└── response.createResponseOp
-    └── baml.CreateToolResponse       (BAML auto-span)
-```
-
----
-
-## BAML Functions Required
-
-### Existing (in `ui/baml_src/`)
-
-| Function | File | Purpose |
-|----------|------|---------|
-| `RouteUserMessage` | routing.baml | Intent detection, namespace routing |
-| `PlanNeo4jOperation` | neo4j.baml | Neo4j-specific planning |
-| `PlanWebSearch` | web_search.baml | Web search planning |
-| `ExecuteMCPScript` | code_mode.baml | Code mode script generation |
-| `EvaluateScriptOutput` | code_mode.baml | Script output evaluation |
-| `CreateToolResponse` | response.baml | User-facing response synthesis |
-
-### New (to create)
-
-| Function | File | Purpose |
-|----------|------|---------|
-| `PlanMCP` | mcp.baml | Generic MCP tool planning |
-
----
-
-## Migration Plan
-
-### Files to Delete
-- `agent.ts` (replaced by `planners.server.ts`)
-- `server.ts` (logic moves to orchestrator + planners)
-- `telemetry.ts` (replaced by OTel)
-- `telemetry-store.ts` (replaced by OTel exporters)
-- `tool-config.ts` (simplify)
-- `tool-repository.ts` (defer to later)
-- All `__tests__/` (rewrite minimal tests)
-
-### Files to Rename
-- `state.ts` → `state.server.ts`
-- `mcp-client.ts` → `mcp-client.server.ts`
-- `orchestrator.ts` → `orchestrator.server.ts`
-
-### Files to Create
-- `types.ts`: Shared interfaces (no server code)
-- `assert.server.ts`: Server-side checks
-- `planners.server.ts`: BAML wrappers
-- `patterns.server.ts`: Pattern implementations
-- `index.ts`: Public exports
-
----
-
-## Client Integration
-
-The client only receives `OrchestratorResult`:
-
-```typescript
-// Server-side (e.g., SolidStart API route)
-import { AgentOrchestrator } from './harness-patterns';
-
-export async function POST(request: Request) {
-  const { message } = await request.json();
-  const orchestrator = new AgentOrchestrator();
-  const result = await orchestrator.processMessage(message);
-  return Response.json(result);
-}
-
-// Client-side
-const response = await fetch('/api/agent', {
-  method: 'POST',
-  body: JSON.stringify({ message: 'Show me all nodes' })
-});
-const { response: text, telemetry } = await response.json();
-```
-
----
-
-## Usage Example
-
-```typescript
-import { AgentOrchestrator } from './harness-patterns';
-
-// Server-side only
-const agent = new AgentOrchestrator();
-
-// Process message - returns response + telemetry
-const result = await agent.processMessage("Show me all Person nodes");
-console.log(result.response);        // User-facing text
-console.log(result.telemetry);       // { totalDuration_ms, turnsUsed, toolCalls, exitReason }
-
-// Handle approval flow
-if (result.needsApproval) {
-  const approved = await agent.approveOperation();
-  console.log(approved.response);
-}
-```
+## Design Principles
+
+1. **BAML functions are first-class** - Pass them directly to patterns (use `.bind()`)
+2. **Patterns extract params** - Patterns pull data from context and call BAML
+3. **Config injects metadata** - Optional config for things like schema injection
+4. **OTel is built-in** - Tracing in patterns, not in adapters
+5. **Server-only enforcement** - `.server.ts` files with runtime guards
+6. **Session persistence** - Full context serializable for multi-turn conversations
