@@ -18,15 +18,61 @@ The MCP Gateway is Docker's tool for managing and running MCP (Model Context Pro
 ┌─────────────────────────────────────────────────────────────┐
 │  MCP Gateway (docker-compose service)                       │
 │  Port: 8811 | Transport: streaming                          │
-│  Config: docker-compose.yaml:37-56                          │
+│  Config: docker-compose.yaml:37-59                          │
 └─────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-       ┌──────────┐    ┌──────────┐    ┌──────────┐
-       │neo4j-    │    │ fetch    │    │web_search│
-       │cypher    │    │          │    │(DuckDuck)│
-       └──────────┘    └──────────┘    └──────────┘
+            │                                │
+            │  MCP servers (containers)      │  Backend services
+            ▼                                ▼
+┌────────┐┌──────┐┌───────┐┌──────┐    ┌────────┐
+│neo4j-  ││fetch ││web_   ││cont- │    │ neo4j  │ :7687
+│cypher  ││      ││search ││ext7  │    │        │ :7474
+└────────┘└──────┘└───────┘└──────┘    └────────┘
+┌───────┐┌────────┐┌──────┐┌──────┐   ┌──────────┐
+│rust-  ││github  ││mem-  ││data- │   │ postgres │ :5432
+│mcp-fs ││        ││ory   ││base  │   │          │
+└───────┘└────────┘└──────┘└──────┘   └──────────┘
+                   ┌──────┐            ┌────────┐
+                   │redis │            │ redis  │ :6379
+                   └──────┘            └────────┘
+```
+
+### Registered Servers
+
+| Server | Title | Tools | Auth | Backend |
+|--------|-------|-------|------|---------|
+| `neo4j-cypher` | Neo4j Cypher | `get_neo4j_schema`, `read_neo4j_cypher`, `write_neo4j_cypher` | Password (hardcoded) | neo4j container |
+| `fetch` | Fetch | `fetch` | None | - |
+| `web_search` | DuckDuckGo | `search`, `fetch_content` | None | - |
+| `context7` | Context7 | `resolve-library-id`, `get-library-docs` | None | - |
+| `rust-mcp-filesystem` | Rust Filesystem | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more | None (volume mounts) | - |
+| `github` | GitHub | `search_repositories`, `search_code`, `list_issues`, `get_pull_request`, +8 more | PAT via `mcp-config-set` | - |
+| `memory` | Memory | `create_entities`, `create_relations`, `search_nodes`, `read_graph`, +5 more | None (volume) | - |
+| `redis` | Redis | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more | Password (hardcoded) | redis container |
+| `database-server` | MCP Database Server | `query_database`, `list_tables`, `describe_table`, `connect_to_database`, +2 more | URL (hardcoded) | postgres container |
+
+### Configuration Strategy
+
+The gateway supports two mechanisms for providing credentials to MCP servers:
+
+| Mechanism | Set via | Requires |
+|-----------|---------|----------|
+| `env:` templates (`{{server.key}}`) | `mcp-config.yaml` or `mcp-config-set` tool | Config values in mcp-config.yaml |
+| `secrets:` entries | `--secrets` flag (Docker Desktop or .env file) | Secrets provider on gateway |
+
+**This project's approach**: hardcode credentials for infrastructure we control (neo4j, redis, postgres) in `mcp-config.yaml`, matching the container defaults. Only user-provided credentials (like GitHub PAT) use the env template hack for runtime configuration via `mcp-config-set`.
+
+| Server | Credential | Strategy |
+|--------|-----------|----------|
+| neo4j-cypher | `password` | Hardcoded in mcp-config.yaml (matches `NEO4J_AUTH=neo4j/password`) |
+| redis | `password` | Hardcoded in mcp-config.yaml (empty, alpine default) |
+| database-server | `database_url` | Hardcoded in mcp-config.yaml (matches postgres container) |
+| github | `personal_access_token` | User sets via `mcp-config-set` at runtime |
+
+For `github`, the catalog duplicates the secret as an `env:` entry with a `{{github.personal_access_token}}` template so `mcp-config-set` can provide the value without needing the `--secrets` provider:
+
+```typescript
+// Agent or user sets GitHub PAT at runtime
+mcp-config-set(server: "github", config: { personal_access_token: "ghp_xxx" })
 ```
 
 ### Configuration Files (Source of Truth)
@@ -34,8 +80,8 @@ The MCP Gateway is Docker's tool for managing and running MCP (Model Context Pro
 | File | Purpose | Verify |
 |------|---------|--------|
 | `docker-compose.yaml:37-56` | Gateway service definition | Port 8811, servers list |
-| `custom-catalog.yaml` | MCP server definitions with env mappings | neo4j-cypher, fetch, web_search |
-| `mcp-config.yaml` | Server connection parameters | Neo4j URI, credentials |
+| `custom-catalog.yaml` | MCP server definitions with env mappings | All 10 servers |
+| `mcp-config.yaml` | Server connection parameters and defaults | Neo4j, Redis, Postgres credentials; GitHub PAT (user-provided) |
 
 ### Current Docker Compose Configuration
 
@@ -46,15 +92,18 @@ mcp-gateway:
   image: docker/mcp-gateway
   restart: unless-stopped
   command:
-    - --servers=neo4j-cypher,fetch,web_search
+    - --enable-all-servers
     - --config=/mcp/config.yaml
     - --catalog=/mcp/custom-catalog.yaml
     - --transport=streaming
     - --port=8811
+    - --verbose
   volumes:
     - /var/run/docker.sock:/var/run/docker.sock
-    - ./mcp-config.yaml:/mcp/config.yaml:ro
-    - ./custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+    - ./configs/mcp-config.yaml:/mcp/config.yaml:ro
+    - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+    - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
+    - ./docker-config.json:/root/.docker/config.json:ro
   ports:
     - "8811:8811"
   networks:

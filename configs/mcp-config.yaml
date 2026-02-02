@@ -11,3 +11,31 @@ fetch:
 
 web_search:
   enabled: true
+
+context7:
+  enabled: true
+
+rust-mcp-filesystem:
+  enabled: true
+  allow_write: true
+  enable_roots: false
+  allowed_directories:
+    - /workspace
+
+github:
+  enabled: true
+
+memory:
+  enabled: true
+
+redis:
+  enabled: true
+  host: redis
+  port: "6379"
+  username: ""
+  password: ""
+  ssl: false
+
+database-server:
+  enabled: true
+  database_url: postgresql://postgres:password@postgres:5432/kgagent
