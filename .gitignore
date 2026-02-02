@@ -19,3 +19,9 @@ n8n_data/
 **/node_modules
 **/.env
 .claude/
+
+# Nix direnv
+.direnv/
+
+# Docker local config
+.docker/
