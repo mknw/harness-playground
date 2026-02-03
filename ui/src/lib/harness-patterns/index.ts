@@ -116,10 +116,27 @@ export {
   chain,
   synthesizer,
   configurePattern,
+  parallel,
+  judge,
+  guardrail,
+  piiScanRail,
+  pathAllowlistRail,
+  driftDetectorRail,
+  hook,
   type SimpleLoopData,
   type ActorCriticData,
   type ApprovalPredicate,
-  type WithApprovalData
+  type WithApprovalData,
+  type JudgeConfig,
+  type JudgeData,
+  type EvaluatorFn,
+  type Rail,
+  type RailResult,
+  type RailContext,
+  type GuardrailConfig,
+  type CircuitBreakerConfig,
+  type HookConfig,
+  type HookTrigger
 } from './patterns'
 
 // EventView
