@@ -5,7 +5,7 @@
  */
 
 import { createSignal, createResource, For, Show } from 'solid-js'
-import { getAgentMetadata } from '~/lib/harness-client/registry.server'
+import { getAgentList } from '~/lib/harness-client'
 
 // ============================================================================
 // Types
@@ -27,7 +27,7 @@ export const AgentSelector = (props: AgentSelectorProps) => {
   // Fetch agent metadata from server
   const [agents] = createResource(async () => {
     try {
-      return await getAgentMetadata()
+      return await getAgentList()
     } catch (error) {
       console.error('Failed to fetch agents:', error)
       return []

@@ -11,7 +11,8 @@ export {
   processMessageWithAgent,
   approveAction,
   rejectAction,
-  clearSession
+  clearSession,
+  getAgentList
 } from './actions.server'
 
 // Agent Registry - MUST be imported separately to avoid loading all example agents

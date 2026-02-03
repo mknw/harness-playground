@@ -32,7 +32,7 @@ import {
   deleteSession,
   type SessionData,
 } from "./session.server";
-import { getAgent } from "./registry.server";
+import { getAgent, getAgentMetadata } from "./registry.server";
 
 // ============================================================================
 // Agent Configuration
@@ -271,4 +271,20 @@ export async function processMessageWithAgent(
   });
 
   return result;
+}
+
+/**
+ * Get list of available agents (metadata only).
+ * This is a server action that safely wraps the registry.
+ *
+ * @returns Array of agent metadata
+ */
+export async function getAgentList(): Promise<Array<{
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  servers: string[];
+}>> {
+  return getAgentMetadata();
 }
