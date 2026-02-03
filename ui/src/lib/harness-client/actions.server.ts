@@ -32,6 +32,7 @@ import {
   deleteSession,
   type SessionData,
 } from "./session.server";
+import { getAgent } from "./registry.server";
 
 // ============================================================================
 // Agent Configuration
@@ -214,4 +215,58 @@ export async function rejectAction(
  */
 export function clearSession(sessionId: string): void {
   deleteSession(sessionId);
+}
+
+/**
+ * Process a user message using a specific agent.
+ *
+ * @param sessionId - Unique session identifier
+ * @param message - User message content
+ * @param agentId - Agent ID to use (defaults to "default")
+ * @returns HarnessResult with response and status
+ */
+export async function processMessageWithAgent(
+  sessionId: string,
+  message: string,
+  agentId: string = "default",
+): Promise<HarnessResultScoped<SessionData>> {
+  const session = getOrCreateSession(sessionId);
+
+  // Check if agent changed - reset patterns if so
+  const currentAgentId = (session as Record<string, unknown>).agentId as string | undefined;
+  if (currentAgentId !== agentId) {
+    session.patterns = [];
+    (session as Record<string, unknown>).agentId = agentId;
+  }
+
+  // Lazy init patterns from agent registry
+  if (session.patterns.length === 0) {
+    const agent = getAgent(agentId);
+    if (!agent) {
+      throw new Error(`Unknown agent: ${agentId}`);
+    }
+    session.patterns = await agent.createPatterns();
+    (session as Record<string, unknown>).agentId = agentId;
+  }
+
+  let result: HarnessResultScoped<SessionData>;
+
+  // Continue existing session or start new one
+  if (session.serializedContext) {
+    result = await continueSession(
+      session.serializedContext,
+      session.patterns,
+      message,
+    );
+  } else {
+    const agent = harness(...session.patterns);
+    result = await agent(message, sessionId);
+  }
+
+  updateSession(sessionId, {
+    lastResult: result,
+    serializedContext: result.serialized,
+  });
+
+  return result;
 }

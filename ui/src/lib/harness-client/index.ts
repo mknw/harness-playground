@@ -8,7 +8,14 @@
 // Server Actions (safe to import in components)
 export {
   processMessage,
+  processMessageWithAgent,
   approveAction,
   rejectAction,
   clearSession
 } from './actions.server'
+
+// Agent Registry
+export {
+  getAgentMetadata,
+  type AgentConfig
+} from './registry.server'
