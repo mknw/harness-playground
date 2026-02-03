@@ -14,11 +14,9 @@ export {
   clearSession
 } from './actions.server'
 
-// Agent Registry
-export {
-  getAgentMetadata,
-  type AgentConfig
-} from './registry.server'
+// Agent Registry - MUST be imported separately to avoid loading all example agents
+// Use: import { getAgentMetadata } from '~/lib/harness-client/registry.server'
+export type { AgentConfig } from './registry.server'
 
 // Graph Extraction (client-safe)
 export {
