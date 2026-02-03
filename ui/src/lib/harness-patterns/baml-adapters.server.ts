@@ -18,7 +18,7 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, CriticResult } from './types'
+import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, CriticResult, ScriptExecutionEvent } from './types'
 import type { ToolDescription, LoopTurn, Attempt } from '../../../baml_client/types'
 import { listTools as mcpListTools } from './mcp-client.server'
 
@@ -95,7 +95,7 @@ export function createLoopControllerAdapter(
 /**
  * Parse previous_results JSON string into LoopTurn array.
  */
-function parseResultsToTurns(previous_results: string, currentTurn: number): LoopTurn[] {
+function parseResultsToTurns(previous_results: string, _currentTurn: number): LoopTurn[] {
   if (!previous_results || previous_results === '[]') return []
 
   try {
@@ -134,7 +134,7 @@ export function createActorControllerAdapter(toolNames: string[]): CodeModeContr
     user_message: string,
     intent: string,
     available_tools: string[],
-    previous_attempts: import('../../../baml_client/types').ScriptExecutionEvent[]
+    previous_attempts: ScriptExecutionEvent[]
   ): Promise<ControllerAction> => {
     const { b } = await import('../../../baml_client')
 
@@ -168,7 +168,7 @@ export function createActorControllerAdapter(toolNames: string[]): CodeModeContr
 export function createCriticAdapter(): CriticFn {
   return async (
     intent: string,
-    previous_attempts: import('../../../baml_client/types').ScriptExecutionEvent[]
+    previous_attempts: ScriptExecutionEvent[]
   ): Promise<CriticResult> => {
     const { b } = await import('../../../baml_client')
 

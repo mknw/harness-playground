@@ -233,10 +233,12 @@ export async function processMessageWithAgent(
   const session = getOrCreateSession(sessionId);
 
   // Check if agent changed - reset patterns if so
-  const currentAgentId = (session as Record<string, unknown>).agentId as string | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sessionAny = session as any;
+  const currentAgentId = sessionAny.agentId as string | undefined;
   if (currentAgentId !== agentId) {
     session.patterns = [];
-    (session as Record<string, unknown>).agentId = agentId;
+    sessionAny.agentId = agentId;
   }
 
   // Lazy init patterns from agent registry
@@ -246,7 +248,7 @@ export async function processMessageWithAgent(
       throw new Error(`Unknown agent: ${agentId}`);
     }
     session.patterns = await agent.createPatterns();
-    (session as Record<string, unknown>).agentId = agentId;
+    sessionAny.agentId = agentId;
   }
 
   let result: HarnessResultScoped<SessionData>;

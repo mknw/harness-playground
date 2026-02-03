@@ -25,3 +25,6 @@ export {
   extractGraphElements,
   extractGraphFromResult
 } from './graph-extractor'
+
+// Types
+export type { GraphElement } from './types'

@@ -11,7 +11,6 @@ import type {
   PatternScope,
   ContextEvent,
   EventType,
-  CtxStatus,
   CommitStrategy,
   TrackHistory,
   PatternConfig,

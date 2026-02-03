@@ -208,6 +208,7 @@ export function guardrail<T extends Record<string, unknown>>(
 // ============================================================================
 
 /** Rail that checks for PII/secrets in input */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const piiScanRail: Rail<any> = {
   name: 'pii-scan',
   phase: 'input',
@@ -233,6 +234,7 @@ export const piiScanRail: Rail<any> = {
 }
 
 /** Rail that blocks paths outside workspace */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const pathAllowlistRail: Rail<any> = {
   name: 'path-allowlist',
   phase: 'execution',
@@ -248,6 +250,7 @@ export const pathAllowlistRail: Rail<any> = {
 }
 
 /** Rail that detects large file changes */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const driftDetectorRail: Rail<any> = {
   name: 'drift-detector',
   phase: 'output',

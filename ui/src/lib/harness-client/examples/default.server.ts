@@ -6,7 +6,6 @@
 "use server";
 
 import {
-  harness,
   router,
   simpleLoop,
   actorCritic,

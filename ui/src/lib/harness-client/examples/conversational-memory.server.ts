@@ -136,8 +136,8 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   });
 
   // Main chain: track → route → memorize → synthesize
-  // Distillation hook runs on session close (not in main chain)
-  return [sessionTracker, routerPattern, memoryWriter, responseSynth];
+  // Distillation hook runs on session close
+  return [sessionTracker, routerPattern, memoryWriter, responseSynth, distillationHook];
 }
 
 export const conversationalMemoryAgent: AgentConfig = {

@@ -11,7 +11,6 @@ import type {
   SynthesizerConfig,
   SynthesizerData,
   SynthesizerInput,
-  SynthesisFn,
   LoopHistory,
   PatternScope,
   EventView,
@@ -25,60 +24,46 @@ assertServerOnImport()
 const tracer = trace.getTracer('harness-patterns.synthesizer')
 
 /**
- * Format loop history for LLM consumption.
- */
-function formatLoopHistory(history: LoopHistory): string {
-  const lines: string[] = []
-
-  for (const iteration of history.iterations) {
-    lines.push(`<turn n="${iteration.turn}">`)
-    lines.push(`  <action>`)
-    lines.push(`    <tool>${iteration.action.tool_name}</tool>`)
-    lines.push(`    <args>${iteration.action.tool_args}</args>`)
-    lines.push(`    <reasoning>${iteration.action.reasoning}</reasoning>`)
-    lines.push(`  </action>`)
-    lines.push(`  <result>${JSON.stringify(iteration.result)}</result>`)
-    lines.push(`</turn>`)
-  }
-
-  return lines.join('\n')
-}
-
-/**
- * Default synthesis function using BAML CreateToolResponse.
+ * Default synthesis function using BAML Synthesize.
  */
 async function defaultSynthesize(input: SynthesizerInput): Promise<string> {
   // Dynamic import to avoid circular dependencies
   const { b } = await import('../../../../baml_client')
 
-  // Format tool_events based on mode
-  let toolEvents: string
+  // Convert to LoopTurn format for BAML Synthesize
+  const turns: import('../../../../baml_client/types').LoopTurn[] = []
 
-  switch (input.mode) {
-    case 'message':
-      // Just the response string
-      toolEvents = input.response ?? ''
-      break
-
-    case 'response':
-      // Object with data and response
-      toolEvents = JSON.stringify(
-        {
-          response: input.response,
-          data: input.data
+  if (input.loopHistory) {
+    // Convert loop history to LoopTurn array
+    for (const iteration of input.loopHistory.iterations) {
+      turns.push({
+        n: iteration.turn,
+        reasoning: iteration.action.reasoning,
+        tool_call: {
+          tool: iteration.action.tool_name,
+          args: iteration.action.tool_args
         },
-        null,
-        2
-      )
-      break
-
-    case 'thread':
-      // Full loop history
-      toolEvents = input.loopHistory ? formatLoopHistory(input.loopHistory) : (input.response ?? '')
-      break
+        tool_result: {
+          tool: iteration.action.tool_name,
+          result: JSON.stringify(iteration.result),
+          success: true
+        }
+      })
+    }
+  } else if (input.response) {
+    // Create a single turn with the response as a result
+    turns.push({
+      n: 0,
+      reasoning: 'Direct response',
+      tool_result: {
+        tool: 'response',
+        result: input.response,
+        success: true
+      }
+    })
   }
 
-  return b.CreateToolResponse(toolEvents, input.userMessage, input.intent)
+  return b.Synthesize(input.userMessage, input.intent, turns)
 }
 
 /**
@@ -113,7 +98,7 @@ function buildSynthesisInputFromView(
       input.data = data
       break
 
-    case 'thread':
+    case 'thread': {
       // Get tool events from view for thread reconstruction
       const toolEvents = view.fromLastPattern().tools().get()
       const actionEvents = view.fromLastPattern().actions().get()
@@ -152,6 +137,7 @@ function buildSynthesisInputFromView(
 
       input.response = data.response
       break
+    }
   }
 
   return input

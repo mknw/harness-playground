@@ -69,11 +69,9 @@ export const AgentSelector = (props: AgentSelectorProps) => {
               <span text="lg">{info().icon}</span>
               <span flex="1" text="left">{info().name}</span>
               <svg
-                w="4"
-                h="4"
                 viewBox="0 0 20 20"
                 fill="currentColor"
-                class={`transform transition-transform ${isOpen() ? 'rotate-180' : ''}`}
+                class={`w-4 h-4 transform transition-transform ${isOpen() ? 'rotate-180' : ''}`}
               >
                 <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
               </svg>
@@ -85,17 +83,7 @@ export const AgentSelector = (props: AgentSelectorProps) => {
       {/* Dropdown Menu */}
       <Show when={isOpen()}>
         <div
-          position="absolute"
-          top="full"
-          left="0"
-          mt="1"
-          w="full"
-          max-h="80"
-          overflow="auto"
-          bg="dark-bg-tertiary"
-          border="~ dark-border-primary rounded-lg"
-          shadow="lg"
-          z="50"
+          class="absolute top-full left-0 mt-1 w-full max-h-80 overflow-auto bg-dark-bg-tertiary border border-dark-border-primary rounded-lg shadow-lg z-50"
         >
           <Show when={agents.loading}>
             <div p="4" text="center dark-text-secondary">
@@ -155,9 +143,7 @@ export const AgentSelector = (props: AgentSelectorProps) => {
       {/* Backdrop to close dropdown */}
       <Show when={isOpen()}>
         <div
-          position="fixed"
-          inset="0"
-          z="40"
+          class="fixed inset-0 z-40"
           onClick={() => setIsOpen(false)}
         />
       </Show>

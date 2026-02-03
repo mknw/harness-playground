@@ -5,8 +5,7 @@
  * Maps pattern IDs to graph sources (neo4j, memory) for UI tab filtering.
  */
 
-import type { ElementDefinition } from 'cytoscape'
-import type { GraphElement } from '~/components/ark-ui/SupportPanel'
+import type { GraphElement } from './types'
 
 // ============================================================================
 // Pattern to Source Mapping
@@ -52,7 +51,7 @@ function getSourceFromPattern(patternId: string): GraphElement['source'] {
 // ============================================================================
 
 /** Check if a tool result contains Neo4j graph data */
-function isNeo4jGraphResult(toolName: string, result: unknown): boolean {
+function isNeo4jGraphResult(toolName: string, _result: unknown): boolean {
   const neo4jTools = [
     'read_neo4j_cypher',
     'write_neo4j_cypher',
@@ -62,7 +61,7 @@ function isNeo4jGraphResult(toolName: string, result: unknown): boolean {
 }
 
 /** Check if a tool result contains Memory graph data */
-function isMemoryGraphResult(toolName: string, result: unknown): boolean {
+function isMemoryGraphResult(toolName: string, _result: unknown): boolean {
   const memoryTools = [
     'read_graph',
     'search_nodes',

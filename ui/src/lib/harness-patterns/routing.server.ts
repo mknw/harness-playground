@@ -24,9 +24,17 @@ async function getBAML() {
 // Routing
 // ============================================================================
 
+/** Default routes for the router */
+const DEFAULT_ROUTES = [
+  { name: 'neo4j', description: 'Database queries and graph operations' },
+  { name: 'web_search', description: 'Web lookups and information retrieval' },
+  { name: 'code_mode', description: 'Multi-tool script composition' }
+]
+
 export async function routeMessageOp(
   message: string,
-  history: Array<{ role: string; content: string }>
+  history: Array<{ role: string; content: string }>,
+  routes: Array<{ name: string; description: string }> = DEFAULT_ROUTES
 ): Promise<{
   intent: string
   tool_call_needed: boolean
@@ -38,22 +46,22 @@ export async function routeMessageOp(
 
     try {
       const b = await getBAML()
-      const result = await b.RouteUserMessage(message, history)
+      const result = await b.Router(message, routes, history)
 
       const namespaceMap: Record<string, 'neo4j' | 'web_search' | 'code_mode'> = {
-        Neo4j: 'neo4j',
-        WebSearch: 'web_search',
-        CodeMode: 'code_mode'
+        neo4j: 'neo4j',
+        web_search: 'web_search',
+        code_mode: 'code_mode'
       }
 
       span.setStatus({ code: SpanStatusCode.OK })
       return {
         intent: result.intent,
-        tool_call_needed: result.tool_call_needed,
-        tool_name: result.tool_name
-          ? namespaceMap[result.tool_name] ?? null
+        tool_call_needed: result.needs_tool,
+        tool_name: result.route
+          ? namespaceMap[result.route] ?? null
           : null,
-        response_text: result.response_text
+        response_text: result.response
       }
     } catch (error) {
       span.setStatus({

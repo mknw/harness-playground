@@ -8,8 +8,18 @@
 export type {
   ControllerAction,
   CriticResult,
-  ScriptExecutionEvent
+  Attempt
 } from '../../../baml_client/types'
+
+/**
+ * Script execution event for actor-critic pattern.
+ * Internal type used by actorCritic to track code mode executions.
+ */
+export interface ScriptExecutionEvent {
+  script: string
+  output: string
+  error?: string | null
+}
 
 // ============================================================================
 // Core Context
@@ -135,12 +145,12 @@ export interface PatternConfig {
  * Matches BAML-generated function signatures.
  * Uses rest params to accommodate different controller signatures (with/without schema).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ControllerFn = (
   user_message: string,
   intent: string,
   previous_results: string,
   n_turn: number,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ...extra: any[]
 ) => Promise<import('../../../baml_client/types').ControllerAction>
 
@@ -150,7 +160,7 @@ export type ControllerFn = (
  */
 export type CriticFn = (
   intent: string,
-  previous_attempts: import('../../../baml_client/types').ScriptExecutionEvent[]
+  previous_attempts: ScriptExecutionEvent[]
 ) => Promise<import('../../../baml_client/types').CriticResult>
 
 /**
@@ -161,7 +171,7 @@ export type CodeModeControllerFn = (
   user_message: string,
   intent: string,
   available_tools: string[],
-  previous_attempts: import('../../../baml_client/types').ScriptExecutionEvent[]
+  previous_attempts: ScriptExecutionEvent[]
 ) => Promise<import('../../../baml_client/types').ControllerAction>
 
 // ============================================================================

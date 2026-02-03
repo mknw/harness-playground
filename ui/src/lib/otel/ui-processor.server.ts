@@ -7,7 +7,7 @@
 
 import type { SpanProcessor, ReadableSpan } from '@opentelemetry/sdk-trace-base'
 import type { Context } from '@opentelemetry/api'
-import type { SpanData, SpanEvent, SpanStatus, SpanLane } from './types'
+import type { SpanData, SpanEvent, SpanStatus } from './types'
 import { getLaneFromSpan } from './types'
 
 // ============================================================================

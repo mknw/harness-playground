@@ -8,7 +8,6 @@ import { trace, SpanStatusCode } from '@opentelemetry/api'
 import { assertServerOnImport } from '../assert.server'
 import type {
   UnifiedContext,
-  PatternScope,
   ConfiguredPattern,
   PatternConfig
 } from '../types'

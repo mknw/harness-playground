@@ -25,29 +25,10 @@ import type { AgentConfig } from "../registry.server";
  * Judge evaluator that ranks search results by quality.
  */
 const judgeEvaluator: EvaluatorFn = async (query, candidates) => {
-  // Import BAML client for evaluation
-  const { b } = await import("../../../../baml_client");
-
-  // Use the generic Critic to evaluate candidates
-  // Format candidates as attempts for the Critic
-  const attempts = candidates.map((c, i) => ({
-    n: i + 1,
-    action: {
-      reasoning: `Retrieved from ${c.source}`,
-      tool_name: "search",
-      tool_args: "{}",
-      status: "success",
-      is_final: false,
-    },
-    result: c.content,
-    error: undefined,
-    feedback: undefined,
-  }));
-
-  // Use Critic to evaluate each result
+  // Score each candidate based on relevance
   const rankings: Array<{ source: string; score: number; reason: string }> = [];
 
-  for (const [i, candidate] of candidates.entries()) {
+  for (const candidate of candidates) {
     try {
       // Simple heuristic scoring - in production, use a dedicated judge BAML function
       const hasContent = candidate.content.length > 100;

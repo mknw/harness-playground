@@ -25,10 +25,9 @@ export interface PromptStat {
   status: 'success' | 'error';
 }
 
-export interface GraphElement extends ElementDefinition {
-  /** Source of this graph element (for filtering by tab) */
-  source?: 'neo4j' | 'memory' | 'unknown';
-}
+// Re-export GraphElement from shared types
+export type { GraphElement } from '~/lib/harness-client/types'
+import type { GraphElement } from '~/lib/harness-client/types'
 
 export interface SupportPanelProps {
   graphElements: GraphElement[];

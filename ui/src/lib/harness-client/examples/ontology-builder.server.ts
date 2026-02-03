@@ -22,7 +22,6 @@ import {
   guardrail,
   withApproval,
   synthesizer,
-  configurePattern,
   Tools,
   callTool,
   approvalPredicates,
