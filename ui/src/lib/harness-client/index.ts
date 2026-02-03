@@ -19,3 +19,9 @@ export {
   getAgentMetadata,
   type AgentConfig
 } from './registry.server'
+
+// Graph Extraction (client-safe)
+export {
+  extractGraphElements,
+  extractGraphFromResult
+} from './graph-extractor'

@@ -19,15 +19,15 @@ import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
 import { AgentSelector } from './AgentSelector'
-import { processMessageWithAgent, approveAction, rejectAction, clearSession } from '~/lib/harness-client'
-import type { ElementDefinition } from 'cytoscape'
+import { processMessageWithAgent, approveAction, rejectAction, clearSession, extractGraphFromResult } from '~/lib/harness-client'
+import type { GraphElement } from './SupportPanel'
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export interface ChatInterfaceProps {
-  onGraphUpdate?: (elements: ElementDefinition[]) => void
+  onGraphUpdate?: (elements: GraphElement[]) => void
 }
 
 // ============================================================================
@@ -87,6 +87,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       // Process message via server action with selected agent
       const result = await processMessageWithAgent(sessionId, content, selectedAgent())
 
+      // Extract graph elements from result and update visualization
+      const graphElements = extractGraphFromResult(result)
+      if (graphElements.length > 0 && props.onGraphUpdate) {
+        props.onGraphUpdate(graphElements)
+      }
+
       // Build assistant message
       const assistantMessage: Message = {
         id: Date.now().toString(),
@@ -125,6 +131,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     try {
       // Execute the approved operation
       const result = await approveAction(sessionId)
+
+      // Extract graph elements from result and update visualization
+      const graphElements = extractGraphFromResult(result)
+      if (graphElements.length > 0 && props.onGraphUpdate) {
+        props.onGraphUpdate(graphElements)
+      }
 
       // Update the message with executed tool call
       setMessages(messages().map(msg => {

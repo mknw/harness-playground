@@ -1,15 +1,14 @@
 import { Splitter } from '@ark-ui/solid/splitter'
 import { createSignal } from 'solid-js'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
-import { SupportPanel } from '~/components/ark-ui/SupportPanel'
-import type { ElementDefinition } from 'cytoscape'
+import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
 
 export default function Home() {
-  const [graphElements, setGraphElements] = createSignal<ElementDefinition[]>([])
+  const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
 
   // Accumulate graph elements across calls (deduplicate by ID)
-  const accumulateGraphElements = (newElements: ElementDefinition[]) => {
+  const accumulateGraphElements = (newElements: GraphElement[]) => {
     setGraphElements(prev => {
       const existingIds = new Set(prev.map(e => e.data?.id))
       const uniqueNew = newElements.filter(e => !existingIds.has(e.data?.id))
