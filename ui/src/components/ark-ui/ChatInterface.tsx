@@ -6,6 +6,7 @@
  * - Agent processing via server actions
  * - Message display with tool calls
  * - Graph visualization updates
+ * - Agent selection
  *
  * Architecture:
  * - Uses harness-client server actions
@@ -17,7 +18,8 @@ import { createSignal, createUniqueId, onMount, onCleanup } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
-import { processMessage, approveAction, rejectAction, clearSession } from '~/lib/harness-client'
+import { AgentSelector } from './AgentSelector'
+import { processMessageWithAgent, approveAction, rejectAction, clearSession } from '~/lib/harness-client'
 import type { ElementDefinition } from 'cytoscape'
 
 // ============================================================================
@@ -37,6 +39,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const [messages, setMessages] = createSignal<Message[]>([])
   const [isProcessing, setIsProcessing] = createSignal(false)
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
+  const [selectedAgent, setSelectedAgent] = createSignal('default')
 
   onCleanup(() => {
     // Clean up session when component unmounts
@@ -48,11 +51,26 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     const welcomeMessage: Message = {
       id: Date.now().toString(),
       role: 'assistant',
-      content: 'Hello! I\'m your knowledge assistant. I can help you:\n\n- Query and explore your Knowledge Base\n- Create new observations\n- Analyze patterns and connections\n- Use additional tools\n\nWhat would you like to know?',
+      content: 'Hello! I\'m your knowledge assistant. I can help you:\n\n- Query and explore your Knowledge Base\n- Create new observations\n- Analyze patterns and connections\n- Use additional tools\n\nSelect an agent from the dropdown above, then ask me anything!',
       timestamp: new Date()
     }
     setMessages([welcomeMessage])
   })
+
+  const handleAgentChange = (agentId: string) => {
+    // Clear session when agent changes
+    clearSession(sessionId)
+    setSelectedAgent(agentId)
+
+    // Add info message about agent change
+    const infoMessage: Message = {
+      id: Date.now().toString(),
+      role: 'assistant',
+      content: `Switched to **${agentId}** agent. Session cleared.`,
+      timestamp: new Date()
+    }
+    setMessages([infoMessage])
+  }
 
   const handleSendMessage = async (content: string) => {
     // Add user message
@@ -66,8 +84,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     setIsProcessing(true)
 
     try {
-      // Process message via server action
-      const result = await processMessage(sessionId, content)
+      // Process message via server action with selected agent
+      const result = await processMessageWithAgent(sessionId, content, selectedAgent())
 
       // Build assistant message
       const assistantMessage: Message = {
@@ -192,6 +210,24 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
       {/* Main Chat Area */}
       <div flex="~ col 1" bg="dark-bg-secondary">
+        {/* Agent Selector Header */}
+        <div
+          flex="~ items-center gap-4"
+          border="b dark-border-primary"
+          px="4"
+          py="2"
+          bg="dark-bg-tertiary/50"
+        >
+          <span text="sm dark-text-secondary">Agent:</span>
+          <div w="64">
+            <AgentSelector
+              selectedAgent={selectedAgent()}
+              onAgentChange={handleAgentChange}
+              disabled={isProcessing()}
+            />
+          </div>
+        </div>
+
         {/* Messages */}
         <ChatMessages
           messages={messages()}
