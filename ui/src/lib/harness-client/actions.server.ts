@@ -6,7 +6,6 @@
  */
 "use server";
 
-import { b } from "../../../baml_client";
 import {
   harness,
   resumeHarness,
@@ -19,6 +18,10 @@ import {
   approvalPredicates,
   Tools,
   callTool,
+  createNeo4jController,
+  createWebSearchController,
+  createActorControllerAdapter,
+  createCriticAdapter,
   type HarnessResultScoped,
   type ConfiguredPattern,
 } from "../harness-patterns";
@@ -28,7 +31,6 @@ import {
   updateSession,
   deleteSession,
   type SessionData,
-  type Session,
 } from "./session.server";
 
 // ============================================================================
@@ -44,11 +46,11 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools();
   const schema = await getSchema();
 
-  // Bind BAML methods to preserve 'this' context
-  const neo4jController = b.Neo4jController.bind(b);
-  const webController = b.WebSearchController.bind(b);
-  const codeController = b.CodeModeController.bind(b);
-  const codeCritic = b.CodeModeCritic.bind(b);
+  // Create controller adapters using the new BAML functions
+  const neo4jController = createNeo4jController(tools.neo4j ?? []);
+  const webController = createWebSearchController(tools.web ?? []);
+  const codeController = createActorControllerAdapter(tools.all);
+  const codeCritic = createCriticAdapter();
 
   const neo4jPattern = withApproval(
     simpleLoop<SessionData>(neo4jController, tools.neo4j ?? [], {

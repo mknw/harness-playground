@@ -173,3 +173,18 @@ export {
 export { callTool, listTools, getMcpClient, closeMcpClient } from './mcp-client.server'
 export { assertServer, ServerOnlyError } from './assert.server'
 export { routeMessageOp } from './routing.server'
+
+// BAML Adapters
+export {
+  createLoopControllerAdapter,
+  createActorControllerAdapter,
+  createCriticAdapter,
+  createNeo4jController,
+  createWebSearchController,
+  createMemoryController,
+  createContext7Controller,
+  createGitHubController,
+  createFilesystemController,
+  createRedisController,
+  createDatabaseController
+} from './baml-adapters.server'
