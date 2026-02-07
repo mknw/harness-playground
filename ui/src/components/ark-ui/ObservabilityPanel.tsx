@@ -15,7 +15,8 @@ import type {
   UserMessageEventData,
   AssistantMessageEventData,
   ApprovalRequestEventData,
-  ErrorEventData
+  ErrorEventData,
+  LLMCallData
 } from '~/lib/harness-patterns'
 
 interface ObservabilityPanelProps {
@@ -485,11 +486,131 @@ const GenericDetail = (props: { data: unknown }) => (
 )
 
 // ============================================================================
+// LLM Call Tabs Component
+// ============================================================================
+
+type LLMTab = 'variables' | 'rawInput' | 'rawOutput' | 'usage'
+
+const TabButton = (props: { active: boolean; label: string; onClick: () => void }) => (
+  <button
+    onClick={props.onClick}
+    p="x-3 y-1.5"
+    text={`xs ${props.active ? 'neon-cyan' : 'dark-text-secondary hover:dark-text-primary'}`}
+    bg={props.active ? 'neon-cyan/10' : 'transparent hover:dark-bg-hover'}
+    border={props.active ? '1 neon-cyan/30' : '1 transparent'}
+    rounded="md"
+    cursor="pointer"
+    transition="all"
+    font="medium"
+  >
+    {props.label}
+  </button>
+)
+
+const CodeBlock = (props: { content: string | undefined; placeholder?: string }) => (
+  <pre
+    text="xs dark-text-primary"
+    bg="dark-bg-tertiary"
+    p="3"
+    rounded="md"
+    overflow="auto"
+    max-h="300px"
+    style={{ 'white-space': 'pre-wrap', 'word-break': 'break-word' }}
+  >
+    {props.content ?? props.placeholder ?? 'Not captured'}
+  </pre>
+)
+
+const UsageStats = (props: { llmCall: LLMCallData }) => (
+  <div flex="~ col" gap="4">
+    <Show
+      when={props.llmCall.usage}
+      fallback={<span text="sm dark-text-tertiary">No usage data captured</span>}
+    >
+      <div flex="~ wrap" gap="6">
+        <div flex="~ col" gap="1">
+          <span text="xs dark-text-tertiary">Input Tokens</span>
+          <span text="lg neon-green" font="mono">{props.llmCall.usage!.inputTokens.toLocaleString()}</span>
+        </div>
+        <div flex="~ col" gap="1">
+          <span text="xs dark-text-tertiary">Output Tokens</span>
+          <span text="lg neon-cyan" font="mono">{props.llmCall.usage!.outputTokens.toLocaleString()}</span>
+        </div>
+        <div flex="~ col" gap="1">
+          <span text="xs dark-text-tertiary">Total Tokens</span>
+          <span text="lg amber-400" font="mono">{props.llmCall.usage!.totalTokens.toLocaleString()}</span>
+        </div>
+      </div>
+    </Show>
+    <Show when={props.llmCall.durationMs}>
+      <div flex="~ col" gap="1">
+        <span text="xs dark-text-tertiary">Duration</span>
+        <span text="sm dark-text-primary" font="mono">{props.llmCall.durationMs}ms</span>
+      </div>
+    </Show>
+    <div flex="~ col" gap="1">
+      <span text="xs dark-text-tertiary">Function</span>
+      <span text="sm neon-cyan" font="mono">{props.llmCall.functionName}</span>
+    </div>
+  </div>
+)
+
+const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
+  const [activeTab, setActiveTab] = createSignal<LLMTab>('variables')
+
+  return (
+    <div border="b dark-border-primary" m="b-4" p="b-4">
+      <div text="xs dark-text-tertiary" m="b-2" font="medium">LLM Call Details</div>
+
+      {/* Tab buttons */}
+      <div flex="~ wrap" gap="2" m="b-3">
+        <TabButton
+          active={activeTab() === 'variables'}
+          label="Variables"
+          onClick={() => setActiveTab('variables')}
+        />
+        <TabButton
+          active={activeTab() === 'rawInput'}
+          label="Raw Input"
+          onClick={() => setActiveTab('rawInput')}
+        />
+        <TabButton
+          active={activeTab() === 'rawOutput'}
+          label="Raw Output"
+          onClick={() => setActiveTab('rawOutput')}
+        />
+        <TabButton
+          active={activeTab() === 'usage'}
+          label="Usage"
+          onClick={() => setActiveTab('usage')}
+        />
+      </div>
+
+      {/* Tab content */}
+      <Switch>
+        <Match when={activeTab() === 'variables'}>
+          <CodeBlock content={JSON.stringify(props.llmCall.variables, null, 2)} />
+        </Match>
+        <Match when={activeTab() === 'rawInput'}>
+          <CodeBlock content={props.llmCall.rawInput} placeholder="Raw input not captured" />
+        </Match>
+        <Match when={activeTab() === 'rawOutput'}>
+          <CodeBlock content={props.llmCall.rawOutput} placeholder="Raw output not captured" />
+        </Match>
+        <Match when={activeTab() === 'usage'}>
+          <UsageStats llmCall={props.llmCall} />
+        </Match>
+      </Switch>
+    </div>
+  )
+}
+
+// ============================================================================
 // Event Detail Overlay Component
 // ============================================================================
 
 const EventDetailOverlay = (props: { event: ContextEvent, onClose: () => void }) => {
-  const { type, ts, patternId, data } = props.event
+  const { type, ts, patternId, data, llmCall } = props.event
 
   return (
     <div
@@ -518,6 +639,17 @@ const EventDetailOverlay = (props: { event: ContextEvent, onClose: () => void })
             <span text="sm dark-text-primary" font="medium">
               {type.replace(/_/g, ' ')}
             </span>
+            <Show when={llmCall}>
+              <span
+                text="xs neon-cyan"
+                bg="neon-cyan/10"
+                p="x-1.5 y-0.5"
+                rounded="sm"
+                font="mono"
+              >
+                LLM
+              </span>
+            </Show>
           </div>
           <div flex="~" gap="3" text="xs dark-text-tertiary">
             <span>{patternId}</span>
@@ -538,6 +670,12 @@ const EventDetailOverlay = (props: { event: ContextEvent, onClose: () => void })
 
       {/* Content */}
       <div flex="1" overflow="auto" p="4">
+        {/* LLM Call Tabs - shown when event has llmCall data */}
+        <Show when={llmCall}>
+          <LLMCallTabs llmCall={llmCall!} />
+        </Show>
+
+        {/* Event-specific content */}
         <Switch fallback={<GenericDetail data={data} />}>
           <Match when={type === 'tool_call'}>
             <ToolCallDetail data={data as ToolCallEventData} />

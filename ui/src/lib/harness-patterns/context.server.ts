@@ -14,7 +14,8 @@ import type {
   CommitStrategy,
   TrackHistory,
   PatternConfig,
-  UserMessageEventData
+  UserMessageEventData,
+  LLMCallData
 } from './types'
 
 assertServerOnImport()
@@ -95,13 +96,15 @@ export function createScope<T>(
 export function createEvent(
   type: EventType,
   patternId: string,
-  data: unknown
+  data: unknown,
+  llmCall?: LLMCallData
 ): ContextEvent {
   return {
     type,
     ts: Date.now(),
     patternId,
-    data
+    data,
+    ...(llmCall && { llmCall })
   }
 }
 
@@ -124,10 +127,11 @@ export function trackEvent(
   scope: PatternScope<unknown>,
   type: EventType,
   data: unknown,
-  trackHistory: TrackHistory
+  trackHistory: TrackHistory,
+  llmCall?: LLMCallData
 ): void {
   if (shouldTrack(type, trackHistory)) {
-    scope.events.push(createEvent(type, scope.id, data))
+    scope.events.push(createEvent(type, scope.id, data, llmCall))
   }
 }
 

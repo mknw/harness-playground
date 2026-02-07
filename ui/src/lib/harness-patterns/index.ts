@@ -63,6 +63,9 @@ export type {
   ApprovalResponseEventData,
   ErrorEventData,
 
+  // LLM Observability
+  LLMCallData,
+
   // Approval Types
   ApprovalRequest,
   WithApproval,

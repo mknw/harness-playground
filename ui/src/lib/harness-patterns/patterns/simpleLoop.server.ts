@@ -8,7 +8,6 @@
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import type {
-  ControllerFn,
   ControllerAction,
   SimpleLoopConfig,
   PatternScope,
@@ -20,6 +19,7 @@ import type {
 } from '../types'
 import { MAX_TOOL_TURNS } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
+import type { ControllerFnWithLLMData } from '../baml-adapters.server'
 
 assertServerOnImport()
 
@@ -51,7 +51,7 @@ export interface SimpleLoopData {
  * })
  */
 export function simpleLoop<T extends SimpleLoopData>(
-  controller: ControllerFn,
+  controller: ControllerFnWithLLMData,
   tools: string[],
   config?: SimpleLoopConfig
 ): ConfiguredPattern<T> {
@@ -81,7 +81,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         const intent = data.intent ?? userContent
 
         // Call BAML controller
-        const action = await controller(
+        const { action, llmCall } = await controller(
           userContent,
           intent,
           previousResults,
@@ -89,12 +89,13 @@ export function simpleLoop<T extends SimpleLoopData>(
           config?.schema
         )
 
-        // Track controller action event
+        // Track controller action event with LLM call data
         trackEvent(
           scope,
           'controller_action',
           { action } as ControllerActionEventData,
-          resolved.trackHistory
+          resolved.trackHistory,
+          llmCall
         )
 
         // Check if done

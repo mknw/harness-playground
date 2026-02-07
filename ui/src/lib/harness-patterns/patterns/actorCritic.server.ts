@@ -8,8 +8,6 @@
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import type {
-  CodeModeControllerFn,
-  CriticFn,
   ControllerAction,
   ActorCriticConfig,
   ScriptExecutionEvent,
@@ -23,6 +21,7 @@ import type {
 } from '../types'
 import { MAX_RETRIES } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
+import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
 
 assertServerOnImport()
 
@@ -56,8 +55,8 @@ export interface ActorCriticData {
  * })
  */
 export function actorCritic<T extends ActorCriticData>(
-  actor: CodeModeControllerFn,
-  critic: CriticFn,
+  actor: CodeModeControllerFnWithLLMData,
+  critic: CriticFnWithLLMData,
   tools: string[],
   config?: ActorCriticConfig
 ): ConfiguredPattern<T> {
@@ -82,14 +81,15 @@ export function actorCritic<T extends ActorCriticData>(
         const intent = scope.data.intent ?? userContent
 
         // Call actor
-        const action = await actor(userContent, intent, availableTools, previousAttempts)
+        const { action, llmCall: actorLlmCall } = await actor(userContent, intent, availableTools, previousAttempts)
 
-        // Track controller action
+        // Track controller action with LLM call data
         trackEvent(
           scope,
           'controller_action',
           { action } as ControllerActionEventData,
-          resolved.trackHistory
+          resolved.trackHistory,
+          actorLlmCall
         )
 
         // Validate tool
@@ -151,14 +151,15 @@ export function actorCritic<T extends ActorCriticData>(
         }
 
         // Call critic
-        const evalResult = await critic(intent, previousAttempts)
+        const { result: evalResult, llmCall: criticLlmCall } = await critic(intent, previousAttempts)
 
-        // Track critic result
+        // Track critic result with LLM call data
         trackEvent(
           scope,
           'critic_result',
           { result: evalResult } as CriticResultEventData,
-          resolved.trackHistory
+          resolved.trackHistory,
+          criticLlmCall
         )
 
         const evaluation = {

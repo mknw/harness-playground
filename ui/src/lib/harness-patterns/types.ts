@@ -61,6 +61,8 @@ export interface ContextEvent {
   ts: number
   patternId: string
   data: unknown
+  /** LLM call data - present when event involved an LLM call */
+  llmCall?: LLMCallData
 }
 
 /** UnifiedContext - single source of truth for session state */
@@ -428,6 +430,30 @@ export interface ApprovalResponseEventData {
 export interface ErrorEventData {
   error: string
   stack?: string
+}
+
+// ============================================================================
+// LLM Call Observability
+// ============================================================================
+
+/** LLM call observability data - attached to events involving LLM calls */
+export interface LLMCallData {
+  /** BAML function name (e.g., 'LoopController', 'Critic', 'Synthesize') */
+  functionName: string
+  /** Input parameters passed to the BAML function */
+  variables: Record<string, unknown>
+  /** Rendered prompt / HTTP request body */
+  rawInput?: string
+  /** Raw LLM response string before parsing */
+  rawOutput?: string
+  /** Token usage statistics */
+  usage?: {
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+  }
+  /** Call duration in milliseconds */
+  durationMs?: number
 }
 
 // ============================================================================

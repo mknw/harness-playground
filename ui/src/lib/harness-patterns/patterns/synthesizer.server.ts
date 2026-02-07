@@ -14,18 +14,28 @@ import type {
   PatternScope,
   EventView,
   ConfiguredPattern,
-  AssistantMessageEventData
+  AssistantMessageEventData,
+  LLMCallData
 } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
+import { Collector } from '@boundaryml/baml'
 
 assertServerOnImport()
 
+/** Result from synthesis with optional LLM call data */
+interface SynthesisResult {
+  content: string
+  llmCall?: LLMCallData
+}
+
 /**
  * Default synthesis function using BAML Synthesize.
+ * Tracks LLM call data when collector is provided.
  */
-async function defaultSynthesize(input: SynthesizerInput): Promise<string> {
+async function defaultSynthesize(input: SynthesizerInput, collector?: Collector): Promise<SynthesisResult> {
   // Dynamic import to avoid circular dependencies
   const { b } = await import('../../../../baml_client')
+  const startTime = Date.now()
 
   // Convert to LoopTurn format for BAML Synthesize
   const turns: import('../../../../baml_client/types').LoopTurn[] = []
@@ -60,7 +70,39 @@ async function defaultSynthesize(input: SynthesizerInput): Promise<string> {
     })
   }
 
-  return b.Synthesize(input.userMessage, input.intent, turns)
+  const variables = { userMessage: input.userMessage, intent: input.intent, turns }
+
+  // Call with or without collector
+  const content = collector
+    ? await b.Synthesize(input.userMessage, input.intent, turns, { collector })
+    : await b.Synthesize(input.userMessage, input.intent, turns)
+
+  // Extract LLM call data if collector present
+  let llmCall: LLMCallData | undefined
+  if (collector?.last) {
+    const last = collector.last
+    let rawInput: string | undefined
+    const lastCall = last.calls?.[last.calls.length - 1]
+    if (lastCall?.httpRequest?.body) {
+      const body = lastCall.httpRequest.body
+      rawInput = typeof body === 'string' ? body : JSON.stringify(body, null, 2)
+    }
+
+    llmCall = {
+      functionName: 'Synthesize',
+      variables,
+      rawInput,
+      rawOutput: last.rawLlmResponse ?? undefined,
+      usage: last.usage ? {
+        inputTokens: last.usage.inputTokens ?? 0,
+        outputTokens: last.usage.outputTokens ?? 0,
+        totalTokens: (last.usage.inputTokens ?? 0) + (last.usage.outputTokens ?? 0)
+      } : undefined,
+      durationMs: Date.now() - startTime
+    }
+  }
+
+  return { content, llmCall }
 }
 
 /**
@@ -167,7 +209,7 @@ function buildSynthesisInputFromView(
 export function synthesizer<T extends SynthesizerData>(
   config: SynthesizerConfig
 ): ConfiguredPattern<T> {
-  const { mode, synthesize = defaultSynthesize, skipIfHasResponse = false } = config
+  const { mode, synthesize, skipIfHasResponse = false } = config
   const resolved = resolveConfig('synthesizer', config)
 
   const fn = async (
@@ -189,15 +231,27 @@ export function synthesizer<T extends SynthesizerData>(
         input.data = scope.data
       }
 
-      // Call synthesis function
-      const synthesizedResponse = await synthesize(input)
+      let synthesizedResponse: string
+      let llmCall: LLMCallData | undefined
 
-      // Track assistant message event
+      if (synthesize) {
+        // Custom synthesis function - no LLM tracking
+        synthesizedResponse = await synthesize(input)
+      } else {
+        // Use default with collector for LLM observability
+        const collector = new Collector('synthesizer')
+        const result = await defaultSynthesize(input, collector)
+        synthesizedResponse = result.content
+        llmCall = result.llmCall
+      }
+
+      // Track assistant message event with LLM call data
       trackEvent(
         scope,
         'assistant_message',
         { content: synthesizedResponse } as AssistantMessageEventData,
-        resolved.trackHistory
+        resolved.trackHistory,
+        llmCall
       )
 
       scope.data = {
