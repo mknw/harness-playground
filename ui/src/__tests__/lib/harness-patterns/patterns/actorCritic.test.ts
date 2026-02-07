@@ -100,6 +100,11 @@ describe('actorCritic', () => {
 describe('actorCritic execution', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Reset callTool mock
+    callToolMock.mockResolvedValue({
+      success: true,
+      data: { result: 'ok' }
+    })
   })
 
   it('should track controller_action and critic_result events', async () => {
@@ -109,16 +114,16 @@ describe('actorCritic execution', () => {
 
     // Create mock actor and critic
     const mockActor = vi.fn().mockResolvedValue({
-      action: mockFinalAction('Done'),
+      action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"test"}' }),
       llmCall: undefined
     })
 
     const mockCritic = vi.fn().mockResolvedValue({
-      result: mockCriticResult(),
+      result: mockCriticResult({ is_sufficient: true }),
       llmCall: undefined
     })
 
-    const pattern = actorCritic(mockActor, mockCritic, ['Return'], {
+    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
       patternId: 'test',
       trackHistory: ['controller_action', 'critic_result']
     })
@@ -140,8 +145,322 @@ describe('actorCritic execution', () => {
     // Execute pattern
     const result = await pattern.fn(scope, view)
 
-    // Verify actor was called
+    // Verify actor and critic were called
     expect(mockActor).toHaveBeenCalled()
+    expect(mockCritic).toHaveBeenCalled()
     expect(result).toBeDefined()
+  })
+
+  it('should retry when tool is not allowed', async () => {
+    const { actorCritic } = await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockActor = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'forbidden_tool', tool_args: '{}' }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"test"}' }),
+        llmCall: undefined
+      })
+
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined
+    })
+
+    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
+      patternId: 'test',
+      maxRetries: 3
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Should have called actor twice (first attempt with wrong tool, second with correct)
+    expect(mockActor).toHaveBeenCalledTimes(2)
+    expect(result.data.result).toBeDefined()
+  })
+
+  it('should retry when tool_args JSON is invalid', async () => {
+    const { actorCritic } = await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockActor = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'code-mode', tool_args: 'not valid json' }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"test"}' }),
+        llmCall: undefined
+      })
+
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined
+    })
+
+    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
+      patternId: 'test',
+      maxRetries: 3
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Should have called actor twice (first with invalid JSON, second with valid)
+    expect(mockActor).toHaveBeenCalledTimes(2)
+    expect(result.data.result).toBeDefined()
+  })
+
+  it('should retry when tool execution fails', async () => {
+    const { actorCritic } = await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    // First call fails, second succeeds
+    callToolMock
+      .mockResolvedValueOnce({ success: false, data: null, error: 'Execution failed' })
+      .mockResolvedValueOnce({ success: true, data: { result: 'ok' } })
+
+    const mockActor = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"test"}' }),
+      llmCall: undefined
+    })
+
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined
+    })
+
+    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
+      patternId: 'test',
+      maxRetries: 3
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    expect(mockActor).toHaveBeenCalledTimes(2)
+    expect(result.data.result).toBeDefined()
+  })
+
+  it('should retry when critic says not sufficient', async () => {
+    const { actorCritic } = await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
+
+    const mockActor = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"test"}' }),
+      llmCall: undefined
+    })
+
+    const mockCritic = vi.fn()
+      .mockResolvedValueOnce({
+        result: mockCriticResult({
+          is_sufficient: false,
+          explanation: 'Try harder',
+          suggested_approach: 'Use a better approach'
+        }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        result: mockCriticResult({ is_sufficient: true }),
+        llmCall: undefined
+      })
+
+    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
+      patternId: 'test',
+      maxRetries: 3
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Should have called actor and critic twice
+    expect(mockActor).toHaveBeenCalledTimes(2)
+    expect(mockCritic).toHaveBeenCalledTimes(2)
+    expect(result.data.result).toBeDefined()
+  })
+
+  it('should track error when max retries exceeded', async () => {
+    const { actorCritic } = await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
+
+    const mockActor = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"test"}' }),
+      llmCall: undefined
+    })
+
+    // Critic always says not sufficient
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: false, explanation: 'Not good enough' }),
+      llmCall: undefined
+    })
+
+    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
+      patternId: 'test',
+      maxRetries: 2
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Should have exhausted retries
+    expect(mockActor).toHaveBeenCalledTimes(2)
+    expect(mockCritic).toHaveBeenCalledTimes(2)
+
+    const errorEvents = result.events.filter(e => e.type === 'error')
+    expect(errorEvents.length).toBeGreaterThan(0)
+    expect(JSON.stringify(errorEvents[0].data)).toContain('Max retries')
+  })
+
+  it('should handle actor errors gracefully', async () => {
+    const { actorCritic } = await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockActor = vi.fn().mockRejectedValue(new Error('Actor crashed'))
+
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined
+    })
+
+    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
+      patternId: 'test'
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    const errorEvents = result.events.filter(e => e.type === 'error')
+    expect(errorEvents.length).toBeGreaterThan(0)
+    expect(JSON.stringify(errorEvents[0].data)).toContain('Actor crashed')
+  })
+
+  it('should use availableTools from config', async () => {
+    const { actorCritic } = await import('../../../../lib/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
+
+    let receivedAvailableTools: string[] = []
+    const mockActor = vi.fn().mockImplementation(async (_user, _intent, availableTools) => {
+      receivedAvailableTools = availableTools
+      return {
+        action: mockAction({ tool_name: 'code-mode', tool_args: '{}' }),
+        llmCall: undefined
+      }
+    })
+
+    const mockCritic = vi.fn().mockResolvedValue({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined
+    })
+
+    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
+      patternId: 'test',
+      availableTools: ['custom-tool-1', 'custom-tool-2']
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    expect(receivedAvailableTools).toEqual(['custom-tool-1', 'custom-tool-2'])
   })
 })
