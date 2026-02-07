@@ -10,8 +10,8 @@ import { Show, createSignal, createMemo } from 'solid-js';
 import { GraphVisualization } from './GraphVisualization';
 import { ObservabilityPanel } from './ObservabilityPanel';
 import { ToolsPanel } from './ToolsPanel';
-import { createTelemetryStore, useTelemetryStream } from '~/lib/otel';
 import type { ElementDefinition } from 'cytoscape';
+import type { ContextEvent } from '~/lib/harness-patterns';
 
 // ============================================================================
 // Types
@@ -33,9 +33,11 @@ export interface SupportPanelProps {
   graphElements: GraphElement[];
   highlightedIds?: string[];
   promptStats?: PromptStat[];
+  contextEvents?: ContextEvent[];
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void;
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
   onClearGraph?: () => void;
+  onClearEvents?: () => void;
 }
 
 // ============================================================================
@@ -44,10 +46,6 @@ export interface SupportPanelProps {
 
 export const SupportPanel = (props: SupportPanelProps) => {
   const [selectedTab, setSelectedTab] = createSignal('neo4j-graph');
-
-  // Create telemetry store and connect to SSE stream
-  const telemetryStore = createTelemetryStore();
-  useTelemetryStream(telemetryStore);
 
   // Filter graph elements by source
   const neo4jElements = createMemo(() =>
@@ -226,9 +224,12 @@ export const SupportPanel = (props: SupportPanelProps) => {
             />
           </Tabs.Content>
 
-          {/* Observability Tab - OTel based */}
+          {/* Observability Tab - ContextEvents based */}
           <Tabs.Content value="stats" h="full">
-            <ObservabilityPanel store={telemetryStore} />
+            <ObservabilityPanel
+              events={props.contextEvents ?? []}
+              onClear={props.onClearEvents}
+            />
           </Tabs.Content>
 
           {/* Tools Tab */}

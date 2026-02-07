@@ -4,7 +4,6 @@
  * Composes multiple patterns into a single sequence.
  */
 
-import { trace, SpanStatusCode } from '@opentelemetry/api'
 import { assertServerOnImport } from '../assert.server'
 import type {
   UnifiedContext,
@@ -22,8 +21,6 @@ import {
 import { createEventView } from './event-view.server'
 
 assertServerOnImport()
-
-const tracer = trace.getTracer('harness-patterns.chain')
 
 /**
  * Execute configured patterns in sequence with proper scope lifecycle.
@@ -53,80 +50,55 @@ export async function chain<T extends Record<string, unknown>>(
     return ctx
   }
 
-  return tracer.startActiveSpan('pattern.chain', async (span) => {
-    span.setAttribute('patternCount', patterns.length)
+  try {
+    let currentData = ctx.data
 
-    try {
-      let currentData = ctx.data
+    for (let i = 0; i < patterns.length; i++) {
+      const pattern = patterns[i]
 
-      for (let i = 0; i < patterns.length; i++) {
-        const pattern = patterns[i]
-
-        // Stop if status changed from running
-        if (ctx.status !== 'running') {
-          span.addEvent('chain.earlyExit', {
-            index: i,
-            patternId: pattern.config.patternId,
-            status: ctx.status
-          })
-          break
-        }
-
-        const patternId = pattern.config.patternId!
-        span.addEvent('chain.pattern.enter', { index: i, patternId })
-
-        // 1. Create isolated scope for this pattern
-        const scope = createScope<T>(patternId, currentData)
-
-        // 2. Create view based on pattern's viewConfig
-        const view = createEventView(ctx, pattern.config.viewConfig)
-
-        // 3. Add pattern_enter event
-        enterPattern(ctx, patternId, pattern.name)
-
-        try {
-          // 4. Execute pattern
-          const result = await pattern.fn(scope, view)
-
-          // 5. Commit events based on strategy
-          commitEvents(ctx, result, pattern.config.commitStrategy!)
-
-          // 6. Pass data forward
-          currentData = result.data
-
-          span.addEvent('chain.pattern.exit', {
-            index: i,
-            patternId,
-            status: ctx.status,
-            eventsCommitted: result.events.length
-          })
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error)
-          setError(ctx, msg, patternId)
-          span.addEvent('chain.pattern.error', { index: i, patternId, error: msg })
-        }
-
-        // 7. Add pattern_exit event
-        exitPattern(ctx, patternId)
+      // Stop if status changed from running
+      if (ctx.status !== 'running') {
+        break
       }
 
-      // Update final data
-      ctx.data = currentData
+      const patternId = pattern.config.patternId!
 
-      span.setStatus({
-        code: ctx.status === 'error' ? SpanStatusCode.ERROR : SpanStatusCode.OK
-      })
+      // 1. Create isolated scope for this pattern
+      const scope = createScope<T>(patternId, currentData)
 
-      return ctx
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error)
-      span.setStatus({ code: SpanStatusCode.ERROR, message: msg })
-      setError(ctx, msg, 'chain')
-      return ctx
-    } finally {
-      span.end()
+      // 2. Create view based on pattern's viewConfig
+      const view = createEventView(ctx, pattern.config.viewConfig)
+
+      // 3. Add pattern_enter event
+      enterPattern(ctx, patternId, pattern.name)
+
+      try {
+        // 4. Execute pattern
+        const result = await pattern.fn(scope, view)
+
+        // 5. Commit events based on strategy
+        commitEvents(ctx, result, pattern.config.commitStrategy!)
+
+        // 6. Pass data forward
+        currentData = result.data
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        setError(ctx, msg, patternId)
+      }
+
+      // 7. Add pattern_exit event
+      exitPattern(ctx, patternId)
     }
-  })
+
+    // Update final data
+    ctx.data = currentData
+
+    return ctx
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error)
+    setError(ctx, msg, 'chain')
+    return ctx
+  }
 }
 
 /**

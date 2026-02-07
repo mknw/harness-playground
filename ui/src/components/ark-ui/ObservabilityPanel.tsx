@@ -1,28 +1,131 @@
 /**
  * ObservabilityPanel Component
  *
- * Vertical timeline display with two lanes:
- * - Interface Lane: Harness/Router spans
- * - Tools Lane: Pattern/Decider spans
- *
+ * Displays ContextEvents in a timeline format with expandable detail overlays.
  * Events are displayed chronologically from top (oldest) to bottom (newest).
  */
 
-import { For, Show, createMemo } from 'solid-js'
-import type { TelemetryStore } from '~/lib/otel'
-import type { SpanData, SpanStatus } from '~/lib/otel'
-import { statusColors, getSpanColor, getSpanLabel } from '~/lib/otel'
+import { For, Show, createSignal, createMemo, Switch, Match } from 'solid-js'
+import type {
+  ContextEvent,
+  EventType,
+  ToolCallEventData,
+  ToolResultEventData,
+  ControllerActionEventData,
+  UserMessageEventData,
+  AssistantMessageEventData,
+  ApprovalRequestEventData,
+  ErrorEventData
+} from '~/lib/harness-patterns'
 
 interface ObservabilityPanelProps {
-  store: TelemetryStore
+  events: ContextEvent[]
+  onClear?: () => void
+}
+
+// ============================================================================
+// Event Icons and Colors
+// ============================================================================
+
+const eventIcons: Record<EventType, string> = {
+  user_message: '💬',
+  assistant_message: '🤖',
+  tool_call: '🔧',
+  tool_result: '📥',
+  controller_action: '🎯',
+  critic_result: '📝',
+  pattern_enter: '▶️',
+  pattern_exit: '⏹️',
+  approval_request: '⏸️',
+  approval_response: '✅',
+  error: '❌'
+}
+
+const eventColors: Record<EventType, string> = {
+  user_message: '#60a5fa',      // blue-400
+  assistant_message: '#34d399', // green-400
+  tool_call: '#a78bfa',         // violet-400
+  tool_result: '#22d3ee',       // cyan-400
+  controller_action: '#fbbf24', // amber-400
+  critic_result: '#f472b6',     // pink-400
+  pattern_enter: '#94a3b8',     // slate-400
+  pattern_exit: '#94a3b8',      // slate-400
+  approval_request: '#f97316',  // orange-500
+  approval_response: '#10b981', // emerald-500
+  error: '#ef4444'              // red-500
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+function getEventPreview(type: EventType, data: unknown): string {
+  switch (type) {
+    case 'tool_call': {
+      const d = data as ToolCallEventData
+      return d.tool
+    }
+    case 'tool_result': {
+      const d = data as ToolResultEventData
+      return `${d.tool}: ${d.success ? 'ok' : 'error'}`
+    }
+    case 'controller_action': {
+      const d = data as ControllerActionEventData
+      return d.action.tool_name
+    }
+    case 'user_message':
+    case 'assistant_message': {
+      const d = data as { content: string }
+      const content = d.content || ''
+      return content.length > 50 ? content.slice(0, 50) + '...' : content
+    }
+    case 'approval_request': {
+      const d = data as ApprovalRequestEventData
+      return d.request.action
+    }
+    case 'error': {
+      const d = data as ErrorEventData
+      return d.error.slice(0, 50)
+    }
+    case 'pattern_enter':
+    case 'pattern_exit':
+      return ''
+    default:
+      return ''
+  }
+}
+
+function getEventLane(type: EventType): 'interface' | 'tools' {
+  switch (type) {
+    case 'user_message':
+    case 'assistant_message':
+    case 'pattern_enter':
+    case 'pattern_exit':
+    case 'approval_request':
+    case 'approval_response':
+      return 'interface'
+    default:
+      return 'tools'
+  }
 }
 
 // ============================================================================
 // Summary Bar Component
 // ============================================================================
 
-const SummaryBar = (props: { store: TelemetryStore }) => {
-  const metrics = () => props.store.metrics()
+const SummaryBar = (props: { events: ContextEvent[], onClear?: () => void }) => {
+  const metrics = createMemo(() => {
+    const events = props.events
+    const toolResults = events.filter(e => e.type === 'tool_result')
+    const successCount = toolResults.filter(e => (e.data as ToolResultEventData).success).length
+    const errorCount = events.filter(e => e.type === 'error').length
+
+    return {
+      totalEvents: events.length,
+      successRate: toolResults.length > 0 ? successCount / toolResults.length : 1,
+      errorCount
+    }
+  })
 
   return (
     <div
@@ -33,8 +136,8 @@ const SummaryBar = (props: { store: TelemetryStore }) => {
       gap="4"
     >
       <div flex="~" items="center" gap="2">
-        <span text="xs dark-text-tertiary">Spans:</span>
-        <span text="sm dark-text-primary" font="mono">{metrics().totalCalls}</span>
+        <span text="xs dark-text-tertiary">Events:</span>
+        <span text="sm dark-text-primary" font="mono">{metrics().totalEvents}</span>
       </div>
 
       <div flex="~" items="center" gap="2">
@@ -47,14 +150,16 @@ const SummaryBar = (props: { store: TelemetryStore }) => {
         </span>
       </div>
 
-      <div flex="~" items="center" gap="2">
-        <span text="xs dark-text-tertiary">Avg:</span>
-        <span text="sm dark-text-primary" font="mono">{metrics().avgLatency_ms}ms</span>
-      </div>
+      <Show when={metrics().errorCount > 0}>
+        <div flex="~" items="center" gap="2">
+          <span text="xs dark-text-tertiary">Errors:</span>
+          <span text="sm red-400" font="mono">{metrics().errorCount}</span>
+        </div>
+      </Show>
 
-      <Show when={props.store.state.spans.length > 0}>
+      <Show when={props.events.length > 0}>
         <button
-          onClick={() => props.store.clearSpans()}
+          onClick={() => props.onClear?.()}
           m="l-auto"
           p="x-2 y-1"
           text="xs red-400"
@@ -72,84 +177,76 @@ const SummaryBar = (props: { store: TelemetryStore }) => {
 }
 
 // ============================================================================
-// Timeline Event Node Component
+// Event Row Component
 // ============================================================================
 
-const EventNode = (props: {
-  span: SpanData
-  onExpand: (id: string) => void
+const EventRow = (props: {
+  event: ContextEvent
+  index: number
+  expanded: boolean
+  onExpand: () => void
 }) => {
-  const hexColor = () => getSpanColor(props.span.name)
-  const label = () => getSpanLabel(props.span.name)
+  const { type, patternId, data } = props.event
+  const icon = eventIcons[type]
+  const preview = getEventPreview(type, data)
+  const lane = getEventLane(type)
+  const color = eventColors[type]
 
-  // Map status for display
-  const displayStatus = (): SpanStatus => {
-    return props.span.status
-  }
-
-  return (
+  const NodeContent = () => (
     <div
       flex="~ col"
       items="center"
       gap="1"
       p="2 3"
       cursor="pointer"
-      bg="transparent hover:dark-bg-hover"
+      bg={props.expanded ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-hover'}
+      border={props.expanded ? '1 neon-cyan/30' : 'none'}
       rounded="md"
       transition="all"
-      onClick={() => props.onExpand(props.span.id)}
+      onClick={props.onExpand}
       w="full"
     >
-      {/* Status indicator */}
-      <div
-        w="3"
-        h="3"
-        rounded="full"
-        bg={statusColors[displayStatus()]}
-        shadow="sm"
-      />
+      {/* Icon */}
+      <span text="lg">{icon}</span>
 
-      {/* Event label */}
+      {/* Event type */}
       <div
         style={{
-          color: hexColor(),
-          'font-size': '12px',
+          color,
+          'font-size': '11px',
           'font-family': '"Fira Code", ui-monospace, monospace',
           'font-weight': '500',
-          'text-align': 'center',
-          'max-width': '100%',
-          overflow: 'hidden',
-          'text-overflow': 'ellipsis',
-          'white-space': 'nowrap'
+          'text-align': 'center'
         }}
       >
-        {label()}
+        {type.replace(/_/g, ' ')}
       </div>
 
-      {/* Duration */}
-      <Show when={props.span.duration_ms}>
+      {/* Pattern ID */}
+      <Show when={patternId && patternId !== 'harness'}>
         <div text="xs dark-text-tertiary" font="mono">
-          {Math.round(props.span.duration_ms!)}ms
+          {patternId}
+        </div>
+      </Show>
+
+      {/* Preview */}
+      <Show when={preview}>
+        <div
+          text="xs dark-text-secondary"
+          max-w="120px"
+          overflow="hidden"
+          style={{ 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
+        >
+          {preview}
         </div>
       </Show>
     </div>
   )
-}
-
-// ============================================================================
-// Timeline Row Component
-// ============================================================================
-
-const TimelineRow = (props: {
-  span: SpanData
-  onExpand: (id: string) => void
-}) => {
-  const isInterface = () => props.span.lane === 'interface'
 
   return (
     <div
       flex="~"
-      min-h="60px"
+      min-h="70px"
       border="b dark-border-secondary/30"
     >
       {/* Interface Lane (left) */}
@@ -160,8 +257,8 @@ const TimelineRow = (props: {
         items="center"
         border="r dark-border-secondary/30"
       >
-        <Show when={isInterface()}>
-          <EventNode span={props.span} onExpand={props.onExpand} />
+        <Show when={lane === 'interface'}>
+          <NodeContent />
         </Show>
       </div>
 
@@ -172,8 +269,8 @@ const TimelineRow = (props: {
         justify="center"
         items="center"
       >
-        <Show when={!isInterface()}>
-          <EventNode span={props.span} onExpand={props.onExpand} />
+        <Show when={lane === 'tools'}>
+          <NodeContent />
         </Show>
       </div>
     </div>
@@ -189,7 +286,7 @@ const LaneHeaders = () => (
     flex="~"
     border="b dark-border-primary"
     bg="dark-bg-secondary"
-    style={{ position: "sticky", top: "0", "z-index": "10" }}
+    style={{ position: 'sticky', top: '0', 'z-index': '10' }}
   >
     {/* Interface Lane Header */}
     <div
@@ -245,7 +342,7 @@ const EmptyState = () => (
       <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
     <div text="sm dark-text-secondary" m="t-3">
-      No spans yet
+      No events yet
     </div>
     <div text="xs dark-text-tertiary" m="t-1">
       Send a message to see the timeline
@@ -254,25 +351,157 @@ const EmptyState = () => (
 )
 
 // ============================================================================
-// Span Detail Overlay Component
+// Event Detail Components
 // ============================================================================
 
-const SpanDetailOverlay = (props: {
-  span: SpanData
-  onClose: () => void
-  onDelete: () => void
-}) => {
+const ToolCallDetail = (props: { data: ToolCallEventData }) => (
+  <div flex="~ col" gap="3">
+    <div>
+      <div text="xs dark-text-tertiary" m="b-1">Tool</div>
+      <div text="sm neon-cyan" font="mono">{props.data.tool}</div>
+    </div>
+    <div>
+      <div text="xs dark-text-tertiary" m="b-1">Arguments</div>
+      <pre
+        text="xs dark-text-primary"
+        bg="dark-bg-tertiary"
+        p="3"
+        rounded="md"
+        overflow="auto"
+        max-h="300px"
+      >
+        {JSON.stringify(props.data.args, null, 2)}
+      </pre>
+    </div>
+  </div>
+)
+
+const ToolResultDetail = (props: { data: ToolResultEventData }) => (
+  <div flex="~ col" gap="3">
+    <div>
+      <div text="xs dark-text-tertiary" m="b-1">Tool</div>
+      <div text="sm neon-cyan" font="mono">{props.data.tool}</div>
+    </div>
+    <div>
+      <div text="xs dark-text-tertiary" m="b-1">Status</div>
+      <div
+        text={`sm ${props.data.success ? 'neon-green' : 'red-400'}`}
+        font="medium"
+      >
+        {props.data.success ? 'Success' : `Error: ${props.data.error}`}
+      </div>
+    </div>
+    <div>
+      <div text="xs dark-text-tertiary" m="b-1">Result</div>
+      <pre
+        text="xs dark-text-primary"
+        bg="dark-bg-tertiary"
+        p="3"
+        rounded="md"
+        overflow="auto"
+        max-h="300px"
+      >
+        {JSON.stringify(props.data.result, null, 2)}
+      </pre>
+    </div>
+  </div>
+)
+
+const ActionDetail = (props: { data: ControllerActionEventData }) => (
+  <div flex="~ col" gap="3">
+    <div>
+      <div text="xs dark-text-tertiary" m="b-1">Tool</div>
+      <div text="sm neon-cyan" font="mono">{props.data.action.tool_name}</div>
+    </div>
+    <Show when={props.data.action.reasoning}>
+      <div>
+        <div text="xs dark-text-tertiary" m="b-1">Reasoning</div>
+        <div text="sm dark-text-primary">{props.data.action.reasoning}</div>
+      </div>
+    </Show>
+    <div>
+      <div text="xs dark-text-tertiary" m="b-1">Arguments</div>
+      <pre
+        text="xs dark-text-primary"
+        bg="dark-bg-tertiary"
+        p="3"
+        rounded="md"
+        overflow="auto"
+        max-h="200px"
+      >
+        {props.data.action.tool_args}
+      </pre>
+    </div>
+    <div flex="~" gap="4">
+      <div>
+        <div text="xs dark-text-tertiary" m="b-1">Final</div>
+        <div text="sm dark-text-primary">{props.data.action.is_final ? 'Yes' : 'No'}</div>
+      </div>
+      <Show when={props.data.action.status}>
+        <div>
+          <div text="xs dark-text-tertiary" m="b-1">Status</div>
+          <div text="sm dark-text-primary">{props.data.action.status}</div>
+        </div>
+      </Show>
+    </div>
+  </div>
+)
+
+const MessageDetail = (props: { data: { content: string }, role: 'user' | 'assistant' }) => (
+  <div flex="~ col" gap="3">
+    <div>
+      <div text="xs dark-text-tertiary" m="b-1">Role</div>
+      <div text="sm dark-text-primary" font="medium">{props.role}</div>
+    </div>
+    <div>
+      <div text="xs dark-text-tertiary" m="b-1">Content</div>
+      <div
+        text="sm dark-text-primary"
+        bg="dark-bg-tertiary"
+        p="3"
+        rounded="md"
+        style={{ 'white-space': 'pre-wrap' }}
+      >
+        {props.data.content}
+      </div>
+    </div>
+  </div>
+)
+
+const GenericDetail = (props: { data: unknown }) => (
+  <div>
+    <div text="xs dark-text-tertiary" m="b-2">Data</div>
+    <pre
+      text="xs dark-text-primary"
+      bg="dark-bg-tertiary"
+      p="3"
+      rounded="md"
+      overflow="auto"
+      max-h="400px"
+    >
+      {JSON.stringify(props.data, null, 2)}
+    </pre>
+  </div>
+)
+
+// ============================================================================
+// Event Detail Overlay Component
+// ============================================================================
+
+const EventDetailOverlay = (props: { event: ContextEvent, onClose: () => void }) => {
+  const { type, ts, patternId, data } = props.event
+
   return (
     <div
       style={{
-        position: "absolute",
-        inset: "0",
-        "background-color": "rgba(13, 17, 23, 0.95)",
-        "backdrop-filter": "blur(4px)",
-        "z-index": "50",
-        display: "flex",
-        "flex-direction": "column",
-        overflow: "hidden"
+        position: 'absolute',
+        inset: '0',
+        'background-color': 'rgba(13, 17, 23, 0.95)',
+        'backdrop-filter': 'blur(4px)',
+        'z-index': '50',
+        display: 'flex',
+        'flex-direction': 'column',
+        overflow: 'hidden'
       }}
     >
       {/* Header */}
@@ -284,78 +513,48 @@ const SpanDetailOverlay = (props: {
         border="b dark-border-primary"
       >
         <div flex="~ col" gap="1">
-          <span text="sm dark-text-primary" font="medium">
-            {props.span.name}
-          </span>
-          <span text="xs dark-text-tertiary">
-            {props.span.duration_ms ? `${Math.round(props.span.duration_ms)}ms` : 'pending'}
-          </span>
+          <div flex="~" items="center" gap="2">
+            <span text="lg">{eventIcons[type]}</span>
+            <span text="sm dark-text-primary" font="medium">
+              {type.replace(/_/g, ' ')}
+            </span>
+          </div>
+          <div flex="~" gap="3" text="xs dark-text-tertiary">
+            <span>{patternId}</span>
+            <span>{new Date(ts).toLocaleTimeString()}</span>
+          </div>
         </div>
-        <div flex="~" gap="2">
-          <button
-            onClick={props.onDelete}
-            p="2"
-            text="red-400"
-            bg="red-600/10 hover:red-600/20"
-            rounded="md"
-            cursor="pointer"
-          >
-            Delete
-          </button>
-          <button
-            onClick={props.onClose}
-            p="2"
-            text="dark-text-secondary"
-            bg="dark-bg-hover hover:dark-bg-tertiary"
-            rounded="md"
-            cursor="pointer"
-          >
-            Close
-          </button>
-        </div>
+        <button
+          onClick={props.onClose}
+          p="2"
+          text="dark-text-secondary"
+          bg="dark-bg-hover hover:dark-bg-tertiary"
+          rounded="md"
+          cursor="pointer"
+        >
+          Close
+        </button>
       </div>
 
       {/* Content */}
       <div flex="1" overflow="auto" p="4">
-        {/* Attributes */}
-        <Show when={Object.keys(props.span.attributes).length > 0}>
-          <div m="b-4">
-            <div text="xs dark-text-tertiary" m="b-2">Attributes</div>
-            <pre
-              text="xs dark-text-primary"
-              bg="dark-bg-tertiary"
-              p="3"
-              rounded="md"
-              overflow="auto"
-            >
-              {JSON.stringify(props.span.attributes, null, 2)}
-            </pre>
-          </div>
-        </Show>
-
-        {/* Events */}
-        <Show when={props.span.events.length > 0}>
-          <div>
-            <div text="xs dark-text-tertiary" m="b-2">Events</div>
-            <For each={props.span.events}>
-              {(event) => (
-                <div
-                  p="2"
-                  m="b-2"
-                  bg="dark-bg-tertiary"
-                  rounded="md"
-                >
-                  <div text="xs neon-cyan" font="medium">{event.name}</div>
-                  <Show when={event.attributes}>
-                    <pre text="xs dark-text-secondary" m="t-1">
-                      {JSON.stringify(event.attributes, null, 2)}
-                    </pre>
-                  </Show>
-                </div>
-              )}
-            </For>
-          </div>
-        </Show>
+        <Switch fallback={<GenericDetail data={data} />}>
+          <Match when={type === 'tool_call'}>
+            <ToolCallDetail data={data as ToolCallEventData} />
+          </Match>
+          <Match when={type === 'tool_result'}>
+            <ToolResultDetail data={data as ToolResultEventData} />
+          </Match>
+          <Match when={type === 'controller_action'}>
+            <ActionDetail data={data as ControllerActionEventData} />
+          </Match>
+          <Match when={type === 'user_message'}>
+            <MessageDetail data={data as UserMessageEventData} role="user" />
+          </Match>
+          <Match when={type === 'assistant_message'}>
+            <MessageDetail data={data as AssistantMessageEventData} role="assistant" />
+          </Match>
+        </Switch>
       </div>
     </div>
   )
@@ -366,33 +565,29 @@ const SpanDetailOverlay = (props: {
 // ============================================================================
 
 export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
-  const state = () => props.store.state
+  const [expandedIndex, setExpandedIndex] = createSignal<number | null>(null)
 
-  // Sort spans chronologically (oldest first)
-  const timelineSpans = createMemo(() => {
-    return [...state().spans].sort((a, b) => a.startTime - b.startTime)
+  // Sort events chronologically (oldest first)
+  const timelineEvents = createMemo(() => {
+    return [...props.events].sort((a, b) => a.ts - b.ts)
   })
 
-  // Get expanded span
-  const expandedSpan = createMemo(() => {
-    const id = state().expandedSpanId
-    if (!id) return null
-    return props.store.getSpan(id)
+  // Get expanded event
+  const expandedEvent = createMemo(() => {
+    const idx = expandedIndex()
+    if (idx === null) return null
+    return timelineEvents()[idx] ?? null
   })
 
-  const handleExpand = (id: string) => props.store.expandSpan(id)
-  const handleClose = () => props.store.collapseSpan()
-  const handleDelete = (id: string) => {
-    props.store.deleteSpan(id)
-    props.store.collapseSpan()
-  }
+  const handleExpand = (index: number) => setExpandedIndex(index)
+  const handleClose = () => setExpandedIndex(null)
 
-  const hasSpans = () => timelineSpans().length > 0
+  const hasEvents = () => timelineEvents().length > 0
 
   return (
     <div flex="~ col" h="full" bg="dark-bg-primary" overflow="hidden" position="relative">
       {/* Summary Bar */}
-      <SummaryBar store={props.store} />
+      <SummaryBar events={props.events} onClear={props.onClear} />
 
       {/* Lane Headers */}
       <LaneHeaders />
@@ -400,26 +595,27 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
       {/* Timeline Container */}
       <div flex="1" overflow="auto">
         <Show
-          when={hasSpans()}
+          when={hasEvents()}
           fallback={<EmptyState />}
         >
-          <For each={timelineSpans()}>
-            {(span) => (
-              <TimelineRow
-                span={span}
-                onExpand={handleExpand}
+          <For each={timelineEvents()}>
+            {(event, index) => (
+              <EventRow
+                event={event}
+                index={index()}
+                expanded={expandedIndex() === index()}
+                onExpand={() => handleExpand(index())}
               />
             )}
           </For>
         </Show>
       </div>
 
-      {/* Span Detail Overlay */}
-      <Show when={expandedSpan()}>
-        <SpanDetailOverlay
-          span={expandedSpan()!}
+      {/* Event Detail Overlay */}
+      <Show when={expandedEvent()}>
+        <EventDetailOverlay
+          event={expandedEvent()!}
           onClose={handleClose}
-          onDelete={() => handleDelete(state().expandedSpanId!)}
         />
       </Show>
     </div>

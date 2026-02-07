@@ -5,7 +5,6 @@
  * Calls BAML controller function directly, extracting params from context.
  */
 
-import { trace, SpanStatusCode } from '@opentelemetry/api'
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import type {
@@ -23,8 +22,6 @@ import { MAX_TOOL_TURNS } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
 
 assertServerOnImport()
-
-const tracer = trace.getTracer('harness-patterns.simpleLoop')
 
 export interface SimpleLoopData {
   turn?: number
@@ -65,155 +62,121 @@ export function simpleLoop<T extends SimpleLoopData>(
     scope: PatternScope<T>,
     view: EventView
   ): Promise<PatternScope<T>> => {
-    return tracer.startActiveSpan('pattern.simpleLoop', async (span) => {
-      span.setAttribute('patternId', scope.id)
-      span.setAttribute('maxTurns', maxTurns)
-      span.setAttribute('tools', tools.join(','))
+    const data = scope.data
+    const results: unknown[] = [...(data.results ?? [])]
+    let hasError = false
+    let errorMessage: string | undefined
 
-      const data = scope.data
-      const results: unknown[] = [...(data.results ?? [])]
-      let hasError = false
-      let errorMessage: string | undefined
+    try {
+      for (let turn = 0; turn < maxTurns; turn++) {
+        // Get previous results from view (serialized for LLM)
+        const previousFromView = view.tools().serialize()
+        const previousResults = previousFromView || JSON.stringify(results)
 
-      try {
-        for (let turn = 0; turn < maxTurns; turn++) {
-          span.addEvent('turn.start', { turn })
+        // Extract intent from data or use input from view
+        const userMessage = view.messages().last(1).get()[0]
+        const userContent = userMessage
+          ? (userMessage.data as { content: string }).content
+          : ''
+        const intent = data.intent ?? userContent
 
-          // Get previous results from view (serialized for LLM)
-          const previousFromView = view.tools().serialize()
-          const previousResults = previousFromView || JSON.stringify(results)
+        // Call BAML controller
+        const action = await controller(
+          userContent,
+          intent,
+          previousResults,
+          turn,
+          config?.schema
+        )
 
-          // Extract intent from data or use input from view
-          const userMessage = view.messages().last(1).get()[0]
-          const userContent = userMessage
-            ? (userMessage.data as { content: string }).content
-            : ''
-          const intent = data.intent ?? userContent
+        // Track controller action event
+        trackEvent(
+          scope,
+          'controller_action',
+          { action } as ControllerActionEventData,
+          resolved.trackHistory
+        )
 
-          // Call BAML controller
-          const action = await tracer.startActiveSpan('controller', async (controllerSpan) => {
-            controllerSpan.setAttribute('turn', turn)
-            try {
-              const result = await controller(
-                userContent,
-                intent,
-                previousResults,
-                turn,
-                config?.schema
-              )
-              controllerSpan.setStatus({ code: SpanStatusCode.OK })
-              return result
-            } catch (error) {
-              const msg = error instanceof Error ? error.message : String(error)
-              controllerSpan.setStatus({ code: SpanStatusCode.ERROR, message: msg })
-              throw error
-            } finally {
-              controllerSpan.end()
-            }
-          })
-
-          // Track controller action event
-          trackEvent(
-            scope,
-            'controller_action',
-            { action } as ControllerActionEventData,
-            resolved.trackHistory
-          )
-
-          span.addEvent('action.decided', {
-            tool: action.tool_name,
-            isFinal: action.is_final
-          })
-
-          // Check if done
-          if (action.is_final) {
-            scope.data = {
-              ...scope.data,
-              lastAction: action,
-              results,
-              turn
-            }
-            break
-          }
-
-          // Validate tool
-          if (!tools.includes(action.tool_name)) {
-            hasError = true
-            errorMessage = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`
-            break
-          }
-
-          // Parse tool args
-          let args: Record<string, unknown>
-          try {
-            args = JSON.parse(action.tool_args)
-          } catch {
-            hasError = true
-            errorMessage = `Invalid tool_args JSON: ${action.tool_args}`
-            break
-          }
-
-          // Track tool call event
-          trackEvent(
-            scope,
-            'tool_call',
-            { tool: action.tool_name, args } as ToolCallEventData,
-            resolved.trackHistory
-          )
-
-          // Execute tool
-          const result = await callTool(action.tool_name, args)
-          results.push(result.data)
-
-          // Track tool result event
-          trackEvent(
-            scope,
-            'tool_result',
-            {
-              tool: action.tool_name,
-              result: result.data,
-              success: result.success,
-              error: result.error
-            } as ToolResultEventData,
-            resolved.trackHistory
-          )
-
-          if (!result.success) {
-            hasError = true
-            errorMessage = result.error ?? 'Tool call failed'
-            break
-          }
-
-          // Update scope data
+        // Check if done
+        if (action.is_final) {
           scope.data = {
             ...scope.data,
-            turn,
             lastAction: action,
-            lastResult: result.data,
-            results
+            results,
+            turn
           }
+          break
         }
 
-        if (hasError) {
-          // Track error event
-          trackEvent(scope, 'error', { error: errorMessage }, true)
+        // Validate tool
+        if (!tools.includes(action.tool_name)) {
+          hasError = true
+          errorMessage = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`
+          break
         }
 
-        span.setStatus({
-          code: hasError ? SpanStatusCode.ERROR : SpanStatusCode.OK,
-          message: errorMessage
-        })
+        // Parse tool args
+        let args: Record<string, unknown>
+        try {
+          args = JSON.parse(action.tool_args)
+        } catch {
+          hasError = true
+          errorMessage = `Invalid tool_args JSON: ${action.tool_args}`
+          break
+        }
 
-        return scope
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error)
-        span.setStatus({ code: SpanStatusCode.ERROR, message: msg })
-        trackEvent(scope, 'error', { error: msg }, true)
-        return scope
-      } finally {
-        span.end()
+        // Track tool call event
+        trackEvent(
+          scope,
+          'tool_call',
+          { tool: action.tool_name, args } as ToolCallEventData,
+          resolved.trackHistory
+        )
+
+        // Execute tool
+        const result = await callTool(action.tool_name, args)
+        results.push(result.data)
+
+        // Track tool result event
+        trackEvent(
+          scope,
+          'tool_result',
+          {
+            tool: action.tool_name,
+            result: result.data,
+            success: result.success,
+            error: result.error
+          } as ToolResultEventData,
+          resolved.trackHistory
+        )
+
+        if (!result.success) {
+          hasError = true
+          errorMessage = result.error ?? 'Tool call failed'
+          break
+        }
+
+        // Update scope data
+        scope.data = {
+          ...scope.data,
+          turn,
+          lastAction: action,
+          lastResult: result.data,
+          results
+        }
       }
-    })
+
+      if (hasError) {
+        // Track error event
+        trackEvent(scope, 'error', { error: errorMessage }, true)
+      }
+
+      return scope
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      trackEvent(scope, 'error', { error: msg }, true)
+      return scope
+    }
   }
 
   return {

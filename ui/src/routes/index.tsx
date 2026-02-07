@@ -2,10 +2,12 @@ import { Splitter } from '@ark-ui/solid/splitter'
 import { createSignal } from 'solid-js'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
+import type { ContextEvent } from '~/lib/harness-patterns'
 
 export default function Home() {
   const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
+  const [contextEvents, setContextEvents] = createSignal<ContextEvent[]>([])
 
   // Accumulate graph elements across calls (deduplicate by ID)
   const accumulateGraphElements = (newElements: GraphElement[]) => {
@@ -19,10 +21,20 @@ export default function Home() {
     setHighlightedIds(newIds)
   }
 
+  // Accumulate context events
+  const accumulateEvents = (newEvents: ContextEvent[]) => {
+    setContextEvents(prev => [...prev, ...newEvents])
+  }
+
   // Clear all graph elements
   const clearGraph = () => {
     setGraphElements([])
     setHighlightedIds([])
+  }
+
+  // Clear all events
+  const clearEvents = () => {
+    setContextEvents([])
   }
 
   return (
@@ -40,6 +52,7 @@ export default function Home() {
         <Splitter.Panel id="chat">
           <ChatInterface
             onGraphUpdate={accumulateGraphElements}
+            onEventsUpdate={accumulateEvents}
           />
         </Splitter.Panel>
 
@@ -58,7 +71,9 @@ export default function Home() {
           <SupportPanel
             graphElements={graphElements()}
             highlightedIds={highlightedIds()}
+            contextEvents={contextEvents()}
             onClearGraph={clearGraph}
+            onClearEvents={clearEvents}
           />
         </Splitter.Panel>
       </Splitter.Root>

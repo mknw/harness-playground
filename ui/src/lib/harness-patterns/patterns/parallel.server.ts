@@ -4,7 +4,6 @@
  * Execute multiple patterns concurrently via Promise.allSettled, merge events.
  */
 
-import { trace, SpanStatusCode } from '@opentelemetry/api'
 import { assertServerOnImport } from '../assert.server'
 import type {
   ConfiguredPattern,
@@ -13,8 +12,6 @@ import type {
 import { trackEvent, resolveConfig } from '../context.server'
 
 assertServerOnImport()
-
-const tracer = trace.getTracer('harness-patterns.parallel')
 
 /**
  * Execute multiple patterns concurrently and merge their results.
@@ -42,44 +39,35 @@ export function parallel<T extends Record<string, unknown>>(
   return {
     name: 'parallel',
     fn: async (scope, view) => {
-      return tracer.startActiveSpan('pattern.parallel', async (span) => {
-        span.setAttribute('patternId', scope.id)
-        span.setAttribute('branchCount', patterns.length)
-
-        try {
-          // Each branch gets an isolated scope with empty events
-          const results = await Promise.allSettled(
-            patterns.map((p) =>
-              p.fn(
-                { ...scope, id: p.config.patternId ?? p.name, events: [], startTime: Date.now() },
-                view
-              )
+      try {
+        // Each branch gets an isolated scope with empty events
+        const results = await Promise.allSettled(
+          patterns.map((p) =>
+            p.fn(
+              { ...scope, id: p.config.patternId ?? p.name, events: [], startTime: Date.now() },
+              view
             )
           )
+        )
 
-          // Merge fulfilled events; log rejected branches
-          for (const [i, r] of results.entries()) {
-            if (r.status === 'fulfilled') {
-              scope.events.push(...r.value.events)
-              scope.data = { ...scope.data, ...r.value.data }
-            } else {
-              trackEvent(scope, 'error', {
-                error: `Branch ${patterns[i].name} failed: ${r.reason}`
-              }, true)
-            }
+        // Merge fulfilled events; log rejected branches
+        for (const [i, r] of results.entries()) {
+          if (r.status === 'fulfilled') {
+            scope.events.push(...r.value.events)
+            scope.data = { ...scope.data, ...r.value.data }
+          } else {
+            trackEvent(scope, 'error', {
+              error: `Branch ${patterns[i].name} failed: ${r.reason}`
+            }, true)
           }
-
-          span.setStatus({ code: SpanStatusCode.OK })
-          return scope
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error)
-          span.setStatus({ code: SpanStatusCode.ERROR, message: msg })
-          trackEvent(scope, 'error', { error: msg }, true)
-          return scope
-        } finally {
-          span.end()
         }
-      })
+
+        return scope
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        trackEvent(scope, 'error', { error: msg }, true)
+        return scope
+      }
     },
     config: resolved
   }

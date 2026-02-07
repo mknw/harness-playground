@@ -5,7 +5,6 @@
  * Can run synchronously or as background fire-and-forget.
  */
 
-import { trace, SpanStatusCode } from '@opentelemetry/api'
 import { assertServerOnImport } from '../assert.server'
 import type {
   ConfiguredPattern,
@@ -14,8 +13,6 @@ import type {
 import { resolveConfig } from '../context.server'
 
 assertServerOnImport()
-
-const tracer = trace.getTracer('harness-patterns.hook')
 
 // ============================================================================
 // Types
@@ -60,42 +57,31 @@ export function hook<T extends Record<string, unknown>>(
   return {
     name: `hook:${config.trigger}(${pattern.name})`,
     fn: async (scope, view) => {
-      return tracer.startActiveSpan(`pattern.hook.${config.trigger}`, async (span) => {
-        span.setAttribute('patternId', scope.id)
-        span.setAttribute('trigger', config.trigger)
-        span.setAttribute('background', config.background ?? false)
-
-        try {
-          if (config.background) {
-            // Fire-and-forget: schedule for execution after response
-            queueMicrotask(async () => {
-              try {
-                await pattern.fn(scope, view)
-              } catch (e) {
-                console.error(`Hook ${config.trigger} failed:`, e)
-              }
-            })
-            span.setStatus({ code: SpanStatusCode.OK })
-            return scope
-          }
-
-          // Synchronous: run and wait
-          const result = await pattern.fn(scope, view)
-          scope.events.push(...result.events)
-          scope.data = { ...scope.data, ...result.data }
-
-          span.setStatus({ code: SpanStatusCode.OK })
+      try {
+        if (config.background) {
+          // Fire-and-forget: schedule for execution after response
+          queueMicrotask(async () => {
+            try {
+              await pattern.fn(scope, view)
+            } catch (e) {
+              console.error(`Hook ${config.trigger} failed:`, e)
+            }
+          })
           return scope
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error)
-          span.setStatus({ code: SpanStatusCode.ERROR, message: msg })
-          // Hooks should not block the main flow on error
-          console.error(`Hook ${config.trigger} error:`, msg)
-          return scope
-        } finally {
-          span.end()
         }
-      })
+
+        // Synchronous: run and wait
+        const result = await pattern.fn(scope, view)
+        scope.events.push(...result.events)
+        scope.data = { ...scope.data, ...result.data }
+
+        return scope
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        // Hooks should not block the main flow on error
+        console.error(`Hook ${config.trigger} error:`, msg)
+        return scope
+      }
     },
     config: resolved
   }

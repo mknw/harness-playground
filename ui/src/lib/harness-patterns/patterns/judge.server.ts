@@ -5,7 +5,6 @@
  * Uses a BAML evaluator function to assess quality.
  */
 
-import { trace, SpanStatusCode } from '@opentelemetry/api'
 import { assertServerOnImport } from '../assert.server'
 import type {
   ConfiguredPattern,
@@ -14,8 +13,6 @@ import type {
 import { trackEvent, resolveConfig } from '../context.server'
 
 assertServerOnImport()
-
-const tracer = trace.getTracer('harness-patterns.judge')
 
 export interface JudgeConfig extends PatternConfig {
   /** Maximum candidates to evaluate */
@@ -64,61 +61,51 @@ export function judge<T extends JudgeData>(
   return {
     name: config?.patternId ?? 'judge',
     fn: async (scope, view) => {
-      return tracer.startActiveSpan('pattern.judge', async (span) => {
-        span.setAttribute('patternId', scope.id)
+      try {
+        // Collect all tool_result events from previous patterns
+        const candidates = view.fromAll().ofType('tool_result').get()
 
-        try {
-          // Collect all tool_result events from previous patterns
-          const candidates = view.fromAll().ofType('tool_result').get()
-          span.setAttribute('candidateCount', candidates.length)
-
-          if (candidates.length === 0) {
-            trackEvent(scope, 'error', {
-              error: 'No candidates to evaluate'
-            }, true)
-            span.setStatus({ code: SpanStatusCode.OK })
-            return scope
-          }
-
-          // Limit candidates if configured
-          const maxCandidates = config?.maxCandidates ?? candidates.length
-          const limitedCandidates = candidates.slice(0, maxCandidates)
-
-          // Format candidates for evaluator
-          const formattedCandidates = limitedCandidates.map((c) => ({
-            source: c.patternId,
-            content: JSON.stringify(c.data)
-          }))
-
-          // Call evaluator
-          const input = (scope.data as Record<string, unknown>).input as string ?? ''
-          const evaluation = await evaluator(input, formattedCandidates)
-
-          trackEvent(scope, 'controller_action', {
-            reasoning: evaluation.reasoning,
-            rankings: evaluation.rankings,
-            selected: evaluation.best
-          }, resolved.trackHistory)
-
-          // Forward best result as the response for synthesizer
-          scope.data = {
-            ...scope.data,
-            response: evaluation.best?.content,
-            judgeReasoning: evaluation.reasoning,
-            rankings: evaluation.rankings
-          }
-
-          span.setStatus({ code: SpanStatusCode.OK })
+        if (candidates.length === 0) {
+          trackEvent(scope, 'error', {
+            error: 'No candidates to evaluate'
+          }, true)
           return scope
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error)
-          span.setStatus({ code: SpanStatusCode.ERROR, message: msg })
-          trackEvent(scope, 'error', { error: msg }, true)
-          return scope
-        } finally {
-          span.end()
         }
-      })
+
+        // Limit candidates if configured
+        const maxCandidates = config?.maxCandidates ?? candidates.length
+        const limitedCandidates = candidates.slice(0, maxCandidates)
+
+        // Format candidates for evaluator
+        const formattedCandidates = limitedCandidates.map((c) => ({
+          source: c.patternId,
+          content: JSON.stringify(c.data)
+        }))
+
+        // Call evaluator
+        const input = (scope.data as Record<string, unknown>).input as string ?? ''
+        const evaluation = await evaluator(input, formattedCandidates)
+
+        trackEvent(scope, 'controller_action', {
+          reasoning: evaluation.reasoning,
+          rankings: evaluation.rankings,
+          selected: evaluation.best
+        }, resolved.trackHistory)
+
+        // Forward best result as the response for synthesizer
+        scope.data = {
+          ...scope.data,
+          response: evaluation.best?.content,
+          judgeReasoning: evaluation.reasoning,
+          rankings: evaluation.rankings
+        }
+
+        return scope
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        trackEvent(scope, 'error', { error: msg }, true)
+        return scope
+      }
     },
     config: resolved
   }

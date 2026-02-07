@@ -1,8 +1,5 @@
 // @refresh reload
 
-// Initialize OpenTelemetry SDK (must be first)
-import './lib/otel/sdk.server'
-
 import { createHandler, StartServer } from "@solidjs/start/server";
 
 export default createHandler(() => (

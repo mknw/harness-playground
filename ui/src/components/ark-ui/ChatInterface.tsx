@@ -7,10 +7,11 @@
  * - Message display with tool calls
  * - Graph visualization updates
  * - Agent selection
+ * - Context event streaming for observability
  *
  * Architecture:
  * - Uses harness-client server actions
- * - Telemetry handled by OpenTelemetry
+ * - ContextEvents streamed to parent for observability
  * - Session ID per component instance
  */
 
@@ -21,6 +22,7 @@ import { ChatSidebar } from './ChatSidebar'
 import { AgentSelector } from './AgentSelector'
 import { processMessageWithAgent, approveAction, rejectAction, clearSession, extractGraphFromResult } from '~/lib/harness-client'
 import type { GraphElement } from './SupportPanel'
+import type { ContextEvent } from '~/lib/harness-patterns'
 
 // ============================================================================
 // Types
@@ -28,6 +30,7 @@ import type { GraphElement } from './SupportPanel'
 
 export interface ChatInterfaceProps {
   onGraphUpdate?: (elements: GraphElement[]) => void
+  onEventsUpdate?: (events: ContextEvent[]) => void
 }
 
 // ============================================================================
@@ -93,6 +96,11 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         props.onGraphUpdate(graphElements)
       }
 
+      // Emit context events for observability
+      if (result.context?.events && props.onEventsUpdate) {
+        props.onEventsUpdate(result.context.events)
+      }
+
       // Build assistant message
       const assistantMessage: Message = {
         id: Date.now().toString(),
@@ -136,6 +144,11 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       const graphElements = extractGraphFromResult(result)
       if (graphElements.length > 0 && props.onGraphUpdate) {
         props.onGraphUpdate(graphElements)
+      }
+
+      // Emit context events for observability
+      if (result.context?.events && props.onEventsUpdate) {
+        props.onEventsUpdate(result.context.events)
       }
 
       // Update the message with executed tool call

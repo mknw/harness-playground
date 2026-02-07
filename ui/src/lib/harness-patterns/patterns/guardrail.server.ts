@@ -5,7 +5,6 @@
  * Input rails, execution rails, output rails, and circuit breaker.
  */
 
-import { trace, SpanStatusCode } from '@opentelemetry/api'
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import type {
@@ -18,8 +17,6 @@ import type {
 import { trackEvent, resolveConfig } from '../context.server'
 
 assertServerOnImport()
-
-const tracer = trace.getTracer('harness-patterns.guardrail')
 
 // ============================================================================
 // Types
@@ -85,119 +82,103 @@ export function guardrail<T extends Record<string, unknown>>(
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('guardrail', config)
   const inputRails = config.rails.filter((r) => r.phase === 'input')
-  const execRails = config.rails.filter((r) => r.phase === 'execution')
   const outputRails = config.rails.filter((r) => r.phase === 'output')
 
   return {
     name: `guardrail(${pattern.name})`,
     fn: async (scope, view) => {
-      return tracer.startActiveSpan('pattern.guardrail', async (span) => {
-        span.setAttribute('patternId', scope.id)
-        span.setAttribute('inputRails', inputRails.length)
-        span.setAttribute('execRails', execRails.length)
-        span.setAttribute('outputRails', outputRails.length)
-
-        try {
-          // --- Circuit breaker check (redis-backed) ---
-          if (config.circuitBreaker) {
-            const cb = config.circuitBreaker
-            const key = `circuit:${scope.id}`
-            const now = Date.now()
-            try {
-              const recentFailures = await callTool('zrange', {
-                key,
-                start: String(now - cb.windowMs),
-                stop: String(now)
-              })
-              if (
-                recentFailures.success &&
-                Array.isArray(recentFailures.data) &&
-                recentFailures.data.length >= cb.maxFailures
-              ) {
-                trackEvent(scope, 'error', {
-                  error: `Circuit breaker tripped: ${recentFailures.data.length} failures in ${cb.windowMs}ms`
-                }, true)
-                span.end()
-                return scope
-              }
-            } catch {
-              // Redis may not be available; proceed without circuit breaker
-            }
-          }
-
-          // --- Input rails ---
-          const railCtx: RailContext<T> = {
-            input: (scope.data as Record<string, unknown>).input as string ?? '',
-            scope,
-            view
-          }
-
-          for (const rail of inputRails) {
-            const result = await rail.check(railCtx)
-            span.addEvent(`rail.input.${rail.name}`, { ok: result.ok })
-
-            if (!result.ok) {
-              if (result.action === 'redact' && result.redacted) {
-                railCtx.input = result.redacted
-              } else {
-                trackEvent(scope, 'error', {
-                  error: `Input rail '${rail.name}' blocked: ${result.reason}`
-                }, true)
-                config.onBlock?.(rail.name, result.reason ?? '')
-                span.end()
-                return scope
-              }
-            }
-          }
-
-          // --- Execute wrapped pattern ---
-          const result = await pattern.fn(scope, view)
-
-          // --- Output rails ---
-          for (const rail of outputRails) {
-            const check = await rail.check({
-              ...railCtx,
-              scope: result,
-              lastToolResult: result.events.filter((e) => e.type === 'tool_result').pop()
+      try {
+        // --- Circuit breaker check (redis-backed) ---
+        if (config.circuitBreaker) {
+          const cb = config.circuitBreaker
+          const key = `circuit:${scope.id}`
+          const now = Date.now()
+          try {
+            const recentFailures = await callTool('zrange', {
+              key,
+              start: String(now - cb.windowMs),
+              stop: String(now)
             })
-            span.addEvent(`rail.output.${rail.name}`, { ok: check.ok })
+            if (
+              recentFailures.success &&
+              Array.isArray(recentFailures.data) &&
+              recentFailures.data.length >= cb.maxFailures
+            ) {
+              trackEvent(scope, 'error', {
+                error: `Circuit breaker tripped: ${recentFailures.data.length} failures in ${cb.windowMs}ms`
+              }, true)
+              return scope
+            }
+          } catch {
+            // Redis may not be available; proceed without circuit breaker
+          }
+        }
 
-            if (!check.ok) {
-              if (check.action === 'retry') {
-                // Track failure for circuit breaker
-                if (config.circuitBreaker) {
-                  try {
-                    await callTool('zadd', {
-                      key: `circuit:${scope.id}`,
-                      score: Date.now(),
-                      member: `fail-${Date.now()}`
-                    })
-                  } catch {
-                    // Redis may not be available
-                  }
-                }
-                trackEvent(result, 'error', {
-                  error: `Output rail '${rail.name}' rejected: ${check.reason}`
-                }, true)
-              } else if (check.action === 'warn') {
-                trackEvent(result, 'error', {
-                  error: `Output rail '${rail.name}' warning: ${check.reason}`
-                }, true)
-              }
+        // --- Input rails ---
+        const railCtx: RailContext<T> = {
+          input: (scope.data as Record<string, unknown>).input as string ?? '',
+          scope,
+          view
+        }
+
+        for (const rail of inputRails) {
+          const result = await rail.check(railCtx)
+
+          if (!result.ok) {
+            if (result.action === 'redact' && result.redacted) {
+              railCtx.input = result.redacted
+            } else {
+              trackEvent(scope, 'error', {
+                error: `Input rail '${rail.name}' blocked: ${result.reason}`
+              }, true)
+              config.onBlock?.(rail.name, result.reason ?? '')
+              return scope
             }
           }
-
-          span.setStatus({ code: SpanStatusCode.OK })
-          span.end()
-          return result
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error)
-          span.setStatus({ code: SpanStatusCode.ERROR, message: msg })
-          trackEvent(scope, 'error', { error: msg }, true)
-          span.end()
-          return scope
         }
-      })
+
+        // --- Execute wrapped pattern ---
+        const result = await pattern.fn(scope, view)
+
+        // --- Output rails ---
+        for (const rail of outputRails) {
+          const check = await rail.check({
+            ...railCtx,
+            scope: result,
+            lastToolResult: result.events.filter((e) => e.type === 'tool_result').pop()
+          })
+
+          if (!check.ok) {
+            if (check.action === 'retry') {
+              // Track failure for circuit breaker
+              if (config.circuitBreaker) {
+                try {
+                  await callTool('zadd', {
+                    key: `circuit:${scope.id}`,
+                    score: Date.now(),
+                    member: `fail-${Date.now()}`
+                  })
+                } catch {
+                  // Redis may not be available
+                }
+              }
+              trackEvent(result, 'error', {
+                error: `Output rail '${rail.name}' rejected: ${check.reason}`
+              }, true)
+            } else if (check.action === 'warn') {
+              trackEvent(result, 'error', {
+                error: `Output rail '${rail.name}' warning: ${check.reason}`
+              }, true)
+            }
+          }
+        }
+
+        return result
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        trackEvent(scope, 'error', { error: msg }, true)
+        return scope
+      }
     },
     config: resolved
   }

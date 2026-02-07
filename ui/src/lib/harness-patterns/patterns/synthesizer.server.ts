@@ -5,7 +5,6 @@
  * Three modes: 'message', 'response', 'thread'
  */
 
-import { trace, SpanStatusCode } from '@opentelemetry/api'
 import { assertServerOnImport } from '../assert.server'
 import type {
   SynthesizerConfig,
@@ -20,8 +19,6 @@ import type {
 import { trackEvent, resolveConfig } from '../context.server'
 
 assertServerOnImport()
-
-const tracer = trace.getTracer('harness-patterns.synthesizer')
 
 /**
  * Default synthesis function using BAML Synthesize.
@@ -177,78 +174,44 @@ export function synthesizer<T extends SynthesizerData>(
     scope: PatternScope<T>,
     view: EventView
   ): Promise<PatternScope<T>> => {
-    return tracer.startActiveSpan('pattern.synthesizer', async (span) => {
-      span.setAttribute('patternId', scope.id)
-      span.setAttribute('mode', mode)
-
-      try {
-        // Skip if already has synthesized response
-        if (skipIfHasResponse && scope.data.synthesizedResponse) {
-          span.addEvent('synthesizer.skipped', { reason: 'hasSynthesizedResponse' })
-          span.setStatus({ code: SpanStatusCode.OK })
-          return scope
-        }
-
-        // Build input from view
-        const input = buildSynthesisInputFromView(mode, view, scope.data)
-
-        // Validate thread mode
-        if (mode === 'thread' && !input.loopHistory) {
-          span.addEvent('synthesizer.warning', {
-            message: 'thread mode but no loopHistory, falling back to response mode'
-          })
-          input.mode = 'response'
-          input.data = scope.data
-        }
-
-        span.addEvent('synthesizer.start', {
-          hasResponse: !!input.response,
-          hasLoopHistory: !!input.loopHistory
-        })
-
-        // Call synthesis function
-        const synthesizedResponse = await tracer.startActiveSpan(
-          'synthesizer.synthesize',
-          async (synthSpan) => {
-            try {
-              const result = await synthesize(input)
-              synthSpan.setStatus({ code: SpanStatusCode.OK })
-              return result
-            } catch (error) {
-              const msg = error instanceof Error ? error.message : String(error)
-              synthSpan.setStatus({ code: SpanStatusCode.ERROR, message: msg })
-              throw error
-            } finally {
-              synthSpan.end()
-            }
-          }
-        )
-
-        // Track assistant message event
-        trackEvent(
-          scope,
-          'assistant_message',
-          { content: synthesizedResponse } as AssistantMessageEventData,
-          resolved.trackHistory
-        )
-
-        scope.data = {
-          ...scope.data,
-          response: synthesizedResponse,
-          synthesizedResponse
-        }
-
-        span.setStatus({ code: SpanStatusCode.OK })
+    try {
+      // Skip if already has synthesized response
+      if (skipIfHasResponse && scope.data.synthesizedResponse) {
         return scope
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error)
-        span.setStatus({ code: SpanStatusCode.ERROR, message: msg })
-        trackEvent(scope, 'error', { error: msg }, true)
-        return scope
-      } finally {
-        span.end()
       }
-    })
+
+      // Build input from view
+      const input = buildSynthesisInputFromView(mode, view, scope.data)
+
+      // Validate thread mode
+      if (mode === 'thread' && !input.loopHistory) {
+        input.mode = 'response'
+        input.data = scope.data
+      }
+
+      // Call synthesis function
+      const synthesizedResponse = await synthesize(input)
+
+      // Track assistant message event
+      trackEvent(
+        scope,
+        'assistant_message',
+        { content: synthesizedResponse } as AssistantMessageEventData,
+        resolved.trackHistory
+      )
+
+      scope.data = {
+        ...scope.data,
+        response: synthesizedResponse,
+        synthesizedResponse
+      }
+
+      return scope
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      trackEvent(scope, 'error', { error: msg }, true)
+      return scope
+    }
   }
 
   return {
