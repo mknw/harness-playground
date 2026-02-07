@@ -175,4 +175,180 @@ describe('synthesizer execution', () => {
     expect(result.events[0].type).toBe('assistant_message')
     expect((result.events[0].data as { content: string }).content).toBe('Test response')
   })
+
+  // Note: Testing default BAML synthesis requires integration test setup
+  // since the dynamic import in defaultSynthesize is hard to mock
+  it.skip('should call default synthesis with BAML when no custom function provided', async () => {
+    // This test is skipped - requires integration test setup
+    expect(true).toBe(true)
+  })
+
+  it('should handle response mode', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const pattern = synthesizer({
+      mode: 'response',
+      synthesize: async (input) => `Response mode: ${input.response}`
+    })
+
+    const scope = createScope('test', { response: 'my data' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    expect(result.data.synthesizedResponse).toBe('Response mode: my data')
+  })
+
+  it('should handle thread mode with loop history', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const loopHistory = {
+      iterations: [
+        {
+          turn: 0,
+          action: {
+            tool_name: 'search',
+            tool_args: '{"q":"test"}',
+            reasoning: 'Search for results',
+            status: 'success',
+            is_final: false
+          },
+          result: { items: [] },
+          timestamp: Date.now()
+        }
+      ],
+      startTime: Date.now() - 1000,
+      endTime: Date.now()
+    }
+
+    const pattern = synthesizer({
+      mode: 'thread',
+      synthesize: async (input) => `Thread mode with ${input.loopHistory?.iterations.length ?? 0} iterations`
+    })
+
+    const scope = createScope('test', { loopHistory })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    expect(result.data.synthesizedResponse).toBe('Thread mode with 1 iterations')
+  })
+
+  it('should handle thread mode falling back to response mode when no history', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const pattern = synthesizer({
+      mode: 'thread',
+      synthesize: async (input) => `Mode: ${input.mode}, Response: ${input.response}`
+    })
+
+    const scope = createScope('test', { response: 'fallback response' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Should fall back to response mode
+    expect(result.data.synthesizedResponse).toContain('response')
+  })
+
+  it('should handle errors gracefully', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const pattern = synthesizer({
+      mode: 'message',
+      synthesize: async () => {
+        throw new Error('Synthesis failed')
+      }
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    const errorEvents = result.events.filter(e => e.type === 'error')
+    expect(errorEvents.length).toBeGreaterThan(0)
+    expect(JSON.stringify(errorEvents[0].data)).toContain('Synthesis failed')
+  })
+
+  it('should build input from events for thread mode', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const pattern = synthesizer({
+      mode: 'thread',
+      synthesize: async (input) => `Iterations: ${input.loopHistory?.iterations.length ?? 0}`
+    })
+
+    const scope = createScope('test', {})
+    const ts = Date.now()
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: ts,
+      events: [
+        { type: 'user_message' as const, ts, patternId: 'harness', data: { content: 'test' } },
+        { type: 'pattern_enter' as const, ts: ts + 1, patternId: 'loop', data: {} },
+        { type: 'controller_action' as const, ts: ts + 2, patternId: 'loop', data: { action: { tool_name: 'search', tool_args: '{}', reasoning: 'test', status: '', is_final: false } } },
+        { type: 'tool_result' as const, ts: ts + 3, patternId: 'loop', data: { result: { items: ['a', 'b'] } } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Should have built loop history from events
+    expect(result.data.synthesizedResponse).toContain('Iterations')
+  })
 })

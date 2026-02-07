@@ -44,6 +44,7 @@
     "@unocss/eslint-config": "^66.5.4",
     "@unocss/preset-attributify": "^66.5.4",
     "@unocss/preset-wind4": "^66.5.4",
+    "@vitest/coverage-v8": "^4.0.18",
     "eslint": "^9.38.0",
     "eslint-plugin-solid": "^0.14.5",
     "jsdom": "^27.3.0",
