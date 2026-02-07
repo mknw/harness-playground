@@ -565,6 +565,73 @@ describe('Guardrailed Agent Rails Execution', () => {
     expect(guardrailedAgent.id).toBe('guardrailed-agent')
     expect(guardrailedAgent.description).toContain('5-layer')
   })
+
+  it('should execute guardrail pattern with safe input', async () => {
+    const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
+    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')!
+
+    const scope = createMockScope({ input: 'edit my file.txt' })
+    const view = createMockViewWithCandidates([])
+
+    // This will execute the guardrail wrapper including topicalRail
+    const result = await guardrailPattern.fn(scope, view)
+    expect(result).toBeDefined()
+  })
+
+  it('should block destructive commands via topicalRail', async () => {
+    const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
+    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')!
+
+    // Use a destructive command pattern that topicalRail should block
+    const scope = createMockScope({ input: 'rm -rf /home/user' })
+    const view = createMockViewWithCandidates([])
+
+    const result = await guardrailPattern.fn(scope, view)
+    // Should have blocked with error event
+    const errorEvents = (result as Scope).events.filter(e => (e as { type: string }).type === 'error')
+    expect(errorEvents.length).toBeGreaterThan(0)
+  })
+
+  it('should block delete database command via topicalRail', async () => {
+    const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
+    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')!
+
+    const scope = createMockScope({ input: 'delete all from database' })
+    const view = createMockViewWithCandidates([])
+
+    const result = await guardrailPattern.fn(scope, view)
+    const errorEvents = (result as Scope).events.filter(e => (e as { type: string }).type === 'error')
+    expect(errorEvents.length).toBeGreaterThan(0)
+  })
+
+  it('should block drop table command via topicalRail', async () => {
+    const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
+    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')!
+
+    const scope = createMockScope({ input: 'DROP TABLE users' })
+    const view = createMockViewWithCandidates([])
+
+    const result = await guardrailPattern.fn(scope, view)
+    const errorEvents = (result as Scope).events.filter(e => (e as { type: string }).type === 'error')
+    expect(errorEvents.length).toBeGreaterThan(0)
+  })
+
+  it('should block format drive command via topicalRail', async () => {
+    const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
+    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')!
+
+    const scope = createMockScope({ input: 'format my drive C:' })
+    const view = createMockViewWithCandidates([])
+
+    const result = await guardrailPattern.fn(scope, view)
+    const errorEvents = (result as Scope).events.filter(e => (e as { type: string }).type === 'error')
+    expect(errorEvents.length).toBeGreaterThan(0)
+  })
 })
 
 // ============================================================================
