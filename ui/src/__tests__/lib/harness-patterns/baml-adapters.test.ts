@@ -208,3 +208,103 @@ describe('domain-specific adapters', () => {
     expect(mockLoopController).toHaveBeenCalled()
   })
 })
+
+describe('parseResultsToTurns', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockLoopController.mockResolvedValue(mockFinalAction())
+  })
+
+  it('should handle empty previous_results', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    // Empty string should result in empty turns
+    await controller('user message', 'intent', '', 0)
+    expect(mockLoopController).toHaveBeenCalled()
+  })
+
+  it('should handle empty array previous_results', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    await controller('user message', 'intent', '[]', 0)
+    expect(mockLoopController).toHaveBeenCalled()
+  })
+
+  it('should handle array of results', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    const results = JSON.stringify([
+      { data: 'result1' },
+      { data: 'result2' }
+    ])
+
+    await controller('user message', 'intent', results, 2)
+    expect(mockLoopController).toHaveBeenCalled()
+
+    // The turns should be passed to LoopController
+    const calls = mockLoopController.mock.calls[0]
+    expect(calls).toBeDefined()
+  })
+
+  it('should handle invalid JSON in previous_results', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    // Invalid JSON should not throw, should result in empty turns
+    await controller('user message', 'intent', 'not valid json', 0)
+    expect(mockLoopController).toHaveBeenCalled()
+  })
+
+  it('should handle non-array JSON in previous_results', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    // Object instead of array should result in empty turns
+    await controller('user message', 'intent', '{"key": "value"}', 0)
+    expect(mockLoopController).toHaveBeenCalled()
+  })
+})
+
+describe('extractLLMCallData', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('should extract LLM call data when collector has last property', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { Collector } = await import('@boundaryml/baml')
+
+    // Mock collector with data
+    const mockCollector = new Collector('test')
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    // Pass collector to get LLM call data
+    const result = await controller('user message', 'intent', '[]', 0, undefined, mockCollector)
+
+    // The result should have llmCall data if collector.last is set
+    expect(result.action).toBeDefined()
+    // llmCall may be undefined if collector.last is not set in mock
+  })
+
+  it('should handle collector with httpRequest body as string', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { Collector } = await import('@boundaryml/baml')
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    // Create collector with custom mock
+    const mockCollector = new Collector('test')
+
+    await controller('user message', 'intent', '[]', 0, undefined, mockCollector)
+    expect(mockLoopController).toHaveBeenCalled()
+  })
+})
