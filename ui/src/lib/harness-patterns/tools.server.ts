@@ -46,43 +46,113 @@ function groupTools(mcpTools: MCPToolDescription[]): ToolSet {
   return { ...grouped, all } as ToolSet
 }
 
+// ============================================================================
+// Known Tool-to-Server Mapping
+// ============================================================================
+
+/**
+ * Explicit mapping of tool names to server groups.
+ * Checked before the heuristic. Covers tools whose names don't encode
+ * the server identity (memory, context7, redis, github, filesystem, web).
+ */
+const KNOWN_TOOL_SERVERS: Record<string, string> = {}
+
+// Memory Knowledge Graph server
+for (const t of [
+  'create_entities', 'create_relations', 'add_observations',
+  'delete_entities', 'delete_relations', 'delete_observations',
+  'open_nodes', 'search_nodes', 'read_graph',
+]) KNOWN_TOOL_SERVERS[t] = 'memory'
+
+// Context7 documentation server
+for (const t of ['resolve-library-id', 'get-library-docs'])
+  KNOWN_TOOL_SERVERS[t] = 'context7'
+
+// Web search / fetch server
+for (const t of ['search', 'fetch', 'fetch_content'])
+  KNOWN_TOOL_SERVERS[t] = 'web'
+
+// Redis server
+for (const t of [
+  'get', 'set', 'delete', 'expire', 'rename', 'type', 'dbsize', 'info',
+  'hget', 'hset', 'hdel', 'hexists', 'hgetall',
+  'lpush', 'rpush', 'lpop', 'rpop', 'lrange', 'llen',
+  'sadd', 'srem', 'smembers',
+  'zadd', 'zrange', 'zrem',
+  'json_get', 'json_set', 'json_del',
+  'xadd', 'xdel', 'xrange',
+  'publish', 'subscribe', 'unsubscribe',
+  'scan_keys', 'scan_all_keys',
+  'search_redis_documents',
+  'create_vector_index_hash', 'set_vector_in_hash',
+  'get_vector_from_hash', 'vector_search_hash',
+  'get_indexed_keys_number', 'get_indexes', 'get_index_info',
+]) KNOWN_TOOL_SERVERS[t] = 'redis'
+
+// GitHub server
+for (const t of [
+  'search_code', 'search_issues', 'search_repositories', 'search_users',
+  'get_issue', 'list_issues', 'create_issue', 'update_issue', 'add_issue_comment',
+  'get_file_contents', 'create_or_update_file', 'push_files',
+  'get_pull_request', 'list_pull_requests', 'create_pull_request',
+  'merge_pull_request', 'get_pull_request_files', 'get_pull_request_comments',
+  'get_pull_request_reviews', 'get_pull_request_status',
+  'create_pull_request_review', 'update_pull_request_branch',
+  'list_commits', 'create_branch', 'create_repository', 'fork_repository',
+]) KNOWN_TOOL_SERVERS[t] = 'github'
+
+// Filesystem server
+for (const t of [
+  'read_file', 'write_file', 'edit_file', 'create_directory',
+  'list_directory', 'list_directory_with_sizes', 'directory_tree',
+  'move_file', 'search_files', 'search_files_content',
+  'get_file_info', 'read_file_lines', 'head_file', 'tail_file',
+  'read_text_file', 'read_multiple_text_files',
+  'read_media_file', 'read_multiple_media_files',
+  'find_duplicate_files', 'find_empty_directories',
+  'calculate_directory_size', 'list_allowed_directories',
+  'zip_directory', 'zip_files', 'unzip_file',
+]) KNOWN_TOOL_SERVERS[t] = 'filesystem'
+
+// ============================================================================
+// Server Inference
+// ============================================================================
+
 /**
  * Infer server name from tool name.
  *
- * Patterns:
- * - 'mcp__kg-agent-mcp-gateway__search' → 'search' (MCP gateway format)
- * - 'mcp__kg-agent-mcp-gateway__read_neo4j_cypher' → 'neo4j' (MCP gateway + verb prefix)
- * - 'read_neo4j_cypher' → 'neo4j'
- * - 'get_neo4j_schema' → 'neo4j'
- * - 'web_search' → 'web'
- * - 'fetch' → 'fetch'
- * - 'mcp-find' → 'mcp'
+ * 1. Strip MCP gateway prefix (mcp__gateway__toolName → toolName)
+ * 2. Check KNOWN_TOOL_SERVERS lookup
+ * 3. Fall back to heuristic (verb prefix stripping, underscore/hyphen split)
  */
-function inferServer(toolName: string): string {
+export function inferServer(toolName: string): string {
   // Handle MCP gateway format: mcp__server-name__tool_name → infer from tool_name part
   if (toolName.includes('__')) {
     const parts = toolName.split('__')
-    const actualToolName = parts[parts.length - 1] // Get last part (the actual tool)
-    return inferServer(actualToolName) // Recursively infer from tool name
+    const actualToolName = parts[parts.length - 1]
+    return inferServer(actualToolName)
   }
 
-  // Handle underscore-separated: read_neo4j_cypher → neo4j
+  // Check known mapping first
+  if (KNOWN_TOOL_SERVERS[toolName]) {
+    return KNOWN_TOOL_SERVERS[toolName]
+  }
+
+  // Heuristic: underscore-separated with verb prefix → strip verb
   if (toolName.includes('_')) {
     const parts = toolName.split('_')
-    // Skip verb prefixes like 'read', 'write', 'get'
     const verbs = ['read', 'write', 'get', 'list', 'create', 'delete', 'update', 'search']
     if (verbs.includes(parts[0]) && parts.length >= 2) {
       return parts[1]
     }
-    // web_search → web
     return parts[0]
   }
 
-  // Handle hyphen-separated: mcp-find → mcp
+  // Heuristic: hyphen-separated → first segment
   if (toolName.includes('-')) {
     return toolName.split('-')[0]
   }
 
-  // Single word: fetch → fetch, search → search
+  // Single word
   return toolName
 }

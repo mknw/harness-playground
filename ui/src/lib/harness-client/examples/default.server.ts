@@ -33,7 +33,8 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   const schema = await getSchema();
 
   const neo4jController = createNeo4jController(tools.neo4j ?? []);
-  const webController = createWebSearchController(tools.web ?? []);
+  const webTools = tools.web ?? [];
+  const webController = createWebSearchController(webTools);
   const codeController = createActorControllerAdapter(tools.all);
   const codeCritic = createCriticAdapter();
 
@@ -45,7 +46,7 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     approvalPredicates.mutations,
   );
 
-  const webPattern = simpleLoop<SessionData>(webController, tools.web ?? [], {
+  const webPattern = simpleLoop<SessionData>(webController, webTools, {
     patternId: "web-search",
   });
 
