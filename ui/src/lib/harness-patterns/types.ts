@@ -212,6 +212,7 @@ export interface EventView {
   tools(): EventView
   messages(): EventView
   actions(): EventView
+  errors(): EventView
   last(n: number): EventView
   first(n: number): EventView
   since(ts: number): EventView
@@ -219,6 +220,8 @@ export interface EventView {
   serialize(): string
   exists(): boolean
   count(): number
+  hasErrors(): boolean
+  lastError(): string | undefined
 }
 
 /** @deprecated Use ScopedPattern instead */
@@ -344,6 +347,10 @@ export interface SynthesizerInput {
   response?: string
   data?: unknown
   loopHistory?: LoopHistory
+  /** Whether an error occurred in upstream patterns */
+  hasError?: boolean
+  /** Error message from upstream patterns */
+  errorMessage?: string
 }
 
 /** Custom synthesis function type */
@@ -364,6 +371,10 @@ export interface SynthesizerData {
   synthesizedResponse?: string
   intent?: string
   loopHistory?: LoopHistory
+  /** Whether an error occurred in upstream patterns */
+  hasError?: boolean
+  /** Error message from upstream patterns */
+  errorMessage?: string
 }
 
 // ============================================================================
@@ -442,18 +453,27 @@ export interface LLMCallData {
   functionName: string
   /** Input parameters passed to the BAML function */
   variables: Record<string, unknown>
+  /** BAML prompt template with {{ variable }} placeholders */
+  promptTemplate?: string
   /** Rendered prompt / HTTP request body */
   rawInput?: string
   /** Raw LLM response string before parsing */
   rawOutput?: string
+  /** Structured output after BAML parsing */
+  parsedOutput?: unknown
   /** Token usage statistics */
   usage?: {
     inputTokens: number
     outputTokens: number
+    cachedInputTokens: number
     totalTokens: number
   }
   /** Call duration in milliseconds */
   durationMs?: number
+  /** LLM provider name (e.g., 'openai', 'anthropic') */
+  provider?: string
+  /** Client name from BAML config */
+  clientName?: string
 }
 
 // ============================================================================
@@ -472,12 +492,12 @@ export const MAX_RETRIES = 3
 
 /** Default trackHistory by pattern type */
 export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
-  simpleLoop: 'tool_result',
-  actorCritic: 'tool_result',
+  simpleLoop: ['controller_action', 'tool_call', 'tool_result'],
+  actorCritic: ['controller_action', 'tool_call', 'tool_result', 'critic_result'],
   synthesizer: 'assistant_message',
-  router: false,
+  router: true,
   chain: false,
-  withApproval: false
+  withApproval: true
 }
 
 /** Default commitStrategy by pattern type */

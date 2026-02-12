@@ -1,8 +1,10 @@
 /**
  * ObservabilityPanel Component
  *
- * Displays ContextEvents in a timeline format with expandable detail overlays.
+ * Displays ContextEvents in a timeline format with expandable detail panels.
  * Events are displayed chronologically from top (oldest) to bottom (newest).
+ * Pattern enter/exit rows are compact dividers; events within a pattern
+ * are tinted with the pattern's colour from pattern-colors.json.
  */
 
 import { For, Show, createSignal, createMemo, Switch, Match } from 'solid-js'
@@ -18,10 +20,24 @@ import type {
   ErrorEventData,
   LLMCallData
 } from '~/lib/harness-patterns'
+import patternColorsJson from '../../../pattern-colors.json'
 
 interface ObservabilityPanelProps {
   events: ContextEvent[]
   onClear?: () => void
+}
+
+// ============================================================================
+// Pattern Colors (loaded from pattern-colors.json)
+// ============================================================================
+
+interface PatternColorEntry { color: string; tint: string }
+
+const patternColors = patternColorsJson as unknown as Record<string, PatternColorEntry>
+const defaultPatternColor: PatternColorEntry = patternColors._default ?? { color: '#94a3b8', tint: 'rgba(148,163,184,0.06)' }
+
+function getPatternColor(patternId: string): PatternColorEntry {
+  return patternColors[patternId] ?? defaultPatternColor
 }
 
 // ============================================================================
@@ -35,8 +51,8 @@ const eventIcons: Record<EventType, string> = {
   tool_result: '📥',
   controller_action: '🎯',
   critic_result: '📝',
-  pattern_enter: '▶️',
-  pattern_exit: '⏹️',
+  pattern_enter: '▶',
+  pattern_exit: '■',
   approval_request: '⏸️',
   approval_response: '✅',
   error: '❌'
@@ -49,8 +65,8 @@ const eventColors: Record<EventType, string> = {
   tool_result: '#22d3ee',       // cyan-400
   controller_action: '#fbbf24', // amber-400
   critic_result: '#f472b6',     // pink-400
-  pattern_enter: '#94a3b8',     // slate-400
-  pattern_exit: '#94a3b8',      // slate-400
+  pattern_enter: '#94a3b8',     // overridden per-pattern
+  pattern_exit: '#94a3b8',      // overridden per-pattern
   approval_request: '#f97316',  // orange-500
   approval_response: '#10b981', // emerald-500
   error: '#ef4444'              // red-500
@@ -178,6 +194,60 @@ const SummaryBar = (props: { events: ContextEvent[], onClear?: () => void }) => 
 }
 
 // ============================================================================
+// Pattern Enter/Exit Row (compact divider)
+// ============================================================================
+
+const PatternBoundaryRow = (props: { event: ContextEvent }) => {
+  const { type, patternId } = props.event
+  const isEnter = type === 'pattern_enter'
+  const pc = getPatternColor(patternId)
+
+  return (
+    <div
+      flex="~"
+      items="center"
+      gap="2"
+      p="x-3 y-1"
+      style={{
+        'background-color': pc.tint,
+        'border-top': isEnter ? `1px solid ${pc.color}40` : 'none',
+        'border-bottom': !isEnter ? `1px solid ${pc.color}40` : 'none',
+        'min-height': '24px'
+      }}
+    >
+      <span
+        style={{
+          color: pc.color,
+          'font-size': '9px',
+          'line-height': '1'
+        }}
+      >
+        {isEnter ? '▶' : '■'}
+      </span>
+      <span
+        style={{
+          color: pc.color,
+          'font-size': '10px',
+          'font-family': '"Fira Code", ui-monospace, monospace',
+          'font-weight': '500'
+        }}
+      >
+        {patternId}
+      </span>
+      <span
+        style={{
+          color: `${pc.color}99`,
+          'font-size': '9px',
+          'font-family': '"Fira Code", ui-monospace, monospace'
+        }}
+      >
+        {isEnter ? 'enter' : 'exit'}
+      </span>
+    </div>
+  )
+}
+
+// ============================================================================
 // Event Row Component
 // ============================================================================
 
@@ -186,6 +256,7 @@ const EventRow = (props: {
   index: number
   expanded: boolean
   onExpand: () => void
+  bgTint?: string
 }) => {
   const { type, patternId, data } = props.event
   const icon = eventIcons[type]
@@ -249,6 +320,7 @@ const EventRow = (props: {
       flex="~"
       min-h="70px"
       border="b dark-border-secondary/30"
+      style={{ 'background-color': props.bgTint ?? 'transparent' }}
     >
       {/* Interface Lane (left) */}
       <div
@@ -486,10 +558,163 @@ const GenericDetail = (props: { data: unknown }) => (
 )
 
 // ============================================================================
+// Shared Components
+// ============================================================================
+
+const CodeBlock = (props: { content: string | undefined; placeholder?: string }) => (
+  <pre
+    text="xs dark-text-primary"
+    bg="dark-bg-tertiary"
+    p="3"
+    rounded="md"
+    overflow="auto"
+    max-h="300px"
+    style={{ 'white-space': 'pre-wrap', 'word-break': 'break-word' }}
+  >
+    {props.content ?? props.placeholder ?? 'Not captured'}
+  </pre>
+)
+
+// ============================================================================
+// Parsed Prompt View Component
+// ============================================================================
+
+interface ParsedMessage {
+  role: string
+  content: string
+}
+
+const roleColors: Record<string, string> = {
+  system: '#a78bfa',    // violet-400
+  user: '#60a5fa',      // blue-400
+  assistant: '#34d399', // green-400
+  tool: '#22d3ee'       // cyan-400
+}
+
+/** Parse OpenAI-compatible HTTP body into structured messages + metadata */
+function parsePromptBody(rawInput: string): { messages: ParsedMessage[]; model?: string; params: Record<string, unknown> } | null {
+  try {
+    const body = JSON.parse(rawInput)
+    if (!body || typeof body !== 'object' || !Array.isArray(body.messages)) return null
+
+    const messages: ParsedMessage[] = body.messages.map((m: { role?: string; content?: unknown }) => ({
+      role: String(m.role ?? 'unknown'),
+      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content, null, 2)
+    }))
+
+    // Extract non-message params
+    const { messages: _, model, ...rest } = body
+    return { messages, model, params: rest }
+  } catch {
+    return null
+  }
+}
+
+const PromptMessage = (props: { msg: ParsedMessage }) => {
+  const color = () => roleColors[props.msg.role] ?? '#94a3b8'
+
+  return (
+    <div
+      border="1 dark-border-secondary/40"
+      rounded="md"
+      overflow="hidden"
+    >
+      {/* Role badge */}
+      <div
+        p="x-3 y-1.5"
+        flex="~"
+        items="center"
+        gap="2"
+        style={{ 'border-bottom': '1px solid rgba(148,163,184,0.15)' }}
+        bg="dark-bg-tertiary"
+      >
+        <div
+          w="2"
+          h="2"
+          rounded="full"
+          style={{ 'background-color': color() }}
+        />
+        <span
+          text="xs"
+          font="mono medium"
+          style={{ color: color() }}
+        >
+          {props.msg.role}
+        </span>
+      </div>
+      {/* Content */}
+      <pre
+        text="xs dark-text-primary"
+        p="3"
+        m="0"
+        overflow="auto"
+        max-h="250px"
+        style={{ 'white-space': 'pre-wrap', 'word-break': 'break-word' }}
+      >
+        {props.msg.content}
+      </pre>
+    </div>
+  )
+}
+
+const ParsedPromptView = (props: { rawInput: string }) => {
+  const parsed = () => parsePromptBody(props.rawInput)
+
+  return (
+    <Show
+      when={parsed()}
+      fallback={<CodeBlock content={props.rawInput} placeholder="Parsed prompt not captured" />}
+    >
+      {(p) => (
+        <div flex="~ col" gap="3">
+          {/* Model & params bar */}
+          <Show when={p().model || Object.keys(p().params).length > 0}>
+            <div
+              flex="~ wrap"
+              gap="4"
+              items="center"
+              bg="dark-bg-tertiary"
+              p="2 3"
+              rounded="md"
+              text="xs"
+            >
+              <Show when={p().model}>
+                <div flex="~ col" gap="0.5">
+                  <span text="dark-text-tertiary">Model</span>
+                  <span text="dark-text-primary" font="mono">{p().model}</span>
+                </div>
+              </Show>
+              <For each={Object.entries(p().params).filter(([k]) => !['stream', 'stream_options'].includes(k))}>
+                {([key, val]) => (
+                  <div flex="~ col" gap="0.5">
+                    <span text="dark-text-tertiary">{key}</span>
+                    <span text="dark-text-primary" font="mono">
+                      {typeof val === 'object' ? JSON.stringify(val) : String(val)}
+                    </span>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+
+          {/* Messages */}
+          <div flex="~ col" gap="2">
+            <div text="xs dark-text-tertiary">{p().messages.length} message{p().messages.length !== 1 ? 's' : ''}</div>
+            <For each={p().messages}>
+              {(msg) => <PromptMessage msg={msg} />}
+            </For>
+          </div>
+        </div>
+      )}
+    </Show>
+  )
+}
+
+// ============================================================================
 // LLM Call Tabs Component
 // ============================================================================
 
-type LLMTab = 'variables' | 'rawInput' | 'rawOutput' | 'usage'
+type LLMTab = 'rawPrompt' | 'parsedPrompt' | 'rawOutput' | 'parsedOutput'
 
 const TabButton = (props: { active: boolean; label: string; onClick: () => void }) => (
   <button
@@ -507,72 +732,87 @@ const TabButton = (props: { active: boolean; label: string; onClick: () => void 
   </button>
 )
 
-const CodeBlock = (props: { content: string | undefined; placeholder?: string }) => (
-  <pre
-    text="xs dark-text-primary"
+const UsageStats = (props: { llmCall: LLMCallData }) => (
+  <div
     bg="dark-bg-tertiary"
     p="3"
     rounded="md"
-    overflow="auto"
-    max-h="300px"
-    style={{ 'white-space': 'pre-wrap', 'word-break': 'break-word' }}
+    m="b-3"
   >
-    {props.content ?? props.placeholder ?? 'Not captured'}
-  </pre>
-)
+    <div flex="~ wrap" gap="4" items="center">
+      {/* Function & Provider */}
+      <div flex="~ col" gap="0.5">
+        <span text="xs dark-text-tertiary">Function</span>
+        <span text="sm neon-cyan" font="mono">{props.llmCall.functionName}</span>
+      </div>
+      <Show when={props.llmCall.provider}>
+        <div flex="~ col" gap="0.5">
+          <span text="xs dark-text-tertiary">Provider</span>
+          <span text="sm dark-text-primary" font="mono">{props.llmCall.provider}</span>
+        </div>
+      </Show>
+      <Show when={props.llmCall.clientName}>
+        <div flex="~ col" gap="0.5">
+          <span text="xs dark-text-tertiary">Client</span>
+          <span text="sm dark-text-primary" font="mono">{props.llmCall.clientName}</span>
+        </div>
+      </Show>
 
-const UsageStats = (props: { llmCall: LLMCallData }) => (
-  <div flex="~ col" gap="4">
-    <Show
-      when={props.llmCall.usage}
-      fallback={<span text="sm dark-text-tertiary">No usage data captured</span>}
-    >
-      <div flex="~ wrap" gap="6">
-        <div flex="~ col" gap="1">
-          <span text="xs dark-text-tertiary">Input Tokens</span>
-          <span text="lg neon-green" font="mono">{props.llmCall.usage!.inputTokens.toLocaleString()}</span>
+      {/* Separator */}
+      <div w="px" h="8" bg="dark-border-secondary" />
+
+      {/* Token stats */}
+      <Show when={props.llmCall.usage}>
+        <div flex="~ col" gap="0.5">
+          <span text="xs dark-text-tertiary">Input</span>
+          <span text="sm neon-green" font="mono">{props.llmCall.usage!.inputTokens.toLocaleString()}</span>
         </div>
-        <div flex="~ col" gap="1">
-          <span text="xs dark-text-tertiary">Output Tokens</span>
-          <span text="lg neon-cyan" font="mono">{props.llmCall.usage!.outputTokens.toLocaleString()}</span>
+        <div flex="~ col" gap="0.5">
+          <span text="xs dark-text-tertiary">Output</span>
+          <span text="sm neon-cyan" font="mono">{props.llmCall.usage!.outputTokens.toLocaleString()}</span>
         </div>
-        <div flex="~ col" gap="1">
-          <span text="xs dark-text-tertiary">Total Tokens</span>
-          <span text="lg amber-400" font="mono">{props.llmCall.usage!.totalTokens.toLocaleString()}</span>
+        <Show when={props.llmCall.usage!.cachedInputTokens > 0}>
+          <div flex="~ col" gap="0.5">
+            <span text="xs dark-text-tertiary">Cached</span>
+            <span text="sm violet-400" font="mono">{props.llmCall.usage!.cachedInputTokens.toLocaleString()}</span>
+          </div>
+        </Show>
+        <div flex="~ col" gap="0.5">
+          <span text="xs dark-text-tertiary">Total</span>
+          <span text="sm amber-400" font="mono">{props.llmCall.usage!.totalTokens.toLocaleString()}</span>
         </div>
-      </div>
-    </Show>
-    <Show when={props.llmCall.durationMs}>
-      <div flex="~ col" gap="1">
-        <span text="xs dark-text-tertiary">Duration</span>
-        <span text="sm dark-text-primary" font="mono">{props.llmCall.durationMs}ms</span>
-      </div>
-    </Show>
-    <div flex="~ col" gap="1">
-      <span text="xs dark-text-tertiary">Function</span>
-      <span text="sm neon-cyan" font="mono">{props.llmCall.functionName}</span>
+      </Show>
+
+      {/* Duration */}
+      <Show when={props.llmCall.durationMs}>
+        <div flex="~ col" gap="0.5">
+          <span text="xs dark-text-tertiary">Duration</span>
+          <span text="sm dark-text-primary" font="mono">{props.llmCall.durationMs}ms</span>
+        </div>
+      </Show>
     </div>
   </div>
 )
 
 const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
-  const [activeTab, setActiveTab] = createSignal<LLMTab>('variables')
+  const [activeTab, setActiveTab] = createSignal<LLMTab>('rawPrompt')
 
   return (
     <div border="b dark-border-primary" m="b-4" p="b-4">
-      <div text="xs dark-text-tertiary" m="b-2" font="medium">LLM Call Details</div>
+      {/* Usage stats bar */}
+      <UsageStats llmCall={props.llmCall} />
 
       {/* Tab buttons */}
       <div flex="~ wrap" gap="2" m="b-3">
         <TabButton
-          active={activeTab() === 'variables'}
-          label="Variables"
-          onClick={() => setActiveTab('variables')}
+          active={activeTab() === 'rawPrompt'}
+          label="Raw Prompt"
+          onClick={() => setActiveTab('rawPrompt')}
         />
         <TabButton
-          active={activeTab() === 'rawInput'}
-          label="Raw Input"
-          onClick={() => setActiveTab('rawInput')}
+          active={activeTab() === 'parsedPrompt'}
+          label="Parsed Prompt"
+          onClick={() => setActiveTab('parsedPrompt')}
         />
         <TabButton
           active={activeTab() === 'rawOutput'}
@@ -580,25 +820,49 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
           onClick={() => setActiveTab('rawOutput')}
         />
         <TabButton
-          active={activeTab() === 'usage'}
-          label="Usage"
-          onClick={() => setActiveTab('usage')}
+          active={activeTab() === 'parsedOutput'}
+          label="Parsed Output"
+          onClick={() => setActiveTab('parsedOutput')}
         />
       </div>
 
       {/* Tab content */}
       <Switch>
-        <Match when={activeTab() === 'variables'}>
-          <CodeBlock content={JSON.stringify(props.llmCall.variables, null, 2)} />
+        <Match when={activeTab() === 'rawPrompt'}>
+          <Show
+            when={props.llmCall.promptTemplate}
+            fallback={
+              <div flex="~ col" gap="2">
+                <div text="xs dark-text-tertiary" m="b-1">Variables</div>
+                <CodeBlock content={JSON.stringify(props.llmCall.variables, null, 2)} />
+              </div>
+            }
+          >
+            <CodeBlock content={props.llmCall.promptTemplate} placeholder="Template not captured" />
+          </Show>
         </Match>
-        <Match when={activeTab() === 'rawInput'}>
-          <CodeBlock content={props.llmCall.rawInput} placeholder="Raw input not captured" />
+        <Match when={activeTab() === 'parsedPrompt'}>
+          <Show
+            when={props.llmCall.rawInput}
+            fallback={<CodeBlock content={undefined} placeholder="Parsed prompt not captured" />}
+          >
+            <ParsedPromptView rawInput={props.llmCall.rawInput!} />
+          </Show>
         </Match>
         <Match when={activeTab() === 'rawOutput'}>
           <CodeBlock content={props.llmCall.rawOutput} placeholder="Raw output not captured" />
         </Match>
-        <Match when={activeTab() === 'usage'}>
-          <UsageStats llmCall={props.llmCall} />
+        <Match when={activeTab() === 'parsedOutput'}>
+          <CodeBlock
+            content={
+              props.llmCall.parsedOutput != null
+                ? (typeof props.llmCall.parsedOutput === 'string'
+                    ? props.llmCall.parsedOutput
+                    : JSON.stringify(props.llmCall.parsedOutput, null, 2))
+                : undefined
+            }
+            placeholder="Parsed output not captured"
+          />
         </Match>
       </Switch>
     </div>
@@ -606,10 +870,10 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
 }
 
 // ============================================================================
-// Event Detail Overlay Component
+// Event Detail Panel Component
 // ============================================================================
 
-const EventDetailOverlay = (props: { event: ContextEvent, onClose: () => void }) => {
+const EventDetailPanel = (props: { event: ContextEvent, onClose: () => void }) => {
   const { type, ts, patternId, data, llmCall } = props.event
 
   return (
@@ -675,24 +939,26 @@ const EventDetailOverlay = (props: { event: ContextEvent, onClose: () => void })
           <LLMCallTabs llmCall={llmCall!} />
         </Show>
 
-        {/* Event-specific content */}
-        <Switch fallback={<GenericDetail data={data} />}>
-          <Match when={type === 'tool_call'}>
-            <ToolCallDetail data={data as ToolCallEventData} />
-          </Match>
-          <Match when={type === 'tool_result'}>
-            <ToolResultDetail data={data as ToolResultEventData} />
-          </Match>
-          <Match when={type === 'controller_action'}>
-            <ActionDetail data={data as ControllerActionEventData} />
-          </Match>
-          <Match when={type === 'user_message'}>
-            <MessageDetail data={data as UserMessageEventData} role="user" />
-          </Match>
-          <Match when={type === 'assistant_message'}>
-            <MessageDetail data={data as AssistantMessageEventData} role="assistant" />
-          </Match>
-        </Switch>
+        {/* Event-specific content — skip for messages with LLM tabs (avoids duplication) */}
+        <Show when={!(llmCall && (type === 'assistant_message' || type === 'user_message'))}>
+          <Switch fallback={<GenericDetail data={data} />}>
+            <Match when={type === 'tool_call'}>
+              <ToolCallDetail data={data as ToolCallEventData} />
+            </Match>
+            <Match when={type === 'tool_result'}>
+              <ToolResultDetail data={data as ToolResultEventData} />
+            </Match>
+            <Match when={type === 'controller_action'}>
+              <ActionDetail data={data as ControllerActionEventData} />
+            </Match>
+            <Match when={type === 'user_message'}>
+              <MessageDetail data={data as UserMessageEventData} role="user" />
+            </Match>
+            <Match when={type === 'assistant_message'}>
+              <MessageDetail data={data as AssistantMessageEventData} role="assistant" />
+            </Match>
+          </Switch>
+        </Show>
       </div>
     </div>
   )
@@ -708,6 +974,33 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
   // Sort events chronologically (oldest first)
   const timelineEvents = createMemo(() => {
     return [...props.events].sort((a, b) => a.ts - b.ts)
+  })
+
+  // Compute per-event background tint based on active pattern stack
+  const eventTints = createMemo(() => {
+    const events = timelineEvents()
+    const tints: (string | undefined)[] = []
+    const patternStack: string[] = []
+
+    for (const event of events) {
+      if (event.type === 'pattern_enter') {
+        patternStack.push(event.patternId)
+        tints.push(undefined) // boundary rows handle their own bg
+      } else if (event.type === 'pattern_exit') {
+        tints.push(undefined)
+        // Pop matching pattern (or last if mismatch)
+        const idx = patternStack.lastIndexOf(event.patternId)
+        if (idx >= 0) patternStack.splice(idx, 1)
+        else patternStack.pop()
+      } else {
+        // Use the innermost (last) pattern's tint
+        const activePattern = patternStack.length > 0
+          ? patternStack[patternStack.length - 1]
+          : undefined
+        tints.push(activePattern ? getPatternColor(activePattern).tint : undefined)
+      }
+    }
+    return tints
   })
 
   // Get expanded event
@@ -737,21 +1030,30 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
           fallback={<EmptyState />}
         >
           <For each={timelineEvents()}>
-            {(event, index) => (
-              <EventRow
-                event={event}
-                index={index()}
-                expanded={expandedIndex() === index()}
-                onExpand={() => handleExpand(index())}
-              />
-            )}
+            {(event, index) => {
+              const isBoundary = () => event.type === 'pattern_enter' || event.type === 'pattern_exit'
+              return (
+                <Show
+                  when={!isBoundary()}
+                  fallback={<PatternBoundaryRow event={event} />}
+                >
+                  <EventRow
+                    event={event}
+                    index={index()}
+                    expanded={expandedIndex() === index()}
+                    onExpand={() => handleExpand(index())}
+                    bgTint={eventTints()[index()]}
+                  />
+                </Show>
+              )
+            }}
           </For>
         </Show>
       </div>
 
-      {/* Event Detail Overlay */}
+      {/* Event Detail Panel */}
       <Show when={expandedEvent()}>
-        <EventDetailOverlay
+        <EventDetailPanel
           event={expandedEvent()!}
           onClose={handleClose}
         />

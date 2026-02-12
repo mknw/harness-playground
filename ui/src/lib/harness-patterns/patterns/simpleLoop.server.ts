@@ -5,8 +5,10 @@
  * Calls BAML controller function directly, extracting params from context.
  */
 
+import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
+import { repairJson } from '../json-repair'
 import type {
   ControllerAction,
   SimpleLoopConfig,
@@ -30,6 +32,10 @@ export interface SimpleLoopData {
   lastResult?: unknown
   results?: unknown[]
   response?: string
+  /** Whether an error occurred during loop execution */
+  hasError?: boolean
+  /** Error message if hasError is true */
+  errorMessage?: string
 }
 
 /**
@@ -81,12 +87,14 @@ export function simpleLoop<T extends SimpleLoopData>(
         const intent = data.intent ?? userContent
 
         // Call BAML controller
+        const collector = new Collector('simpleLoop')
         const { action, llmCall } = await controller(
           userContent,
           intent,
           previousResults,
           turn,
-          config?.schema
+          config?.schema,
+          collector
         )
 
         // Track controller action event with LLM call data
@@ -116,10 +124,10 @@ export function simpleLoop<T extends SimpleLoopData>(
           break
         }
 
-        // Parse tool args
+        // Parse tool args (lenient — LLMs may output unquoted keys/values)
         let args: Record<string, unknown>
         try {
-          args = JSON.parse(action.tool_args)
+          args = repairJson(action.tool_args)
         } catch {
           hasError = true
           errorMessage = `Invalid tool_args JSON: ${action.tool_args}`
@@ -170,12 +178,29 @@ export function simpleLoop<T extends SimpleLoopData>(
       if (hasError) {
         // Track error event
         trackEvent(scope, 'error', { error: errorMessage }, true)
+
+        // Propagate error state to scope.data for downstream patterns
+        scope.data = {
+          ...scope.data,
+          hasError: true,
+          errorMessage,
+          results  // Include partial results
+        }
       }
 
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       trackEvent(scope, 'error', { error: msg }, true)
+
+      // Propagate error state to scope.data for downstream patterns
+      scope.data = {
+        ...scope.data,
+        hasError: true,
+        errorMessage: msg,
+        results  // Include partial results
+      }
+
       return scope
     }
   }

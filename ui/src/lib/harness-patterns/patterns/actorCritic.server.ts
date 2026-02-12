@@ -5,8 +5,10 @@
  * Designed for code mode: generates scripts, executes them, evaluates results.
  */
 
+import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
+import { repairJson } from '../json-repair'
 import type {
   ControllerAction,
   ActorCriticConfig,
@@ -81,7 +83,8 @@ export function actorCritic<T extends ActorCriticData>(
         const intent = scope.data.intent ?? userContent
 
         // Call actor
-        const { action, llmCall: actorLlmCall } = await actor(userContent, intent, availableTools, previousAttempts)
+        const actorCollector = new Collector('actor')
+        const { action, llmCall: actorLlmCall } = await actor(userContent, intent, availableTools, previousAttempts, actorCollector)
 
         // Track controller action with LLM call data
         trackEvent(
@@ -102,10 +105,10 @@ export function actorCritic<T extends ActorCriticData>(
           continue
         }
 
-        // Parse args
+        // Parse args (lenient — LLMs may output unquoted keys/values)
         let args: Record<string, unknown>
         try {
-          args = JSON.parse(action.tool_args)
+          args = repairJson(action.tool_args)
         } catch {
           previousAttempts.push({
             script: '',
@@ -151,7 +154,8 @@ export function actorCritic<T extends ActorCriticData>(
         }
 
         // Call critic
-        const { result: evalResult, llmCall: criticLlmCall } = await critic(intent, previousAttempts)
+        const criticCollector = new Collector('critic')
+        const { result: evalResult, llmCall: criticLlmCall } = await critic(intent, previousAttempts, criticCollector)
 
         // Track critic result with LLM call data
         trackEvent(
