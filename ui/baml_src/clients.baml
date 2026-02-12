@@ -1,13 +1,35 @@
 // Learn more about clients at https://docs.boundaryml.com/docs/snippets/clients/overview
 
-// Groq (Primary - Fast inference)
-client<llm> CustomGroq {
+// Groq — Fast routing & classification (1000 t/s, cheapest)
+client<llm> GroqFast {
   provider openai-generic
   retry_policy Exponential
   options {
     base_url "https://api.groq.com/openai/v1"
     api_key env.GROQ_API_KEY
-    model "llama-3.3-70b-versatile"
+    model "openai/gpt-oss-20b"
+  }
+}
+
+// Groq — Strong reasoning for controllers (131K ctx, GPT-OSS 120B)
+client<llm> GroqReasoning {
+  provider openai-generic
+  retry_policy Exponential
+  options {
+    base_url "https://api.groq.com/openai/v1"
+    api_key env.GROQ_API_KEY
+    model "openai/gpt-oss-120b"
+  }
+}
+
+// Groq — Evaluation & critique (Qwen3 32B, 400 t/s)
+client<llm> GroqEval {
+  provider openai-generic
+  retry_policy Exponential
+  options {
+    base_url "https://api.groq.com/openai/v1"
+    api_key env.GROQ_API_KEY
+    model "qwen/qwen3-32b"
   }
 }
 
@@ -20,12 +42,21 @@ client<llm> CustomGPT5 {
   }
 }
 
-// some comment
 client<llm> CustomGPT5Mini {
   provider openai-responses
   retry_policy Exponential
   options {
     model "gpt-5-mini"
+    api_key env.OPENAI_API_KEY
+  }
+}
+
+// Fastest, most cost-efficient OpenAI model
+client<llm> CustomGPT5Nano {
+  provider openai-responses
+  retry_policy Exponential
+  options {
+    model "gpt-5-nano"
     api_key env.OPENAI_API_KEY
   }
 }
@@ -125,12 +156,32 @@ client<llm> CustomFast {
   }
 }
 
-// Groq with OpenAI fallback for reliability
-client<llm> GroqWithFallback {
+// Per-use-case fallback clients (Groq-only)
+client<llm> RouterFallback {
   provider fallback
   options {
-    // Try Groq first (fast), fall back to OpenAI if needed
-    strategy [CustomGroq, CustomGPT5Mini]
+    strategy [GroqFast, GroqReasoning]
+  }
+}
+
+client<llm> ControllerFallback {
+  provider fallback
+  options {
+    strategy [GroqReasoning, GroqFast]
+  }
+}
+
+client<llm> CriticFallback {
+  provider fallback
+  options {
+    strategy [GroqEval, GroqReasoning]
+  }
+}
+
+client<llm> SynthesizerFallback {
+  provider fallback
+  options {
+    strategy [GroqReasoning, GroqEval]
   }
 }
 
