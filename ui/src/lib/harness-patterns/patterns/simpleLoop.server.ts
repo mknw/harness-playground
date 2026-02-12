@@ -106,8 +106,8 @@ export function simpleLoop<T extends SimpleLoopData>(
           llmCall
         )
 
-        // Check if done
-        if (action.is_final) {
+        // Check if done (is_final flag OR tool_name === 'Return')
+        if (action.is_final || action.tool_name === 'Return') {
           scope.data = {
             ...scope.data,
             lastAction: action,

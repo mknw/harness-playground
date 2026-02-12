@@ -95,6 +95,15 @@ export function actorCritic<T extends ActorCriticData>(
           actorLlmCall
         )
 
+        // Check if done (is_final flag OR tool_name === 'Return')
+        if (action.is_final || action.tool_name === 'Return') {
+          scope.data = {
+            ...scope.data,
+            lastAction: action,
+          }
+          break
+        }
+
         // Validate tool
         if (!tools.includes(action.tool_name)) {
           previousAttempts.push({
