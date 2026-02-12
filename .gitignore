@@ -25,3 +25,6 @@ n8n_data/
 
 # Docker local config
 .docker/
+
+# Test coverage
+**/coverage/
