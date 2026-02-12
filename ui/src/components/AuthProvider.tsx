@@ -29,6 +29,16 @@ interface AuthProviderProps {
   children: JSX.Element;
 }
 
+// Dev bypass: set VITE_DEV_BYPASS_AUTH=true in .env to skip auth for testing
+const DEV_BYPASS_AUTH = import.meta.env.VITE_DEV_BYPASS_AUTH === 'true';
+
+const DEV_MOCK_USER = {
+  id: 'dev-user',
+  primaryEmail: 'dev@localhost',
+  displayName: 'Dev User',
+  signOut: async () => { /* no-op */ }
+} as unknown as User;
+
 export function AuthProvider(props: AuthProviderProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -49,6 +59,12 @@ export function AuthProvider(props: AuthProviderProps) {
       if (isServer) {
         setAuthChecked(true);
         return null; // Return null on server
+      }
+
+      // Dev bypass: return mock user immediately
+      if (DEV_BYPASS_AUTH) {
+        setAuthChecked(true);
+        return DEV_MOCK_USER;
       }
 
       try {
@@ -75,8 +91,8 @@ export function AuthProvider(props: AuthProviderProps) {
       const isAuthRoute = pathname.startsWith('/auth/');
       const isAccessDeniedRoute = pathname === '/auth/access-denied';
 
-      // Check if authenticated user's email is allowed
-      if (currentUser && !isAccessDeniedRoute) {
+      // Check if authenticated user's email is allowed (skip in dev bypass mode)
+      if (currentUser && !isAccessDeniedRoute && !DEV_BYPASS_AUTH) {
         const userEmail = currentUser.primaryEmail;
 
         if (!isEmailAllowed(userEmail)) {
