@@ -12,7 +12,7 @@ function ActorController(
   tools: ToolDescription[],
   attempts: Attempt[]
 ) -> ControllerAction {
-  client GroqWithFallback
+  client ControllerFallback
   prompt #"
     {{ _.role("system") }}
     You are an AI agent that accomplishes tasks by calling tools.
@@ -60,7 +60,7 @@ function Critic(
   intent: string,
   attempts: Attempt[]
 ) -> CriticResult {
-  client GroqWithFallback
+  client CriticFallback
   prompt #"
     {{ _.role("system") }}
     You evaluate whether task execution results satisfy the user's intent.

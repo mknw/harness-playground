@@ -63,7 +63,8 @@ function extractLLMCallData(
   collector: Collector,
   functionName: string,
   variables: Record<string, unknown>,
-  startTime: number
+  startTime: number,
+  parsedOutput?: unknown
 ): LLMCallData | undefined {
   const last = collector.last
   if (!last) return undefined
@@ -76,17 +77,61 @@ function extractLLMCallData(
     rawInput = typeof body === 'string' ? body : JSON.stringify(body, null, 2)
   }
 
+  // Extract provider and client info from the selected call
+  const provider = lastCall && 'provider' in lastCall ? (lastCall as { provider: string }).provider : undefined
+  const clientName = lastCall && 'clientName' in lastCall ? (lastCall as { clientName: string }).clientName : undefined
+
   return {
     functionName,
     variables,
+    promptTemplate: getPromptTemplate(functionName),
     rawInput,
     rawOutput: last.rawLlmResponse ?? undefined,
+    parsedOutput,
     usage: last.usage ? {
       inputTokens: last.usage.inputTokens ?? 0,
       outputTokens: last.usage.outputTokens ?? 0,
+      cachedInputTokens: last.usage.cachedInputTokens ?? 0,
       totalTokens: (last.usage.inputTokens ?? 0) + (last.usage.outputTokens ?? 0)
     } : undefined,
-    durationMs: Date.now() - startTime
+    durationMs: Date.now() - startTime,
+    provider,
+    clientName
+  }
+}
+
+// ============================================================================
+// Prompt Template Extraction
+// ============================================================================
+
+/** Cache for extracted prompt templates keyed by function name */
+let promptTemplateCache: Record<string, string> | null = null
+
+/** Extract prompt template for a BAML function from inlined source */
+function getPromptTemplate(functionName: string): string | undefined {
+  if (!promptTemplateCache) {
+    promptTemplateCache = {}
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getBamlFiles } = require('../../../baml_client/inlinedbaml')
+      const files = getBamlFiles() as Record<string, string>
+      for (const source of Object.values(files)) {
+        extractPromptTemplates(source, promptTemplateCache)
+      }
+    } catch {
+      // If inlined BAML not available, return undefined
+    }
+  }
+  return promptTemplateCache[functionName]
+}
+
+/** Parse BAML source to extract function prompt blocks */
+function extractPromptTemplates(source: string, cache: Record<string, string>): void {
+  // Match: function FunctionName(...) -> ReturnType { ... prompt #"..."# }
+  const funcRegex = /function\s+(\w+)\s*\([^)]*\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/g
+  let match: RegExpExecArray | null
+  while ((match = funcRegex.exec(source)) !== null) {
+    cache[match[1]] = match[2]
   }
 }
 
@@ -165,7 +210,7 @@ export function createLoopControllerAdapter(
 
     // Extract LLM call data if collector present
     const llmCall = collector
-      ? extractLLMCallData(collector, 'LoopController', variables, startTime)
+      ? extractLLMCallData(collector, 'LoopController', variables, startTime, action)
       : undefined
 
     return { action, llmCall }
@@ -256,7 +301,7 @@ export function createActorControllerAdapter(toolNames: string[]): CodeModeContr
 
     // Extract LLM call data if collector present
     const llmCall = collector
-      ? extractLLMCallData(collector, 'ActorController', variables, startTime)
+      ? extractLLMCallData(collector, 'ActorController', variables, startTime, action)
       : undefined
 
     return { action, llmCall }
@@ -301,7 +346,7 @@ export function createCriticAdapter(): CriticFnWithLLMData {
 
     // Extract LLM call data if collector present
     const llmCall = collector
-      ? extractLLMCallData(collector, 'Critic', variables, startTime)
+      ? extractLLMCallData(collector, 'Critic', variables, startTime, result)
       : undefined
 
     return { result, llmCall }

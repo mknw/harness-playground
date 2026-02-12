@@ -70,12 +70,31 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
     })
   }
 
-  const variables = { userMessage: input.userMessage, intent: input.intent, turns }
+  const variables = {
+    userMessage: input.userMessage,
+    intent: input.intent,
+    turns,
+    hasError: input.hasError ?? false,
+    errorMessage: input.errorMessage
+  }
 
-  // Call with or without collector
+  // Call with or without collector, including error context
   const content = collector
-    ? await b.Synthesize(input.userMessage, input.intent, turns, { collector })
-    : await b.Synthesize(input.userMessage, input.intent, turns)
+    ? await b.Synthesize(
+        input.userMessage,
+        input.intent,
+        turns,
+        input.hasError ?? false,
+        input.errorMessage,
+        { collector }
+      )
+    : await b.Synthesize(
+        input.userMessage,
+        input.intent,
+        turns,
+        input.hasError ?? false,
+        input.errorMessage
+      )
 
   // Extract LLM call data if collector present
   let llmCall: LLMCallData | undefined
@@ -88,17 +107,40 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
       rawInput = typeof body === 'string' ? body : JSON.stringify(body, null, 2)
     }
 
+    // Extract prompt template from inlined BAML source
+    let promptTemplate: string | undefined
+    try {
+      const { getBamlFiles } = await import('../../../../baml_client/inlinedbaml')
+      const files = getBamlFiles() as Record<string, string>
+      for (const source of Object.values(files)) {
+        const match = /function\s+Synthesize\s*\([^)]*\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/.exec(source)
+        if (match) {
+          promptTemplate = match[1]
+          break
+        }
+      }
+    } catch { /* inlined BAML not available */ }
+
+    // Extract provider and client info from the selected call
+    const provider = lastCall && 'provider' in lastCall ? (lastCall as { provider: string }).provider : undefined
+    const clientName = lastCall && 'clientName' in lastCall ? (lastCall as { clientName: string }).clientName : undefined
+
     llmCall = {
       functionName: 'Synthesize',
       variables,
+      promptTemplate,
       rawInput,
       rawOutput: last.rawLlmResponse ?? undefined,
+      parsedOutput: content,
       usage: last.usage ? {
         inputTokens: last.usage.inputTokens ?? 0,
         outputTokens: last.usage.outputTokens ?? 0,
+        cachedInputTokens: last.usage.cachedInputTokens ?? 0,
         totalTokens: (last.usage.inputTokens ?? 0) + (last.usage.outputTokens ?? 0)
       } : undefined,
-      durationMs: Date.now() - startTime
+      durationMs: Date.now() - startTime,
+      provider,
+      clientName
     }
   }
 
@@ -122,7 +164,10 @@ function buildSynthesisInputFromView(
   const input: SynthesizerInput = {
     mode,
     userMessage: userContent,
-    intent: data.intent ?? userContent
+    intent: data.intent ?? userContent,
+    // Propagate error state from upstream patterns
+    hasError: data.hasError,
+    errorMessage: data.errorMessage
   }
 
   switch (mode) {

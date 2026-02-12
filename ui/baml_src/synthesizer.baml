@@ -5,15 +5,26 @@
 function Synthesize(
   user_message: string,
   intent: string,
-  turns: LoopTurn[]
+  turns: LoopTurn[],
+  has_error: bool,
+  error_message: string?
 ) -> string {
-  client GroqWithFallback
+  client SynthesizerFallback
   prompt #"
     {{ _.role("system") }}
     Create a user-friendly response from tool execution results.
 
     USER MESSAGE: {{ user_message }}
     INTENT: {{ intent }}
+
+    {% if has_error %}
+    --- ERROR OCCURRED ---
+    {{ error_message }}
+
+    Acknowledge the error honestly and explain what went wrong in user-friendly terms.
+    If partial results were obtained, summarize them.
+    Suggest what the user could try differently.
+    {% endif %}
 
     TOOL EXECUTION:
     {% for turn in turns %}
@@ -32,7 +43,7 @@ function Synthesize(
     GUIDELINES:
     - Be concise but informative
     - Highlight key findings and relationships
-    - If results are empty or errored, explain why and suggest alternatives
+    - If errors occurred, explain what went wrong clearly and suggest alternatives
     - For structured data, summarize patterns rather than dumping raw output
     - Suggest follow-up questions when relevant
   "#

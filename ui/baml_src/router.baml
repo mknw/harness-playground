@@ -7,7 +7,7 @@ function Router(
   routes: RouteOption[],
   history: Message[]
 ) -> RoutingResult {
-  client GroqWithFallback
+  client RouterFallback
   prompt #"
     {{ _.role("system") }}
     Analyze the user message and determine routing.

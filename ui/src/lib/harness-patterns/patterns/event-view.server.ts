@@ -156,6 +156,24 @@ export class EventViewImpl implements IEventView {
     return this.ofType('controller_action')
   }
 
+  /** Error events */
+  errors(): EventViewImpl {
+    return this.ofType('error')
+  }
+
+  /** Check if any errors in view */
+  hasErrors(): boolean {
+    return this.errors().exists()
+  }
+
+  /** Get last error message */
+  lastError(): string | undefined {
+    const errors = this.errors().last(1).get()
+    return errors.length > 0
+      ? (errors[0].data as { error: string })?.error
+      : undefined
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Quantity Selectors
   // ─────────────────────────────────────────────────────────────────────────

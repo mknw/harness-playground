@@ -71,7 +71,7 @@ class Message {
 class ControllerAction {
   reasoning string @description("Step-by-step thought process")
   tool_name string @description("Tool to call, or 'Return' to exit loop")
-  tool_args string @description("JSON arguments for the tool, or final answer for Return")
+  tool_args string @description("Valid JSON object string with the tool's arguments, e.g. {\"query\": \"search term\"}. Keys and string values MUST be double-quoted. For Return, use the final answer as a plain string.")
   status string @description("Short user-facing status message")
   is_final bool @description("True when the loop should terminate")
 }

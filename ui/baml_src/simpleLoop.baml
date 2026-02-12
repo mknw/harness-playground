@@ -8,7 +8,7 @@ function LoopController(
   turns: LoopTurn[],
   context: string?
 ) -> ControllerAction {
-  client GroqWithFallback
+  client ControllerFallback
   prompt #"
     {{ _.role("system") }}
     You are an AI agent that accomplishes tasks by calling tools.
@@ -35,7 +35,12 @@ function LoopController(
     {% if turn.reasoning %}Reasoning: {{ turn.reasoning }}{% endif %}
     {% if turn.tool_call %}Called: {{ turn.tool_call.tool }}({{ turn.tool_call.args }}){% endif %}
     {% if turn.tool_result %}
-    {% if turn.tool_result.success %}Result: {{ turn.tool_result.result }}{% else %}ERROR: {{ turn.tool_result.error }}{% endif %}
+    {% if turn.tool_result.success %}Result: {{ turn.tool_result.result }}
+    {% else %}ERROR: {{ turn.tool_result.error }}
+
+    If the error appears transient (timeout, connection), consider retrying with same or modified arguments.
+    If the error indicates invalid arguments, fix them and retry.
+    If the tool cannot help with this task, try an alternative approach or use Return to explain what went wrong.{% endif %}
     {% endif %}
     {% endfor %}
     {% endif %}
