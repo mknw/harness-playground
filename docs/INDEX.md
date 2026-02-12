@@ -31,12 +31,23 @@
 
 | Document | Description | Key Sections |
 |----------|-------------|--------------|
-| [../ui/src/lib/harness-patterns/README.md](../ui/src/lib/harness-patterns/README.md) | Server-side orchestration framework | Patterns, Orchestrator base class, OpenTelemetry |
+| [harness-patterns/README.md](harness-patterns/README.md) | Overview and quick start | Patterns, composition, examples |
+| [harness-patterns/api.md](harness-patterns/api.md) | Complete API reference | Types, patterns, tools, configuration |
+| [harness-patterns/frontend.md](harness-patterns/frontend.md) | SolidStart integration | Server actions, components, sessions |
+| [harness-patterns/examples.md](harness-patterns/examples.md) | Example agents catalog | 10 agent implementations |
 
-**Source files:**
-- `ui/src/lib/harness-patterns/orchestrator.server.ts` - Base Orchestrator class
-- `ui/src/lib/harness-patterns/patterns.server.ts` - Tool execution patterns
-- `ui/src/lib/harness-patterns/types.ts` - Type definitions
+**Authoritative source documentation:**
+- [`ui/src/lib/harness-patterns/README.md`](../ui/src/lib/harness-patterns/README.md) - Full framework documentation
+- [`ui/src/lib/harness-client/examples/README.md`](../ui/src/lib/harness-client/examples/README.md) - Detailed example implementations
+
+**Key source files:**
+- `ui/src/lib/harness-patterns/types.ts` - Core type definitions
+- `ui/src/lib/harness-patterns/harness.server.ts` - Harness composition
+- `ui/src/lib/harness-patterns/router.server.ts` - Intent-based routing
+- `ui/src/lib/harness-patterns/patterns/*.server.ts` - Pattern implementations
+- `ui/src/lib/harness-patterns/baml-adapters.server.ts` - BAML controller adapters
+- `ui/src/lib/harness-client/registry.server.ts` - Agent registry
+- `ui/src/lib/harness-client/actions.server.ts` - Server actions
 
 ### UI Frontend
 
@@ -121,9 +132,11 @@
 
 ## Current Status
 
-**Phase 4 (Tool Execution):** 🔧 In Progress
-- Multi-turn tool loop implemented
-- Some tools need debugging
+**Harness Patterns Framework:** ✅ Implemented
+- UnifiedContext-based session management
+- 9 composable patterns: `simpleLoop`, `actorCritic`, `withApproval`, `synthesizer`, `router`, `chain`, `parallel`, `judge`, `guardrail`, `hook`
+- 10 example agents in registry
+- OpenTelemetry instrumentation
 
 **See:** [ROADMAP.md](ROADMAP.md) for full development status.
 
@@ -133,30 +146,38 @@
 
 ```
 kg-agent/
-├── docs/                     # This documentation
-│   ├── INDEX.md              # You are here
-│   ├── ROADMAP.md            # Development roadmap
-│   ├── DOCKER_COMPOSE.md     # Docker setup
-│   ├── MCP_GATEWAY.md        # MCP Gateway reference
-│   ├── UI_ARCHITECTURE.md    # Frontend architecture
+├── docs/                        # This documentation
+│   ├── INDEX.md                 # You are here
+│   ├── ROADMAP.md               # Development roadmap
+│   ├── DOCKER_COMPOSE.md        # Docker setup
+│   ├── MCP_GATEWAY.md           # MCP Gateway reference
+│   ├── UI_ARCHITECTURE.md       # Frontend architecture
+│   ├── harness-patterns/        # Harness patterns docs
+│   │   ├── README.md            # Overview
+│   │   ├── api.md               # API reference
+│   │   ├── examples.md          # Example agents
+│   │   └── frontend.md          # Frontend integration
 │   └── baml_agent/
-│       └── ARCHITECTURE.md   # Agent architecture
-├── ui/                       # SolidStart frontend
-│   ├── baml_src/             # BAML definitions (routing, neo4j, code_mode, etc.)
+│       └── ARCHITECTURE.md      # Legacy agent architecture
+├── ui/                          # SolidStart frontend
+│   ├── baml_src/                # BAML definitions
 │   └── src/lib/
-│       ├── baml-agent/       # Agent implementation
-│       ├── harness-patterns/ # Server-side orchestration framework
-│       ├── graph/            # Graph transformation utilities
-│       └── neo4j/            # Direct Neo4j driver client
-├── configs/                  # MCP and catalog configurations
-│   ├── mcp-config.yaml       # MCP server parameters
-│   ├── custom-catalog.yaml   # Custom MCP catalog
-│   └── catalog.yaml          # Full Docker MCP catalog
-├── scripts/                  # Utility scripts
-├── neo4j_dumps/              # Graph data exports
-└── docker-compose.yaml       # Service orchestration
+│       ├── harness-patterns/    # Pattern framework (authoritative docs here)
+│       │   ├── patterns/        # Pattern implementations
+│       │   ├── types.ts         # Core types
+│       │   └── README.md        # Full documentation
+│       ├── harness-client/      # Frontend integration layer
+│       │   ├── examples/        # 10 agent implementations
+│       │   ├── registry.server.ts
+│       │   └── actions.server.ts
+│       ├── graph/               # Graph transformation utilities
+│       └── neo4j/               # Direct Neo4j driver client
+├── configs/                     # MCP and catalog configurations
+├── scripts/                     # Utility scripts
+├── neo4j_dumps/                 # Graph data exports
+└── docker-compose.yaml          # Service orchestration
 ```
 
 ---
 
-**Last Updated:** 2025-12-22
+**Last Updated:** 2026-02-05

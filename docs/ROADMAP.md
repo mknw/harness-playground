@@ -99,6 +99,31 @@ User → ChatInterface → AgentOrchestrator → Server Functions → BAML Agent
 
 ---
 
+## Phase 4.5: Harness Patterns Framework ✅ COMPLETE
+
+**Goal:** Functional, composable framework for agentic tool execution
+
+### Completed
+- [x] UnifiedContext-based session management
+- [x] 10 composable patterns: `simpleLoop`, `actorCritic`, `withApproval`, `synthesizer`, `router`, `chain`, `parallel`, `judge`, `guardrail`, `hook`
+- [x] EventView fluent API for querying events
+- [x] BAML adapter functions for all server namespaces
+- [x] 10 example agents in registry
+- [x] OpenTelemetry instrumentation
+- [x] Session persistence via serialization
+- [x] Frontend integration via SolidStart server actions
+
+**Key Files:**
+- `ui/src/lib/harness-patterns/` - Core framework
+- `ui/src/lib/harness-client/` - Frontend integration layer
+- `docs/harness-patterns/` - Documentation
+
+**Documentation:**
+- See [`docs/harness-patterns/README.md`](harness-patterns/README.md) for overview
+- See [`ui/src/lib/harness-patterns/README.md`](../ui/src/lib/harness-patterns/README.md) for full API
+
+---
+
 ## Phase 4: Tool Execution 🔧 IN PROGRESS
 
 **Goal:** Enable agent to execute tools (Neo4j queries, web fetch, etc.)
@@ -418,6 +443,9 @@ Agentic (UTCP):        lib/utcp/client.ts → MCP Gateway → Neo4j (Phase 4)
 ✅ EvaluateAndPersist BAML function for evaluation + repository storage
 ✅ Coded tools repository in Neo4j (CodedTool nodes)
 ✅ Config files consolidated in configs/ directory
+✅ **Harness Patterns Framework** - 10 composable patterns, 10 example agents
+✅ **UnifiedContext** - Session persistence, event tracking, scope isolation
+✅ **Agent Registry** - Multiple agent configurations selectable at runtime
 
 **What Needs Debugging:**
 🔧 Some tools fail during execution - needs investigation
@@ -457,6 +485,6 @@ When working on this project:
 
 ---
 
-**Last Updated:** 2025-12-22
-**Version:** 0.4.2-alpha
-**Status:** Active Development - Harness Patterns Framework Added
+**Last Updated:** 2026-02-05
+**Version:** 0.5.0-alpha
+**Status:** Active Development - Harness Patterns Framework Complete

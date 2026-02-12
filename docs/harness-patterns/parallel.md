@@ -1,36 +1,42 @@
-# Parallel Execution Options
+# Parallel Execution Patterns
+
+Options for concurrent pattern execution in the harness framework.
 
 ---
 
-## Option A: Promise.all
+## Current Implementation: Promise.allSettled
 
-Independent patterns, merge at end.
+The `parallel` pattern uses `Promise.allSettled` for independent concurrent execution:
 
 ```typescript
-parallel([pattern1, pattern2], merger)
-// Uses: Promise.all(), allSettled(), race(), any()
+parallel([pattern1, pattern2, pattern3], { patternId: 'concurrent-search' })
 ```
 
-**Use:** Search multiple sources, aggregate results.
+**Behavior:**
+- Each pattern gets an isolated scope with empty events
+- Results merged on completion (both fulfilled and rejected)
+- Data from all branches merged into parent scope
+- Errors logged but don't fail the overall pattern
+
+**Use cases:**
+- Multi-source search (web + github + docs)
+- Parallel data fetching
+- Fan-out queries
 
 ---
 
-## Option B: Streaming
+## Future Options
 
-Progressive results during execution.
+### Streaming (Progressive Results)
 
 ```typescript
 parallelStream(patterns, onChunk)
-// Patterns emit chunks via ctx.emit()
+// Patterns emit via ctx.emit(), results streamed as available
 ```
 
-**Use:** UI updates, first-result optimization.
+**Use case:** UI updates, first-result optimization
 
----
-
-## Option C: Event-Driven
-
-Dynamic coordination via event bus.
+### Event-Driven Coordination
 
 ```typescript
 parallel(
@@ -45,14 +51,28 @@ parallel(
 )
 ```
 
-**Use:** Multi-agent negotiation, runtime coordination.
+**Use case:** Multi-agent negotiation, conditional early exit
 
 ---
 
-## Decision
+## Combining with Judge
 
-- **Default:** Option A
-- **Progressive UI:** Option B
-- **Complex coordination:** Option C
+Common pattern: parallel search + quality ranking
 
-Reserve EDA for legitimate complexity.
+```typescript
+const sources = parallel([
+  simpleLoop(webController, tools.web, { patternId: 'web' }),
+  simpleLoop(githubController, tools.github, { patternId: 'github' }),
+  simpleLoop(docsController, tools.context7, { patternId: 'docs' })
+])
+
+const evaluator = judge(qualityEvaluator, { patternId: 'judge' })
+
+return [sources, evaluator, synthesizer({ mode: 'response' })]
+```
+
+See [examples.md](./examples.md) for full implementations.
+
+---
+
+**Last Updated:** 2026-02-05

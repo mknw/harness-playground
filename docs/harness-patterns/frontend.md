@@ -36,11 +36,27 @@ The `harness-client` module provides server actions for SolidStart components.
 ```typescript
 "use server"
 
-// Process a user message
+// Process a user message (uses default patterns)
 export async function processMessage(
   sessionId: string,
   message: string
 ): Promise<HarnessResultScoped<SessionData>>
+
+// Process with a specific agent from registry
+export async function processMessageWithAgent(
+  sessionId: string,
+  message: string,
+  agentId: string = "default"
+): Promise<HarnessResultScoped<SessionData>>
+
+// Get list of available agents
+export async function getAgentList(): Promise<Array<{
+  id: string
+  name: string
+  description: string
+  icon: string
+  servers: string[]
+}>>
 
 // Approve a pending action
 export async function approveAction(
@@ -472,3 +488,68 @@ const handleApprove = async () => {
 - Client only sees `HarnessResultScoped` (serializable data)
 - Full session state is kept server-side
 - OTel tracing is built into all patterns
+
+---
+
+## Agent Registry
+
+The `harness-client` includes an agent registry for managing multiple agent configurations.
+
+### Registry API
+
+```typescript
+// registry.server.ts
+interface AgentConfig {
+  id: string
+  name: string
+  description: string
+  icon: string                // Emoji for UI
+  servers: string[]           // MCP server namespaces used
+  createPatterns: () => Promise<ConfiguredPattern<SessionData>[]>
+}
+
+// Register a new agent
+registerAgent(config: AgentConfig): void
+
+// Get agent by ID
+getAgent(id: string): AgentConfig | undefined
+
+// Get all agents
+getAllAgents(): AgentConfig[]
+
+// Get metadata (safe for client)
+getAgentMetadata(): Array<{ id, name, description, icon, servers }>
+```
+
+### Using in Components
+
+```tsx
+import { createResource } from 'solid-js'
+import { getAgentList, processMessageWithAgent } from '~/lib/harness-client'
+
+const AgentSelector = () => {
+  const [agents] = createResource(getAgentList)
+  const [selectedAgent, setSelectedAgent] = createSignal('default')
+
+  const handleSend = async (message: string) => {
+    const result = await processMessageWithAgent(
+      sessionId,
+      message,
+      selectedAgent()
+    )
+    // ...
+  }
+
+  return (
+    <select onChange={e => setSelectedAgent(e.target.value)}>
+      <For each={agents()}>
+        {agent => <option value={agent.id}>{agent.icon} {agent.name}</option>}
+      </For>
+    </select>
+  )
+}
+```
+
+---
+
+**Last Updated:** 2026-02-05

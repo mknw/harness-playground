@@ -2,204 +2,104 @@
 
 A functional, composable framework for building agentic tool execution pipelines.
 
-## Table of Contents
+> **Full Documentation:** See [`ui/src/lib/harness-patterns/README.md`](../../ui/src/lib/harness-patterns/README.md) for complete API documentation, type definitions, and implementation details.
 
-- [Overview](#overview)
-- [Core Concepts](#core-concepts)
-- [Pattern Types](#pattern-types)
-- [Example Agents](#example-agents)
-- [API Reference](./api.md)
-- [Frontend Integration](./frontend.md)
+## Quick Navigation
 
-## Overview
+| Document | Purpose |
+|----------|---------|
+| [API Reference](./api.md) | Types, patterns, tools, configuration |
+| [Examples](./examples.md) | 10 agent implementations |
+| [Frontend Integration](./frontend.md) | SolidStart server actions, components |
 
-Harness Patterns provides a declarative way to compose AI agent behaviors. Instead of writing imperative control flow, you declare patterns that describe how an agent should behave, then compose them into pipelines.
+---
+
+## Architecture Overview
+
+```
+BAML Functions ──┐
+                 ├──► Patterns ──► Router ──► Harness ──► Agent
+MCP Tools ───────┘
+```
+
+**Key Principle:** BAML functions are passed directly to patterns. No intermediate wrappers needed.
+
+---
+
+## Pattern Catalog
+
+| Pattern | Purpose | Example Use |
+|---------|---------|-------------|
+| `simpleLoop` | ReAct decide-execute loop | Neo4j queries, web search |
+| `actorCritic` | Generate-evaluate with retry | Code generation, file editing |
+| `router` | Intent-based dispatch | Multi-capability agents |
+| `synthesizer` | Response generation | Human-readable output |
+| `withApproval` | User approval gate | Write operations |
+| `parallel` | Concurrent execution | Multi-source search |
+| `judge` | Quality ranking | Best-of-N selection |
+| `guardrail` | Multi-layer validation | Input/output safety |
+| `hook` | Lifecycle events | Session cleanup |
+| `chain` | Sequential composition | Multi-stage pipelines |
+
+---
+
+## Minimal Example
 
 ```typescript
+import { harness, simpleLoop, synthesizer, Tools } from '~/lib/harness-patterns'
+import { b } from '~/baml_client'
+
+const tools = await Tools()
+
 const agent = harness(
-  router(routes, patterns),   // Route to appropriate handler
-  synthesizer({ mode: 'thread' }) // Generate human response
+  simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], {
+    patternId: 'neo4j-query'
+  }),
+  synthesizer({ mode: 'thread', patternId: 'response-synth' })
 )
 
-const result = await agent('Show me all users', sessionId)
+const result = await agent('Show me all Person nodes', 'session-123')
 ```
+
+---
 
 ## Core Concepts
 
-### Patterns
-
-Patterns are the building blocks. Each pattern:
-- Takes a `PatternScope` (isolated workspace)
-- Has access to `EventView` (query past events)
-- Returns modified scope with new events
-
-```typescript
-type ScopedPattern<T> = (
-  scope: PatternScope<T>,
-  view: EventView
-) => Promise<PatternScope<T>>
-```
-
 ### UnifiedContext
 
-The source of truth for session state:
+Single source of truth for session state. Contains events, data, and status.
 
-```typescript
-interface UnifiedContext<T> {
-  sessionId: string
-  events: ContextEvent[]
-  status: 'running' | 'paused' | 'done' | 'error'
-  data: T
-  input: string
-}
-```
+### PatternScope
+
+Isolated workspace for pattern execution. Events are committed on completion.
 
 ### EventView
 
-Fluent API for querying events:
+Fluent API for querying events from context:
 
 ```typescript
-view.fromLastPattern()    // Events from previous pattern
-    .tools()               // Filter to tool calls/results
-    .last(3)               // Last 3 events
-    .get()                 // Execute query
+view.fromLastPattern().tools().last(3).get()
 ```
 
-## Pattern Types
+---
 
-### simpleLoop
+## Available Agents
 
-ReAct-style decide-execute loop. A controller decides which tool to call, the tool executes, repeat until done.
+10 pre-built agents in the registry:
 
-```typescript
-simpleLoop(controller, tools, { maxTurns: 5 })
-```
+1. **Default** - Router with Neo4j, Web, Code Mode
+2. **Doc Assistant** - Context7 + Memory
+3. **Multi-Source Research** - Parallel search + Judge
+4. **LLM-as-Judge** - Multi-criteria evaluation
+5. **Guardrailed Editor** - 5-layer file editing safety
+6. **Conversational Memory** - Scratchpad + KB distillation
+7. **Issue Triage** - GitHub issue analysis
+8. **KG Builder** - Research → Extract → Persist
+9. **Ontology Builder** - Schema evolution
+10. **Semantic Cache** - Redis vector caching
 
-### actorCritic
+See [examples.md](./examples.md) for details.
 
-Generate-evaluate loop with retry logic. Actor generates, critic evaluates, retry if insufficient.
+---
 
-```typescript
-actorCritic(actor, critic, tools, { maxRetries: 3 })
-```
-
-### router
-
-Intent-based routing to sub-patterns.
-
-```typescript
-router(
-  { neo4j: 'Database queries', web: 'Web lookups' },
-  { neo4j: neo4jPattern, web: webPattern }
-)
-```
-
-### synthesizer
-
-Generate human-readable response from pattern output.
-
-```typescript
-synthesizer({ mode: 'thread' }) // Full iteration history
-synthesizer({ mode: 'response' }) // Data + response
-synthesizer({ mode: 'message' }) // Response only
-```
-
-### withApproval
-
-Wrap pattern to pause for user approval on sensitive operations.
-
-```typescript
-withApproval(pattern, approvalPredicates.mutations)
-```
-
-### parallel
-
-Execute patterns concurrently.
-
-```typescript
-parallel([pattern1, pattern2, pattern3])
-```
-
-### judge
-
-Evaluate and rank outputs from parallel patterns.
-
-```typescript
-judge(evaluatorFn, { patternId: 'quality-judge' })
-```
-
-### guardrail
-
-Wrap pattern with validation rails.
-
-```typescript
-guardrail(pattern, {
-  rails: [piiScanRail, pathAllowlistRail],
-  circuitBreaker: { maxFailures: 3 }
-})
-```
-
-### hook
-
-Background execution on triggers.
-
-```typescript
-hook(pattern, { trigger: 'session_close', background: true })
-```
-
-### chain
-
-Sequential pattern composition (implicit in harness).
-
-```typescript
-chain(ctx, [pattern1, pattern2, pattern3])
-```
-
-## Example Agents
-
-See [examples.md](./examples.md) for complete implementations of:
-
-1. **Default Agent** - Router with Neo4j, Web Search, Code Mode
-2. **Knowledge Graph Builder** - Research → Extract → Persist pipeline
-3. **Documentation Assistant** - Context7 lookup with memory persistence
-4. **Multi-Source Research** - Parallel search with quality ranking
-5. **LLM-as-Judge** - Multi-source with sophisticated evaluation
-6. **Guardrailed File Editor** - 5-layer validation for file operations
-7. **Conversational Memory** - Scratchpad with KB distillation
-8. **Issue Triage** - GitHub issue analysis and labeling
-9. **Ontology Builder** - Schema extraction and evolution
-10. **Semantic Cache** - Redis-backed response caching
-
-## Quick Start
-
-```typescript
-import {
-  harness,
-  simpleLoop,
-  synthesizer,
-  Tools,
-  createNeo4jController
-} from '~/lib/harness-patterns'
-
-async function createAgent() {
-  const tools = await Tools()
-
-  const queryPattern = simpleLoop(
-    createNeo4jController(tools.neo4j ?? []),
-    tools.neo4j ?? [],
-    { patternId: 'neo4j-query' }
-  )
-
-  const responseSynth = synthesizer({
-    mode: 'thread',
-    patternId: 'response-synth'
-  })
-
-  return harness(queryPattern, responseSynth)
-}
-
-// Usage
-const agent = await createAgent()
-const result = await agent('Show me all Person nodes', 'session-123')
-console.log(result.response)
-```
+**Last Updated:** 2026-02-05
