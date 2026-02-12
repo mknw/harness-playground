@@ -6,6 +6,9 @@ import devtools from 'solid-devtools/vite'
 
 export default defineConfig({
   vite: {
+    server: {
+      allowedHosts: ['host.docker.internal'],
+    },
     plugins: [
       UnoCSS({
         presets: [presetWind4(), presetAttributify()],

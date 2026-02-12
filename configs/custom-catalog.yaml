@@ -15,16 +15,16 @@ registry:
         env: NEO4J_PASSWORD
         example: password
     env:
-      - name: NEO4J_URI                      # FIXED: Was NEO4J_URL
-        value: '{{neo4j-cypher.uri}}'        # FIXED: Was {{neo4j-cypher.url}}
+      - name: NEO4J_URI # FIXED: Was NEO4J_URL
+        value: "{{neo4j-cypher.uri}}" # FIXED: Was {{neo4j-cypher.url}}
       - name: NEO4J_USERNAME
-        value: '{{neo4j-cypher.username}}'
-      - name: NEO4J_PASSWORD                   # ADD: Password as env variable
-        value: '{{neo4j-cypher.password}}'     # ADD: Instead of as a secret
+        value: "{{neo4j-cypher.username}}"
+      - name: NEO4J_PASSWORD # ADD: Password as env variable
+        value: "{{neo4j-cypher.password}}" # ADD: Instead of as a secret
       - name: NEO4J_DATABASE
-        value: '{{neo4j-cypher.database}}'
+        value: "{{neo4j-cypher.database}}"
       - name: NEO4J_READ_ONLY
-        value: '{{neo4j-cypher.read_only}}'
+        value: "{{neo4j-cypher.read_only}}"
 
   fetch:
     description: Fetch and retrieve content from the web
@@ -76,13 +76,13 @@ registry:
       - name: list_allowed_directories
     env:
       - name: ENABLE_ROOTS
-        value: '{{rust-mcp-filesystem.enable_roots}}'
+        value: "{{rust-mcp-filesystem.enable_roots}}"
       - name: ALLOW_WRITE
-        value: '{{rust-mcp-filesystem.allow_write}}'
+        value: "{{rust-mcp-filesystem.allow_write}}"
     command:
-      - '{{rust-mcp-filesystem.allowed_directories|volume-target|into}}'
+      - "{{rust-mcp-filesystem.allowed_directories|volume-target|into}}"
     volumes:
-      - '{{rust-mcp-filesystem.allowed_directories|volume|into}}'
+      - "{{rust-mcp-filesystem.allowed_directories|volume|into}}"
     disableNetwork: true
 
   github:
@@ -109,7 +109,7 @@ registry:
         example: <YOUR_TOKEN>
     env:
       - name: GITHUB_PERSONAL_ACCESS_TOKEN
-        value: '{{github.personal_access_token}}'
+        value: "{{github.personal_access_token}}"
     config:
       - name: github
         description: Configure GitHub authentication
@@ -186,15 +186,15 @@ registry:
         example: ""
     env:
       - name: REDIS_HOST
-        value: '{{redis.host}}'
+        value: "{{redis.host}}"
       - name: REDIS_PORT
-        value: '{{redis.port}}'
+        value: "{{redis.port}}"
       - name: REDIS_USERNAME
-        value: '{{redis.username}}'
+        value: "{{redis.username}}"
       - name: REDIS_PWD
-        value: '{{redis.password}}'
+        value: "{{redis.password}}"
       - name: REDIS_SSL
-        value: '{{redis.ssl}}'
+        value: "{{redis.ssl}}"
 
   database-server:
     description: Database server supporting PostgreSQL, MySQL, and SQLite with schema introspection and full SQL query capabilities
@@ -210,7 +210,7 @@ registry:
       - name: get_current_database_info
     env:
       - name: DATABASE_URL
-        value: '{{database-server.database_url}}'
+        value: "{{database-server.database_url}}"
     config:
       - name: database-server
         description: Configure the database connection. Supports SQLite, PostgreSQL, and MySQL.
@@ -218,3 +218,33 @@ registry:
         properties:
           database_url:
             type: string
+
+  playwright:
+    description: Playwright MCP server.
+    title: Playwright
+    type: server
+    longLived: true
+    image: mcp/playwright@sha256:53da89d1da3dfbb61c10f707c1713cfee1f870f7fba5334e126c6c765e37db56
+    tools:
+      - name: browser_click
+      - name: browser_close
+      - name: browser_console_messages
+      - name: browser_drag
+      - name: browser_evaluate
+      - name: browser_file_upload
+      - name: browser_fill_form
+      - name: browser_handle_dialog
+      - name: browser_hover
+      - name: browser_install
+      - name: browser_navigate
+      - name: browser_navigate_back
+      - name: browser_network_requests
+      - name: browser_press_key
+      - name: browser_resize
+      - name: browser_run_code
+      - name: browser_select_option
+      - name: browser_snapshot
+      - name: browser_tabs
+      - name: browser_take_screenshot
+      - name: browser_type
+      - name: browser_wait_for
