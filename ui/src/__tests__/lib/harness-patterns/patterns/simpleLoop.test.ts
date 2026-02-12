@@ -289,6 +289,79 @@ describe('simpleLoop execution', () => {
     expect(JSON.stringify(errorEvents[0].data)).toContain('Connection failed')
   })
 
+  it('should propagate error state to scope.data when tool fails', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    // Override callTool to return failure
+    callToolMock.mockResolvedValueOnce({
+      success: false,
+      data: null,
+      error: 'Tool execution failed'
+    })
+
+    const mockController = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"test"}' }),
+      llmCall: undefined
+    })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher'], {
+      patternId: 'test'
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Verify error state is propagated to scope.data
+    expect(result.data.hasError).toBe(true)
+    expect(result.data.errorMessage).toBe('Tool execution failed')
+    expect(result.data.results).toBeDefined()
+  })
+
+  it('should propagate error state to scope.data when controller crashes', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn().mockRejectedValue(new Error('Controller exception'))
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test'
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Verify error state is propagated to scope.data
+    expect(result.data.hasError).toBe(true)
+    expect(result.data.errorMessage).toBe('Controller exception')
+  })
+
   it('should handle controller errors gracefully', async () => {
     const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')

@@ -14,6 +14,7 @@ vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
 function createMockContext(events: ContextEvent[] = []): UnifiedContext {
   return {
     sessionId: 'test-session',
+    createdAt: Date.now(),
     input: 'test input',
     status: 'running',
     events,
@@ -532,6 +533,82 @@ describe('EventViewImpl', () => {
       const patternIds = result.map(e => e.patternId)
       expect(patternIds).toContain('p2')
       expect(patternIds).toContain('p3')
+    })
+  })
+
+  describe('errors()', () => {
+    it('should return error events', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'tool_call', ts: 1, patternId: 'p1', data: { tool: 'test' } },
+        { type: 'error', ts: 2, patternId: 'p1', data: { error: 'Something went wrong' } },
+        { type: 'tool_result', ts: 3, patternId: 'p1', data: { result: 'ok' } }
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.errors().get()
+      expect(result).toHaveLength(1)
+      expect(result[0].type).toBe('error')
+    })
+  })
+
+  describe('hasErrors()', () => {
+    it('should return true when errors exist', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'error', ts: 1, patternId: 'p1', data: { error: 'Failed' } }
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      expect(view.hasErrors()).toBe(true)
+    })
+
+    it('should return false when no errors exist', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'tool_call', ts: 1, patternId: 'p1', data: { tool: 'test' } }
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      expect(view.hasErrors()).toBe(false)
+    })
+  })
+
+  describe('lastError()', () => {
+    it('should return the last error message', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'error', ts: 1, patternId: 'p1', data: { error: 'First error' } },
+        { type: 'error', ts: 2, patternId: 'p1', data: { error: 'Second error' } }
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      expect(view.lastError()).toBe('Second error')
+    })
+
+    it('should return undefined when no errors exist', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'tool_call', ts: 1, patternId: 'p1', data: { tool: 'test' } }
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      expect(view.lastError()).toBeUndefined()
     })
   })
 })
