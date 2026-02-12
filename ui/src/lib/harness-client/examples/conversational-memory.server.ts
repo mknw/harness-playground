@@ -40,17 +40,17 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
       const sessionKey = `session:${(scope.data as Record<string, unknown>).sessionId ?? "unknown"}`;
       try {
         await callTool("hset", {
-          key: sessionKey,
-          field: "lastTurn",
+          name: sessionKey,
+          key: "lastTurn",
           value: Date.now().toString(),
         });
         const turnCount = ((scope.data as Record<string, unknown>).turnCount as number) ?? 0;
         await callTool("hset", {
-          key: sessionKey,
-          field: "turnCount",
+          name: sessionKey,
+          key: "turnCount",
           value: String(turnCount + 1),
         });
-        await callTool("expire", { key: sessionKey, seconds: 7200 }); // 2hr TTL
+        await callTool("expire", { name: sessionKey, expire_seconds: 7200 }); // 2hr TTL
         scope.data = { ...scope.data, turnCount: turnCount + 1 };
       } catch {
         // Redis may not be available

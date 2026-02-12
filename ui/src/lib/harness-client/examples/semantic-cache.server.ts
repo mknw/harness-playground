@@ -50,7 +50,7 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
 
       try {
         // Try to get from cache
-        const cached = await callTool("json_get", { key: cacheKey, path: "$" });
+        const cached = await callTool("json_get", { name: cacheKey, path: "$" });
 
         if (cached.success && cached.data) {
           // Cache hit
@@ -67,9 +67,9 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
         // This is a placeholder - in production, compute embedding first
         try {
           const similar = await callTool("vector_search_hash", {
-            index: "idx:query_cache",
-            query_vector: input, // Would be embedding in production
-            top_k: 1,
+            index_name: "idx:query_cache",
+            query_vector: [], // Would be embedding vector in production
+            k: 1,
           });
 
           if (
@@ -79,7 +79,7 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
             similar.data[0].score > 0.92
           ) {
             const resultKey = similar.data[0].key;
-            const result = await callTool("json_get", { key: resultKey, path: "$.result" });
+            const result = await callTool("json_get", { name: resultKey, path: "$.result" });
             if (result.success && result.data) {
               scope.data = {
                 ...scope.data,
@@ -154,7 +154,7 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
 
         // Store result as JSON
         await callTool("json_set", {
-          key: cacheKey,
+          name: cacheKey,
           path: "$",
           value: JSON.stringify({
             query: input,
@@ -164,7 +164,7 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
         });
 
         // Set TTL: 24 hours
-        await callTool("expire", { key: cacheKey, seconds: 86400 });
+        await callTool("expire", { name: cacheKey, expire_seconds: 86400 });
 
         console.log("[SemanticCache] Cached result for:", input.slice(0, 50));
       } catch {
