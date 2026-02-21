@@ -16,7 +16,7 @@ import type {
   ApprovalRequestEventData,
   ApprovalResponseEventData
 } from '../types'
-import { trackEvent, resolveConfig, createScope } from '../context.server'
+import { trackEvent, resolveConfig, createScope, createEvent } from '../context.server'
 
 assertServerOnImport()
 
@@ -96,8 +96,11 @@ export function withApproval<T extends WithApprovalData>(
       // Execute wrapped pattern
       const result = await wrappedPattern.fn(childScope, view)
 
-      // Merge child events into our scope (respecting our commit strategy)
+      // Merge child events into our scope, wrapped with enter/exit
+      const innerPatternId = wrappedPattern.config.patternId ?? wrappedPattern.name
+      scope.events.push(createEvent('pattern_enter', innerPatternId, { pattern: wrappedPattern.name }))
       scope.events.push(...result.events)
+      scope.events.push(createEvent('pattern_exit', innerPatternId, { status: 'completed' }))
       scope.data = result.data
 
       // Check if any action needs approval

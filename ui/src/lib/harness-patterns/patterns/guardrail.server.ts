@@ -14,7 +14,7 @@ import type {
   PatternConfig,
   ContextEvent
 } from '../types'
-import { trackEvent, resolveConfig } from '../context.server'
+import { trackEvent, resolveConfig, createEvent } from '../context.server'
 
 assertServerOnImport()
 
@@ -138,7 +138,15 @@ export function guardrail<T extends Record<string, unknown>>(
         }
 
         // --- Execute wrapped pattern ---
+        const beforeLen = scope.events.length
         const result = await pattern.fn(scope, view)
+
+        // Wrap inner pattern events with enter/exit markers
+        const innerPatternId = pattern.config.patternId ?? pattern.name
+        const innerEvents = result.events.splice(beforeLen)
+        result.events.push(createEvent('pattern_enter', innerPatternId, { pattern: pattern.name }))
+        result.events.push(...innerEvents)
+        result.events.push(createEvent('pattern_exit', innerPatternId, { status: 'completed' }))
 
         // --- Output rails ---
         for (const rail of outputRails) {

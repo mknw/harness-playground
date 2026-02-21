@@ -9,7 +9,7 @@ import type {
   ConfiguredPattern,
   PatternConfig
 } from '../types'
-import { trackEvent, resolveConfig } from '../context.server'
+import { trackEvent, resolveConfig, createEvent } from '../context.server'
 
 assertServerOnImport()
 
@@ -53,7 +53,10 @@ export function parallel<T extends Record<string, unknown>>(
         // Merge fulfilled events; log rejected branches
         for (const [i, r] of results.entries()) {
           if (r.status === 'fulfilled') {
+            const branchId = patterns[i].config.patternId ?? patterns[i].name
+            scope.events.push(createEvent('pattern_enter', branchId, { pattern: patterns[i].name }))
             scope.events.push(...r.value.events)
+            scope.events.push(createEvent('pattern_exit', branchId, { status: 'completed' }))
             scope.data = { ...scope.data, ...r.value.data }
           } else {
             trackEvent(scope, 'error', {

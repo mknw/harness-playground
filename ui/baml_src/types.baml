@@ -88,5 +88,5 @@ class RoutingResult {
   intent string @description("Detected user intention")
   needs_tool bool @description("Whether a tool call is required")
   route string? @description("Selected route name, null if no tool needed")
-  response string @description("Immediate response or status message")
+  response string? @description("Brief status message when routing, or conversational reply when no tool needed")
 }

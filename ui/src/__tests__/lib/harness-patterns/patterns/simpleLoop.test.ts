@@ -442,6 +442,60 @@ describe('simpleLoop execution', () => {
     expect((result.data.results as unknown[]).length).toBe(2)
   })
 
+  it('should include callId on tool_call and tool_result events', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    callToolMock.mockResolvedValue({
+      success: true,
+      data: { result: 'tool result' }
+    })
+
+    const mockController = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{}' }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        action: mockFinalAction('Done'),
+        llmCall: undefined
+      })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test',
+      trackHistory: true
+    })
+
+    const scope = createScope('test', { intent: 'test query' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test query' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test query'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    const toolCalls = result.events.filter(e => e.type === 'tool_call')
+    const toolResults = result.events.filter(e => e.type === 'tool_result')
+    expect(toolCalls.length).toBeGreaterThanOrEqual(1)
+    expect(toolResults.length).toBeGreaterThanOrEqual(1)
+
+    // Both should have callId
+    const callData = toolCalls[0].data as { callId?: string; tool: string }
+    const resultData = toolResults[0].data as { callId?: string; tool: string }
+    expect(callData.callId).toBeDefined()
+    expect(resultData.callId).toBeDefined()
+    // callId should match between call and result
+    expect(callData.callId).toBe(resultData.callId)
+  })
+
   it('should use existing results from scope data', async () => {
     const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')

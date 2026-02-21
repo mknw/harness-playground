@@ -20,7 +20,7 @@ import type {
   ControllerActionEventData
 } from '../types'
 import { MAX_TOOL_TURNS } from '../types'
-import { trackEvent, resolveConfig } from '../context.server'
+import { trackEvent, resolveConfig, generateId } from '../context.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
 
 assertServerOnImport()
@@ -134,11 +134,14 @@ export function simpleLoop<T extends SimpleLoopData>(
           break
         }
 
+        // Generate correlation ID for this tool call/result pair
+        const callId = generateId('tc')
+
         // Track tool call event
         trackEvent(
           scope,
           'tool_call',
-          { tool: action.tool_name, args } as ToolCallEventData,
+          { callId, tool: action.tool_name, args } as ToolCallEventData,
           resolved.trackHistory
         )
 
@@ -151,6 +154,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           scope,
           'tool_result',
           {
+            callId,
             tool: action.tool_name,
             result: result.data,
             success: result.success,

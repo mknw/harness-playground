@@ -209,7 +209,7 @@ describe('router', () => {
     expect(JSON.stringify(errorEvents[0].data)).toContain('tool_call_needed but no tool_name')
   })
 
-  it('should prepend router response when pattern also has response', async () => {
+  it('should keep pattern response without prepending router status', async () => {
     const { router } = await import('../../../lib/harness-patterns/router.server')
     const { createContext } = await import('../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../lib/harness-patterns/patterns/event-view.server')
@@ -230,7 +230,7 @@ describe('router', () => {
       intent: 'Query',
       tool_call_needed: true,
       tool_name: 'neo4j',
-      response_text: 'Router says:'
+      response_text: 'Looking into that...'
     })
 
     const ctx = createContext<{ response?: string }>('test')
@@ -243,13 +243,15 @@ describe('router', () => {
     const view = createEventView(ctx)
 
     const pattern = router(routes, patterns)
-    const result = await pattern.fn(
-      { id: 'router', data: ctx.data, events: [], startTime: Date.now() },
-      view
-    )
+    const scope = { id: 'router', data: ctx.data, events: [] as any[], startTime: Date.now() }
+    const result = await pattern.fn(scope, view)
 
-    expect(result.data.response).toContain('Router says:')
-    expect(result.data.response).toContain('Pattern response')
+    // Pattern response should not have router status prepended
+    expect(result.data.response).toBe('Pattern response')
+    // Router status tracked as separate assistant_message event
+    const assistantEvents = result.events.filter((e: any) => e.type === 'assistant_message')
+    expect(assistantEvents.length).toBeGreaterThan(0)
+    expect((assistantEvents[0].data as any).content).toBe('Looking into that...')
   })
 
   it('should merge events from executed pattern', async () => {

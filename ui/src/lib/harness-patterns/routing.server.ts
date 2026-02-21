@@ -5,6 +5,9 @@
  */
 
 import { assertServerOnImport } from './assert.server'
+import { Collector } from '@boundaryml/baml'
+import { extractLLMCallData } from './baml-adapters.server'
+import type { LLMCallData } from './types'
 
 assertServerOnImport()
 
@@ -28,31 +31,48 @@ const DEFAULT_ROUTES = [
   { name: 'code_mode', description: 'Multi-tool script composition' }
 ]
 
+export interface RouteMessageResult {
+  intent: string
+  tool_call_needed: boolean
+  tool_name: string | null
+  response_text: string
+  llmCall?: LLMCallData
+}
+
 export async function routeMessageOp(
   message: string,
   history: Array<{ role: string; content: string }>,
-  routes: Array<{ name: string; description: string }> = DEFAULT_ROUTES
-): Promise<{
-  intent: string
-  tool_call_needed: boolean
-  tool_name: 'neo4j' | 'web_search' | 'code_mode' | null
-  response_text: string
-}> {
+  routes: Array<{ name: string; description: string }> = DEFAULT_ROUTES,
+  collector?: Collector
+): Promise<RouteMessageResult> {
   const b = await getBAML()
-  const result = await b.Router(message, routes, history)
+  const startTime = Date.now()
 
-  const namespaceMap: Record<string, 'neo4j' | 'web_search' | 'code_mode'> = {
-    neo4j: 'neo4j',
-    web_search: 'web_search',
-    code_mode: 'code_mode'
-  }
+  // Build a lookup from route names for validation
+  const validRoutes = new Set(routes.map((r) => r.name))
+
+  const result = collector
+    ? await b.Router(message, routes, history, { collector })
+    : await b.Router(message, routes, history)
+
+  // Extract LLM call data if collector present
+  const llmCall = collector
+    ? extractLLMCallData(
+        collector,
+        'Router',
+        { message, routes, history },
+        startTime,
+        result
+      )
+    : undefined
 
   return {
     intent: result.intent,
     tool_call_needed: result.needs_tool,
-    tool_name: result.route
-      ? namespaceMap[result.route] ?? null
+    tool_name: result.route && validRoutes.has(result.route)
+      ? result.route
       : null,
-    response_text: result.response
+    response_text: result.response ?? '',
+    llmCall
   }
 }

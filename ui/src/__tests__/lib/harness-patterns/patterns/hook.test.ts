@@ -108,6 +108,45 @@ describe('hook', () => {
     expect(toolCalls.length).toBeGreaterThanOrEqual(1)
   })
 
+  it('should wrap inner pattern events with pattern_enter/exit', async () => {
+    const { hook } = await import('../../../../lib/harness-patterns/patterns/hook.server')
+    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+    const innerFn = vi.fn(async (scope) => {
+      scope.events.push({
+        type: 'tool_call' as const,
+        ts: Date.now(),
+        patternId: 'inner',
+        data: { tool: 'test' }
+      })
+      return scope
+    })
+
+    const innerPattern = {
+      name: 'inner',
+      fn: innerFn,
+      config: { patternId: 'my-inner' }
+    }
+
+    const ctx = createContext('test')
+    const view = createEventView(ctx)
+
+    const pattern = hook(innerPattern, { trigger: 'session_close' })
+    const result = await pattern.fn(
+      { id: 'hook', data: ctx.data, events: [], startTime: Date.now() },
+      view
+    )
+
+    // Should have: pattern_enter, tool_call, pattern_exit
+    expect(result.events.length).toBe(3)
+    expect(result.events[0].type).toBe('pattern_enter')
+    expect(result.events[0].patternId).toBe('my-inner')
+    expect(result.events[1].type).toBe('tool_call')
+    expect(result.events[2].type).toBe('pattern_exit')
+    expect(result.events[2].patternId).toBe('my-inner')
+  })
+
   it('should run pattern in background when background: true', async () => {
     const { hook } = await import('../../../../lib/harness-patterns/patterns/hook.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')

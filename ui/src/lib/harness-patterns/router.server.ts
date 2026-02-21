@@ -6,6 +6,7 @@
 
 import { assertServerOnImport } from './assert.server'
 import { routeMessageOp } from './routing.server'
+import { Collector } from '@boundaryml/baml'
 import type {
   PatternScope,
   EventView,
@@ -66,25 +67,34 @@ export function router<T extends RouterData>(
         ? (userMessage.data as { content: string }).content
         : ''
 
-      // Route message using BAML
-      const result = await routeMessageOp(userContent, [])
+      // Convert routes Record<string,string> to Array<{name,description}>
+      const routeArray = Object.entries(routes).map(([name, description]) => ({
+        name,
+        description
+      }))
+
+      // Route message using BAML with collector for observability
+      const collector = new Collector('router')
+      const result = await routeMessageOp(userContent, [], routeArray, collector)
 
       // No tool needed - return conversational response
       if (!result.tool_call_needed) {
+        const responseText = result.response_text || ''
         scope.data = {
           ...scope.data,
           route: undefined,
           intent: result.intent,
-          routerResponse: result.response_text,
-          response: result.response_text
+          routerResponse: responseText,
+          response: responseText
         }
 
-        // Track assistant message
+        // Track assistant message with LLM call data
         trackEvent(
           scope,
           'assistant_message',
-          { content: result.response_text } as AssistantMessageEventData,
-          resolved.trackHistory
+          { content: responseText } as AssistantMessageEventData,
+          resolved.trackHistory,
+          result.llmCall
         )
 
         return scope
@@ -104,12 +114,24 @@ export function router<T extends RouterData>(
         return scope
       }
 
+      // Track the routing decision as an assistant message with LLM data
+      const statusText = result.response_text || ''
+      if (statusText) {
+        trackEvent(
+          scope,
+          'assistant_message',
+          { content: statusText } as AssistantMessageEventData,
+          resolved.trackHistory,
+          result.llmCall
+        )
+      }
+
       // Update scope data with routing info
       scope.data = {
         ...scope.data,
         route: routeName,
         intent: result.intent,
-        routerResponse: result.response_text
+        routerResponse: statusText
       }
 
       // Execute the selected pattern
@@ -118,14 +140,6 @@ export function router<T extends RouterData>(
       // Merge results
       scope.events.push(...patternResult.events)
       scope.data = patternResult.data
-
-      // Prepend router response if present
-      if (result.response_text && scope.data.response) {
-        scope.data = {
-          ...scope.data,
-          response: `${result.response_text}\n\n${scope.data.response}`
-        }
-      }
 
       return scope
     } catch (error) {

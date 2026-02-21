@@ -22,7 +22,7 @@ import type {
   CriticResultEventData
 } from '../types'
 import { MAX_RETRIES } from '../types'
-import { trackEvent, resolveConfig } from '../context.server'
+import { trackEvent, resolveConfig, generateId } from '../context.server'
 import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
 
 assertServerOnImport()
@@ -127,11 +127,14 @@ export function actorCritic<T extends ActorCriticData>(
           continue
         }
 
+        // Generate correlation ID for this tool call/result pair
+        const callId = generateId('tc')
+
         // Track tool call
         trackEvent(
           scope,
           'tool_call',
-          { tool: action.tool_name, args } as ToolCallEventData,
+          { callId, tool: action.tool_name, args } as ToolCallEventData,
           resolved.trackHistory
         )
 
@@ -150,6 +153,7 @@ export function actorCritic<T extends ActorCriticData>(
           scope,
           'tool_result',
           {
+            callId,
             tool: action.tool_name,
             result: result.data,
             success: result.success,

@@ -125,6 +125,62 @@ describe('parallel', () => {
     expect(toolCalls.length).toBe(2)
   })
 
+  it('should wrap branch events with pattern_enter/exit', async () => {
+    const { parallel } = await import('../../../../lib/harness-patterns/patterns/parallel.server')
+    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+    const pattern1 = {
+      name: 'first',
+      fn: vi.fn(async (scope) => {
+        scope.events.push({
+          type: 'tool_call' as const,
+          ts: Date.now(),
+          patternId: 'first',
+          data: { tool: 'test1' }
+        })
+        return scope
+      }),
+      config: { patternId: 'branch-a' }
+    }
+
+    const pattern2 = {
+      name: 'second',
+      fn: vi.fn(async (scope) => {
+        scope.events.push({
+          type: 'tool_call' as const,
+          ts: Date.now(),
+          patternId: 'second',
+          data: { tool: 'test2' }
+        })
+        return scope
+      }),
+      config: { patternId: 'branch-b' }
+    }
+
+    const ctx = createContext('test')
+    const view = createEventView(ctx)
+
+    const parallelPattern = parallel([pattern1, pattern2])
+    const result = await parallelPattern.fn(
+      { id: 'parallel', data: ctx.data, events: [], startTime: Date.now() },
+      view
+    )
+
+    // Should have pattern_enter, tool_call, pattern_exit for each branch
+    const enters = result.events.filter(e => e.type === 'pattern_enter')
+    const exits = result.events.filter(e => e.type === 'pattern_exit')
+    expect(enters.length).toBe(2)
+    expect(exits.length).toBe(2)
+
+    // First branch events should be: enter(branch-a), tool_call, exit(branch-a)
+    expect(result.events[0].type).toBe('pattern_enter')
+    expect(result.events[0].patternId).toBe('branch-a')
+    expect(result.events[1].type).toBe('tool_call')
+    expect(result.events[2].type).toBe('pattern_exit')
+    expect(result.events[2].patternId).toBe('branch-a')
+  })
+
   it('should handle rejected branches gracefully', async () => {
     const { parallel } = await import('../../../../lib/harness-patterns/patterns/parallel.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')

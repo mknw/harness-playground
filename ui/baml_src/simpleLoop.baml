@@ -14,7 +14,8 @@ function LoopController(
     You are an AI agent that accomplishes tasks by calling tools.
     Select one tool per turn. Use "Return" when you have enough information.
 
-    USER INTENT: {{ intent }}
+    {{ _.role("user") }}
+    INTENT: {{ intent }}
 
     {% if context %}
     CONTEXT:

@@ -75,6 +75,52 @@ describe('guardrail', () => {
     expect(result.data.executed).toBe(true)
   })
 
+  it('should wrap inner pattern events with pattern_enter/exit', async () => {
+    const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
+    const { createContext } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+    const innerFn = vi.fn(async (scope) => {
+      scope.events.push({
+        type: 'tool_call' as const,
+        ts: Date.now(),
+        patternId: 'inner',
+        data: { tool: 'test' }
+      })
+      return scope
+    })
+
+    const innerPattern = {
+      name: 'inner',
+      fn: innerFn,
+      config: { patternId: 'guarded-inner' }
+    }
+
+    const ctx = createContext<{ input?: string }>('test')
+    ctx.data = { input: 'test' }
+    const view = createEventView(ctx)
+
+    const pattern = guardrail(innerPattern, { rails: [] })
+    const result = await pattern.fn(
+      { id: 'guardrail', data: ctx.data, events: [], startTime: Date.now() },
+      view
+    )
+
+    const enters = result.events.filter(e => e.type === 'pattern_enter')
+    const exits = result.events.filter(e => e.type === 'pattern_exit')
+    expect(enters.length).toBe(1)
+    expect(exits.length).toBe(1)
+    expect(enters[0].patternId).toBe('guarded-inner')
+    expect(exits[0].patternId).toBe('guarded-inner')
+
+    // Inner event should be between enter and exit
+    const enterIdx = result.events.indexOf(enters[0])
+    const exitIdx = result.events.indexOf(exits[0])
+    const toolIdx = result.events.findIndex(e => e.type === 'tool_call')
+    expect(toolIdx).toBeGreaterThan(enterIdx)
+    expect(toolIdx).toBeLessThan(exitIdx)
+  })
+
   it('should block when input rail returns not ok', async () => {
     const { guardrail } = await import('../../../../lib/harness-patterns/patterns/guardrail.server')
     const { createContext } = await import('../../../../lib/harness-patterns/context.server')

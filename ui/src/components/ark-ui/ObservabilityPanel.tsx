@@ -424,6 +424,259 @@ const EmptyState = () => (
 )
 
 // ============================================================================
+// Timeline Item Types (merged tool pairs)
+// ============================================================================
+
+type TimelineItem =
+  | { kind: 'event'; event: ContextEvent }
+  | { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }
+
+/** Merge consecutive tool_call + tool_result with matching callId into tool_pair items */
+function buildTimelineItems(events: ContextEvent[]): TimelineItem[] {
+  const items: TimelineItem[] = []
+  const consumed = new Set<number>()
+
+  for (let i = 0; i < events.length; i++) {
+    if (consumed.has(i)) continue
+
+    const ev = events[i]
+    if (ev.type === 'tool_call') {
+      const callData = ev.data as ToolCallEventData
+      if (callData.callId) {
+        // Look ahead for matching tool_result
+        for (let j = i + 1; j < events.length; j++) {
+          if (consumed.has(j)) continue
+          const candidate = events[j]
+          if (candidate.type === 'tool_result') {
+            const resultData = candidate.data as ToolResultEventData
+            if (resultData.callId === callData.callId) {
+              items.push({ kind: 'tool_pair', call: ev, result: candidate })
+              consumed.add(i)
+              consumed.add(j)
+              break
+            }
+          }
+        }
+        if (!consumed.has(i)) {
+          // No matching result found — render as standalone
+          items.push({ kind: 'event', event: ev })
+        }
+      } else {
+        items.push({ kind: 'event', event: ev })
+      }
+    } else {
+      items.push({ kind: 'event', event: ev })
+    }
+  }
+
+  return items
+}
+
+// ============================================================================
+// Tool Pair Row Component (merged tool_call + tool_result)
+// ============================================================================
+
+const ToolPairRow = (props: {
+  call: ContextEvent
+  result?: ContextEvent
+  index: number
+  expanded: boolean
+  onExpand: () => void
+  bgTint?: string
+}) => {
+  const callData = () => props.call.data as ToolCallEventData
+  const resultData = () => props.result?.data as ToolResultEventData | undefined
+  const success = () => resultData()?.success ?? true
+  const preview = () => `${callData().tool}: ${resultData() ? (success() ? 'ok' : 'error') : 'pending'}`
+
+  return (
+    <div
+      flex="~"
+      min-h="70px"
+      border="b dark-border-secondary/30"
+      style={{ 'background-color': props.bgTint ?? 'transparent' }}
+    >
+      {/* Interface Lane (left) - empty for tool pairs */}
+      <div
+        w="1/2"
+        flex="~"
+        justify="center"
+        items="center"
+        border="r dark-border-secondary/30"
+      />
+
+      {/* Tools Lane (right) */}
+      <div
+        w="1/2"
+        flex="~"
+        justify="center"
+        items="center"
+      >
+        <div
+          flex="~ col"
+          items="center"
+          gap="1"
+          p="2 3"
+          cursor="pointer"
+          bg={props.expanded ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-hover'}
+          border={props.expanded ? '1 neon-cyan/30' : 'none'}
+          rounded="md"
+          transition="all"
+          onClick={props.onExpand}
+          w="full"
+        >
+          <span text="lg">🔧</span>
+          <div
+            style={{
+              color: success() ? '#a78bfa' : '#ef4444',
+              'font-size': '11px',
+              'font-family': '"Fira Code", ui-monospace, monospace',
+              'font-weight': '500',
+              'text-align': 'center'
+            }}
+          >
+            tool call
+          </div>
+          <Show when={props.call.patternId && props.call.patternId !== 'harness'}>
+            <div text="xs dark-text-tertiary" font="mono">
+              {props.call.patternId}
+            </div>
+          </Show>
+          <div
+            text="xs dark-text-secondary"
+            max-w="120px"
+            overflow="hidden"
+            style={{ 'text-overflow': 'ellipsis', 'white-space': 'nowrap' }}
+          >
+            {preview()}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================================
+// Tool Pair Detail Component
+// ============================================================================
+
+const ToolPairDetail = (props: { call: ContextEvent; result?: ContextEvent; onClose: () => void }) => {
+  const callData = () => props.call.data as ToolCallEventData
+  const resultData = () => props.result?.data as ToolResultEventData | undefined
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: '0',
+        'background-color': 'rgba(13, 17, 23, 0.95)',
+        'backdrop-filter': 'blur(4px)',
+        'z-index': '50',
+        display: 'flex',
+        'flex-direction': 'column',
+        overflow: 'hidden'
+      }}
+    >
+      {/* Header */}
+      <div
+        flex="~"
+        items="center"
+        justify="between"
+        p="4"
+        border="b dark-border-primary"
+      >
+        <div flex="~ col" gap="1">
+          <div flex="~" items="center" gap="2">
+            <span text="lg">🔧</span>
+            <span text="sm dark-text-primary" font="medium">tool call</span>
+            <Show when={props.call.llmCall}>
+              <span
+                text="xs neon-cyan"
+                bg="neon-cyan/10"
+                p="x-1.5 y-0.5"
+                rounded="sm"
+                font="mono"
+              >
+                LLM
+              </span>
+            </Show>
+          </div>
+          <div flex="~" gap="3" text="xs dark-text-tertiary">
+            <span>{props.call.patternId}</span>
+            <span>{new Date(props.call.ts).toLocaleTimeString()}</span>
+          </div>
+        </div>
+        <button
+          onClick={props.onClose}
+          p="2"
+          text="dark-text-secondary"
+          bg="dark-bg-hover hover:dark-bg-tertiary"
+          rounded="md"
+          cursor="pointer"
+        >
+          Close
+        </button>
+      </div>
+
+      {/* Content */}
+      <div flex="1" overflow="auto" p="4">
+        {/* LLM Call Tabs */}
+        <Show when={props.call.llmCall}>
+          <LLMCallTabs llmCall={props.call.llmCall!} />
+        </Show>
+
+        {/* Tool name */}
+        <div m="b-3">
+          <div text="xs dark-text-tertiary" m="b-1">Tool</div>
+          <div text="sm neon-cyan" font="mono">{callData().tool}</div>
+        </div>
+
+        {/* Arguments */}
+        <div m="b-3">
+          <div text="xs dark-text-tertiary" m="b-1">Arguments</div>
+          <pre
+            text="xs dark-text-primary"
+            bg="dark-bg-tertiary"
+            p="3"
+            rounded="md"
+            overflow="auto"
+            max-h="200px"
+          >
+            {JSON.stringify(callData().args, null, 2)}
+          </pre>
+        </div>
+
+        {/* Result */}
+        <Show when={resultData()}>
+          <div m="b-3">
+            <div text="xs dark-text-tertiary" m="b-1">Status</div>
+            <div
+              text={`sm ${resultData()!.success ? 'neon-green' : 'red-400'}`}
+              font="medium"
+            >
+              {resultData()!.success ? 'Success' : `Error: ${resultData()!.error}`}
+            </div>
+          </div>
+          <div>
+            <div text="xs dark-text-tertiary" m="b-1">Result</div>
+            <pre
+              text="xs dark-text-primary"
+              bg="dark-bg-tertiary"
+              p="3"
+              rounded="md"
+              overflow="auto"
+              max-h="300px"
+            >
+              {JSON.stringify(resultData()!.result, null, 2)}
+            </pre>
+          </div>
+        </Show>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================================
 // Event Detail Components
 // ============================================================================
 
@@ -976,44 +1229,53 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
     return [...props.events].sort((a, b) => a.ts - b.ts)
   })
 
-  // Compute per-event background tint based on active pattern stack
-  const eventTints = createMemo(() => {
-    const events = timelineEvents()
+  // Build merged timeline items (tool_call + tool_result → tool_pair)
+  const timelineItems = createMemo(() => buildTimelineItems(timelineEvents()))
+
+  // Compute per-item background tint based on active pattern stack
+  const itemTints = createMemo(() => {
+    const items = timelineItems()
     const tints: (string | undefined)[] = []
     const patternStack: string[] = []
 
-    for (const event of events) {
-      if (event.type === 'pattern_enter') {
-        patternStack.push(event.patternId)
-        tints.push(undefined) // boundary rows handle their own bg
-      } else if (event.type === 'pattern_exit') {
-        tints.push(undefined)
-        // Pop matching pattern (or last if mismatch)
-        const idx = patternStack.lastIndexOf(event.patternId)
-        if (idx >= 0) patternStack.splice(idx, 1)
-        else patternStack.pop()
-      } else {
-        // Use the innermost (last) pattern's tint
+    for (const item of items) {
+      if (item.kind === 'tool_pair') {
         const activePattern = patternStack.length > 0
           ? patternStack[patternStack.length - 1]
           : undefined
         tints.push(activePattern ? getPatternColor(activePattern).tint : undefined)
+      } else {
+        const event = item.event
+        if (event.type === 'pattern_enter') {
+          patternStack.push(event.patternId)
+          tints.push(undefined)
+        } else if (event.type === 'pattern_exit') {
+          tints.push(undefined)
+          const idx = patternStack.lastIndexOf(event.patternId)
+          if (idx >= 0) patternStack.splice(idx, 1)
+          else patternStack.pop()
+        } else {
+          const activePattern = patternStack.length > 0
+            ? patternStack[patternStack.length - 1]
+            : undefined
+          tints.push(activePattern ? getPatternColor(activePattern).tint : undefined)
+        }
       }
     }
     return tints
   })
 
-  // Get expanded event
-  const expandedEvent = createMemo(() => {
+  // Get expanded item
+  const expandedItem = createMemo(() => {
     const idx = expandedIndex()
     if (idx === null) return null
-    return timelineEvents()[idx] ?? null
+    return timelineItems()[idx] ?? null
   })
 
   const handleExpand = (index: number) => setExpandedIndex(index)
   const handleClose = () => setExpandedIndex(null)
 
-  const hasEvents = () => timelineEvents().length > 0
+  const hasEvents = () => timelineItems().length > 0
 
   return (
     <div flex="~ col" h="full" bg="dark-bg-primary" overflow="hidden" position="relative">
@@ -1029,8 +1291,21 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
           when={hasEvents()}
           fallback={<EmptyState />}
         >
-          <For each={timelineEvents()}>
-            {(event, index) => {
+          <For each={timelineItems()}>
+            {(item, index) => {
+              if (item.kind === 'tool_pair') {
+                return (
+                  <ToolPairRow
+                    call={item.call}
+                    result={item.result}
+                    index={index()}
+                    expanded={expandedIndex() === index()}
+                    onExpand={() => handleExpand(index())}
+                    bgTint={itemTints()[index()]}
+                  />
+                )
+              }
+              const event = item.event
               const isBoundary = () => event.type === 'pattern_enter' || event.type === 'pattern_exit'
               return (
                 <Show
@@ -1042,7 +1317,7 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
                     index={index()}
                     expanded={expandedIndex() === index()}
                     onExpand={() => handleExpand(index())}
-                    bgTint={eventTints()[index()]}
+                    bgTint={itemTints()[index()]}
                   />
                 </Show>
               )
@@ -1051,12 +1326,25 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
         </Show>
       </div>
 
-      {/* Event Detail Panel */}
-      <Show when={expandedEvent()}>
-        <EventDetailPanel
-          event={expandedEvent()!}
-          onClose={handleClose}
-        />
+      {/* Detail Panel */}
+      <Show when={expandedItem()}>
+        {(item) => (
+          <Show
+            when={item().kind === 'tool_pair'}
+            fallback={
+              <EventDetailPanel
+                event={(item() as { kind: 'event'; event: ContextEvent }).event}
+                onClose={handleClose}
+              />
+            }
+          >
+            <ToolPairDetail
+              call={(item() as { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }).call}
+              result={(item() as { kind: 'tool_pair'; call: ContextEvent; result?: ContextEvent }).result}
+              onClose={handleClose}
+            />
+          </Show>
+        )}
       </Show>
     </div>
   )

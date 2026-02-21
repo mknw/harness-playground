@@ -10,7 +10,7 @@ import type {
   ConfiguredPattern,
   PatternConfig
 } from '../types'
-import { resolveConfig } from '../context.server'
+import { resolveConfig, createEvent } from '../context.server'
 
 assertServerOnImport()
 
@@ -71,8 +71,15 @@ export function hook<T extends Record<string, unknown>>(
         }
 
         // Synchronous: run and wait
+        const beforeLen = scope.events.length
         const result = await pattern.fn(scope, view)
-        scope.events.push(...result.events)
+
+        // Wrap inner pattern events with enter/exit markers
+        const innerPatternId = pattern.config.patternId ?? pattern.name
+        const innerEvents = result.events.splice(beforeLen)
+        result.events.push(createEvent('pattern_enter', innerPatternId, { pattern: pattern.name }))
+        result.events.push(...innerEvents)
+        result.events.push(createEvent('pattern_exit', innerPatternId, { status: 'completed' }))
         scope.data = { ...scope.data, ...result.data }
 
         return scope

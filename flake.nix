@@ -1,6 +1,8 @@
-# flake.nix inside your project repo
 {
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-25.11-darwin";
+  inputs = {
+    # Your stable base (what you already use)
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-25.11-darwin";
+  };
 
   outputs = { self, nixpkgs }:
     let
@@ -16,7 +18,6 @@
           sha256 = "sha256:104a9da9c3d60017aa95f15fec370e40a2e8a6ec0d5e4db183d42127f16510d4";
         };
 
-        # tar.gz contains the binary
         unpackPhase = ''
           mkdir -p unpack
           tar -xzf "$src" -C unpack
@@ -24,23 +25,27 @@
 
         installPhase = ''
           mkdir -p $out/bin
-
-          # Most releases include a single binary; handle both common layouts
           if [ -f unpack/docker-mcp ]; then
             cp unpack/docker-mcp $out/bin/docker-mcp
           else
             cp unpack/*/docker-mcp $out/bin/docker-mcp
           fi
-
           chmod +x $out/bin/docker-mcp
         '';
       };
-    in {
+
+    in
+    {
+      packages.${system} = {
+        inherit docker-mcp;
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         packages = [
           pkgs.nodejs_22
-          pkgs.corepack_22 # optional; see below
+          pkgs.corepack_22
           pkgs.docker-client
+
           docker-mcp
         ];
 
@@ -48,9 +53,14 @@
           # Keep docker config local to the repo (optional, but nice)
           export DOCKER_CONFIG="$PWD/.docker"
           mkdir -p "$DOCKER_CONFIG/cli-plugins"
-          ln -sf "${docker-mcp}/bin/docker-mcp" "$DOCKER_CONFIG/cli-plugins/docker-mcp"
+
+          # Store-backed Docker CLI plugins
+          ln -sf "${docker-mcp}/bin/docker-mcp" \
+            "$DOCKER_CONFIG/cli-plugins/docker-mcp"
+
 
           echo "docker-mcp ready: try 'docker mcp --help'"
+          echo "docker-model ready: try 'docker model --help'"
         '';
       };
     };

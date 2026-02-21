@@ -59,7 +59,7 @@ export type CriticFnWithLLMData = (
 ) => Promise<CriticCallResult>
 
 /** Extract LLM call data from a collector */
-function extractLLMCallData(
+export function extractLLMCallData(
   collector: Collector,
   functionName: string,
   variables: Record<string, unknown>,

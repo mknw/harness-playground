@@ -45,7 +45,7 @@ export interface SupportPanelProps {
 // ============================================================================
 
 export const SupportPanel = (props: SupportPanelProps) => {
-  const [selectedTab, setSelectedTab] = createSignal('neo4j-graph');
+  const [selectedTab, setSelectedTab] = createSignal('stats');
 
   // Filter graph elements by source
   const neo4jElements = createMemo(() =>

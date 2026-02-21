@@ -156,32 +156,43 @@ client<llm> CustomFast {
   }
 }
 
-// Per-use-case fallback clients (Groq-only)
+// Local llama-server — GLM 4.7 Flash (OpenAI-compatible API)
+// Start with: pnpm dev:llama
+client<llm> LocalGLM {
+  provider openai-generic
+  options {
+    base_url "http://127.0.0.1:8080/v1"
+    model "glm-4-flash"
+    api_key "local"
+  }
+}
+
+// Per-use-case fallback clients (LocalGLM primary, Groq fallback)
 client<llm> RouterFallback {
   provider fallback
   options {
-    strategy [GroqFast, GroqReasoning]
+    strategy [LocalGLM, GroqFast, GroqReasoning]
   }
 }
 
 client<llm> ControllerFallback {
   provider fallback
   options {
-    strategy [GroqReasoning, GroqFast]
+    strategy [LocalGLM, GroqReasoning, GroqFast]
   }
 }
 
 client<llm> CriticFallback {
   provider fallback
   options {
-    strategy [GroqEval, GroqReasoning]
+    strategy [LocalGLM, GroqEval, GroqReasoning]
   }
 }
 
 client<llm> SynthesizerFallback {
   provider fallback
   options {
-    strategy [GroqReasoning, GroqEval]
+    strategy [LocalGLM, GroqReasoning, GroqEval]
   }
 }
 

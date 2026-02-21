@@ -393,12 +393,16 @@ export interface AssistantMessageEventData {
 
 /** Data payload for tool_call event */
 export interface ToolCallEventData {
+  /** Correlation ID linking this call to its result */
+  callId?: string
   tool: string
   args: unknown
 }
 
 /** Data payload for tool_result event */
 export interface ToolResultEventData {
+  /** Correlation ID linking this result to its call */
+  callId?: string
   tool: string
   result: unknown
   success: boolean
