@@ -8,6 +8,7 @@
  */
 
 import { For, Show, createSignal, createMemo, Switch, Match } from 'solid-js'
+import { Tooltip } from '@ark-ui/solid/tooltip'
 import type {
   ContextEvent,
   EventType,
@@ -18,12 +19,14 @@ import type {
   AssistantMessageEventData,
   ApprovalRequestEventData,
   ErrorEventData,
-  LLMCallData
+  LLMCallData,
+  UnifiedContext
 } from '~/lib/harness-patterns'
 import patternColorsJson from '../../../pattern-colors.json'
 
 interface ObservabilityPanelProps {
   events: ContextEvent[]
+  context?: UnifiedContext
   onClear?: () => void
 }
 
@@ -1224,6 +1227,38 @@ const EventDetailPanel = (props: { event: ContextEvent, onClose: () => void }) =
 export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
   const [expandedIndex, setExpandedIndex] = createSignal<number | null>(null)
 
+  const handleSave = async () => {
+    const payload = props.context ?? { events: props.events, exportedAt: Date.now() }
+    const json = JSON.stringify(payload, null, 2)
+    const sessionId = props.context?.sessionId ?? 'session'
+    const date = new Date().toISOString().slice(0, 10)
+    const filename = `context-${sessionId}-${date}.json`
+
+    if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+      try {
+        const handle = await (window as typeof window & {
+          showSaveFilePicker: (opts: unknown) => Promise<FileSystemFileHandle>
+        }).showSaveFilePicker({
+          suggestedName: filename,
+          types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }]
+        })
+        const writable = await handle.createWritable()
+        await writable.write(json)
+        await writable.close()
+      } catch (e) {
+        if ((e as Error).name !== 'AbortError') console.error('Save failed', e)
+      }
+    } else {
+      const blob = new Blob([json], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  }
+
   // Sort events chronologically (oldest first)
   const timelineEvents = createMemo(() => {
     return [...props.events].sort((a, b) => a.ts - b.ts)
@@ -1325,6 +1360,40 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
           </For>
         </Show>
       </div>
+
+      {/* Save Button */}
+      <Show when={props.events.length > 0}>
+        <Tooltip.Root openDelay={300} closeDelay={100}>
+          <Tooltip.Trigger
+            as="button"
+            onClick={handleSave}
+            style={{ position: 'absolute', bottom: '1rem', right: '1rem', 'z-index': '20' }}
+            p="2.5"
+            bg="dark-bg-tertiary hover:dark-bg-hover"
+            border="1 dark-border-primary hover:neon-cyan/40"
+            rounded="lg"
+            cursor="pointer"
+            transition="all"
+            shadow="lg"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style={{ color: '#22d3ee' }}>
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </Tooltip.Trigger>
+          <Tooltip.Positioner>
+            <Tooltip.Content
+              bg="dark-bg-tertiary"
+              border="1 dark-border-primary"
+              rounded="md"
+              p="x-2 y-1"
+              text="xs dark-text-primary"
+              shadow="md"
+            >
+              Save session
+            </Tooltip.Content>
+          </Tooltip.Positioner>
+        </Tooltip.Root>
+      </Show>
 
       {/* Detail Panel */}
       <Show when={expandedItem()}>

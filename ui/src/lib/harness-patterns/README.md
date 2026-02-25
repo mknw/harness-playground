@@ -18,7 +18,8 @@ Functional, composable framework for agentic tool execution.
   - [actorCritic()](#actorcriticactor-critic-tools-config)
   - [withApproval()](#withapprovalpattern-predicate)
   - [synthesizer()](#synthesizerconfig)
-  - [router()](#routerroutes-patterns)
+  - [router()](#routerroutedescriptions-config)
+  - [routes()](#routespatternmap-config)
   - [chain()](#chainctx-patterns)
   - [harness()](#harnesspatterns)
   - [resumeHarness()](#resumeharnessserialized-patterns-approved)
@@ -52,11 +53,12 @@ MCP Tools ───────┘
 simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema })
 actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all)
 
-// Patterns compose into routers
-router(routes, { neo4j: pattern1, web: pattern2 })
+// Router is two composable patterns: classify → dispatch
+router({ neo4j: 'Description', web: 'Description' }),
+routes({ neo4j: pattern1, web: pattern2 })
 
 // Harness chains patterns and executes them
-harness(router(...), synthesizer({ mode: 'thread' }))
+harness(router(...), routes(...), synthesizer({ mode: 'thread' }))
 ```
 
 ## UnifiedContext Architecture
@@ -83,11 +85,16 @@ interface UnifiedContext<T> {
 
 // Events tagged with pattern origin
 interface ContextEvent {
+  id?: string             // Auto-generated unique ID (e.g. 'ev-a1b2c3')
   type: EventType
   ts: number
   patternId: string
-  data: unknown
+  data: unknown           // Typed per EventType (see Event → BAML Type Mapping)
 }
+
+// Tool event data includes optional callId for pairing call↔result in the UI
+interface ToolCallEventData   { callId?: string; tool: string; args: unknown }
+interface ToolResultEventData { callId?: string; tool: string; result: unknown; success: boolean; error?: string }
 
 type EventType =
   | 'user_message' | 'assistant_message'
@@ -162,10 +169,12 @@ How UnifiedContext flows through the system:
 │                                                                         │
 │    ┌──────────────────────────────────────────────────────────────┐    │
 │    │  1. createScope(patternId, data)  ← isolated workspace        │    │
-│    │  2. createEventView(ctx, viewConfig)  ← read-only view        │    │
+│    │  2. createEventView(ctx, viewConfig, patternId)  ← scope-aware │    │
 │    │  3. enterPattern() → adds 'pattern_enter' event               │    │
 │    │  4. pattern.fn(scope, view) → pattern writes to scope.events  │    │
 │    │  5. commitEvents(ctx, scope, strategy) → merge to ctx.events  │    │
+│    │     (lifecycle events always committed; strategy applies to    │    │
+│    │      content events only)                                      │    │
 │    │  6. exitPattern() → adds 'pattern_exit' event                 │    │
 │    │  7. currentData = scope.data  ← forward data to next pattern  │    │
 │    └──────────────────────────────────────────────────────────────┘    │
@@ -181,6 +190,10 @@ How UnifiedContext flows through the system:
 - **Rollback on error** - If a pattern fails, its events aren't committed
 - **Configurable commit strategies** - Control when/what gets persisted
 - **Clean separation** - Each pattern has its own workspace
+
+**Lifecycle events** (`pattern_enter`, `pattern_exit`) are always committed to ctx regardless of commitStrategy. Only content events (tool_call, tool_result, etc.) are subject to strategy filtering.
+
+**Sub-pattern delegation**: `routes()` creates a child scope for dispatched sub-patterns, ensuring events are tagged with the sub-pattern's ID (not the routes wrapper). This is critical for `fromLastPattern()` to correctly resolve the preceding pattern.
 
 ### Session Persistence
 
@@ -233,6 +246,8 @@ interface SimpleLoopConfig extends PatternConfig {
 2. Call BAML controller with extracted params (+ optional schema)
 3. Execute returned tool via MCP
 4. Loop until `is_final` or max turns
+5. Stores `resultEventIds: string[]` in scope data (lightweight refs to tool_result events)
+6. Controller errors are caught per-iteration — loop exits gracefully with partial results
 
 ### `actorCritic(actor, critic, tools, config?)`
 
@@ -255,6 +270,61 @@ interface ActorCriticConfig extends PatternConfig {
 3. Critic evaluates result
 4. Retry with feedback if insufficient
 5. Exit when sufficient or max retries
+
+### `parallel(...patterns)`
+
+Execute multiple patterns concurrently via `Promise.allSettled`, then merge results.
+
+```typescript
+parallel(
+  simpleLoop(b.WebSearchController.bind(b), tools.web ?? [], { patternId: 'web-search' }),
+  simpleLoop(b.Neo4jController.bind(b), tools.neo4j ?? [], { patternId: 'kg-lookup', schema })
+)
+```
+
+**How it works:**
+1. Each branch gets an isolated child scope (`events: []`, same `data`)
+2. All branches run concurrently via `Promise.allSettled`
+3. Fulfilled branches: events wrapped with `pattern_enter` / `pattern_exit` markers, then merged into parent scope
+4. Rejected branches: tracked as `error` events, don't block other branches
+
+### `guardrail(pattern, config)`
+
+Wrap a pattern with validation rails (input → execution → output) and optional circuit breaker.
+
+```typescript
+interface GuardrailConfig extends PatternConfig {
+  rails: Rail[]
+  circuitBreaker?: { maxFailures: number; windowMs: number; cooldownMs: number }
+}
+```
+
+**How it works:**
+1. Input rails run before the pattern — can block or redact the input
+2. The inner pattern executes; its events are wrapped with `pattern_enter` / `pattern_exit`
+3. Output rails run after — can warn, retry, or block on bad results
+4. Circuit breaker (redis-backed) trips after N failures in a rolling time window
+
+### `hook(pattern, config)`
+
+Wrap a pattern as a lifecycle hook. Optionally runs in the background without blocking the main chain.
+
+```typescript
+interface HookConfig extends PatternConfig {
+  trigger: 'session_close' | 'error' | 'approval_timeout' | 'custom'
+  background?: boolean  // fire-and-forget via queueMicrotask
+}
+
+const distillHook = hook(distillChain, {
+  patternId: 'session-close-hook',
+  trigger: 'session_close',
+  background: true
+})
+```
+
+**How it works:**
+- `background: true` — schedules the inner pattern via `queueMicrotask` and returns immediately
+- `background: false` (default) — runs synchronously; inner events are wrapped with `pattern_enter` / `pattern_exit`
 
 ### `withApproval(pattern, predicate)`
 
@@ -291,22 +361,52 @@ synthesizer({
 })
 ```
 
-### `router(routes, patterns)`
+### `router(routeDescriptions, config?)`
 
-Route input to patterns based on intent classification via BAML.
+Classifies intent via BAML and sets `scope.data.route`. The first half of the router/routes pair.
+
+- **Tool needed** → `data.route = <toolName>`, `data.intent`, `data.routerResponse`; tracks optional `assistant_message`
+- **Conversational** → `data.route = 'user'` (the `DIRECT_RESPONSE_ROUTE` sentinel), `data.response = responseText`; tracks `assistant_message` directly; downstream `synthesizer()` skips BAML
 
 ```typescript
-const routes = {
+router({
   neo4j: 'Database queries and graph operations',
   web_search: 'Web lookups and information retrieval',
-  code_mode: 'Multi-tool script composition'
-}
+})
 
-router(routes, {
+// Custom direct-response sentinel:
+router({ neo4j: '...' }, { directResponseRoute: 'conversational' })
+```
+
+```typescript
+interface RouterConfig extends PatternConfig {
+  directResponseRoute?: string  // Default: 'user'
+}
+```
+
+### `routes(patternMap, config?)`
+
+Dispatches to the sub-pattern matching `scope.data.route`. The second half of the router/routes pair.
+
+- `data.route === undefined` → **throws** (programming error — `routes()` must follow `router()`)
+- `data.route === 'user'` → **pass-through** (conversational; synthesizer also skips BAML)
+- `data.route` found in map → dispatches with `pattern_enter/exit` wrapping
+- `data.route` not in map → tracks `error` event, pass-through
+
+```typescript
+routes({
   neo4j: neo4jPattern,
   web_search: webPattern,
-  code_mode: codePattern
 })
+
+// Must match router's directResponseRoute if overridden:
+routes({ neo4j: neo4jPattern }, { directResponseRoute: 'conversational' })
+```
+
+```typescript
+interface RoutesConfig extends PatternConfig {
+  directResponseRoute?: string  // Default: 'user' — must match paired router()
+}
 ```
 
 ### `chain(ctx, patterns)`
@@ -356,12 +456,16 @@ const continued = await continueSession(serializedContext, patterns, 'Follow-up 
 Fluent API for filtering events from UnifiedContext:
 
 ```typescript
-const view = createEventView(ctx)
+// createEventView accepts an optional selfPatternId (3rd arg) to exclude
+// the current pattern from fromLastPattern() / fromLastNPatterns() resolution.
+// runChain passes this automatically.
+const view = createEventView(ctx, viewConfig, selfPatternId)
 
 // Pattern selectors
 view.fromPattern('neo4j-query')
 view.fromPatterns(['neo4j-query', 'web-enrich'])
-view.fromLastPattern()
+view.fromLastPattern()       // Excludes self when selfPatternId is set
+view.fromLastNPatterns(2)    // Excludes self when selfPatternId is set
 view.fromAll()
 
 // Type selectors
@@ -446,14 +550,14 @@ transformed into prompt-friendly types. The table below shows which harness
 
 | Harness `EventType` | Event Payload (TS) | BAML Type | Consumed By |
 |---|---|---|---|
-| `tool_call` | `ToolCallEventData` | `ToolCall` | `LoopTurn.tool_call`, `Attempt.action` |
-| `tool_result` | `ToolResultEventData` | `ToolResult` | `LoopTurn.tool_result`, `Attempt.result/error` |
+| `tool_call` | `ToolCallEventData` (`callId?`, `tool`, `args`) | `ToolCall` | `LoopTurn.tool_call`, `Attempt.action` |
+| `tool_result` | `ToolResultEventData` (`callId?`, `tool`, `result`, `success`, `error?`) | `ToolResult` | `LoopTurn.tool_result`, `Attempt.result/error` |
 | `controller_action` | `ControllerActionEventData` | _(embedded in `LoopTurn.reasoning`)_ | simpleLoop, actorCritic |
 | `critic_result` | `CriticResultEventData` | _(embedded in `Attempt.feedback`)_ | actorCritic |
 | `user_message` | `UserMessageEventData` | `Message { role, content }` | router (history) |
 | `assistant_message` | `AssistantMessageEventData` | `Message { role, content }` | router (history) |
-| `pattern_enter` | `PatternEnterEventData` | _(not sent to BAML)_ | chain orchestration only |
-| `pattern_exit` | `PatternExitEventData` | _(not sent to BAML)_ | chain orchestration only |
+| `pattern_enter` | `PatternEnterEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `withApproval`, `guardrail` |
+| `pattern_exit` | `PatternExitEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `withApproval`, `guardrail` |
 | `approval_request` | `ApprovalRequestEventData` | _(not sent to BAML)_ | withApproval only |
 | `approval_response` | `ApprovalResponseEventData` | _(not sent to BAML)_ | withApproval only |
 | `error` | `ErrorEventData` | _(not sent to BAML)_ | harness error handling |
@@ -525,23 +629,33 @@ BAML Return → string (assistant response text)
   → stored as assistant_message event
 ```
 
-#### router → `Router`
+#### router() + routes()
 
 ```
-Events read (ViewConfig default: fromAll, eventTypes: user_message + assistant_message)
-├── user_message      ──► Message { role: 'user', content }
-└── assistant_message ──► Message { role: 'assistant', content }
+router() calls routeMessageOp() → BAML-backed intent classifier
 
 BAML Inputs:
-  message : string         ← ctx.input
-  routes  : RouteOption[]  ← { name, description } from route config
-  history : Message[]      ← assembled from context message events
+  message : string         ← most recent user_message content
+  history : Message[]      ← [] (empty in current impl)
+  routes  : RouteOption[]  ← { name, description } from routeDescriptions
 
-BAML Return → RoutingResult:
-  intent     : string  → stored in data, forwarded to routed pattern
-  needs_tool : bool    → if false, response is returned directly
-  route      : string? → selects which ConfiguredPattern to run
-  response   : string  → immediate response or status
+BAML Return:
+  intent           : string  → forwarded to routed sub-pattern
+  tool_call_needed : bool    → selects code path
+  tool_name        : string? → route key for routes() dispatch
+  response_text    : string  → direct response text or routing status
+
+Two code paths:
+
+Conversational (tool_call_needed = false):
+  → assistant_message event tracked with response_text
+  → data.route = 'user' (DIRECT_RESPONSE_ROUTE), data.response = response_text
+  → routes() passes through; synthesizer() skips BAML
+
+Tool needed (tool_call_needed = true):
+  → data.route = tool_name, data.intent, data.routerResponse
+  → optional assistant_message if status text present
+  → routes() dispatches to patternMap[tool_name] with pattern_enter/exit
 ```
 
 ### Conversion Reference
@@ -577,6 +691,7 @@ import { b } from '../../../baml_client'
 import {
   harness,
   router,
+  routes,
   simpleLoop,
   actorCritic,
   synthesizer,
@@ -617,25 +732,24 @@ async function createPatterns() {
     patternId: 'code-mode'
   })
 
-  const routerPattern = router(
-    {
-      neo4j: 'Database queries and graph operations',
-      web_search: 'Web lookups and information retrieval',
-      code_mode: 'Multi-tool script composition'
-    },
-    {
-      neo4j: neo4jPattern,
-      web_search: webPattern,
-      code_mode: codePattern
-    }
-  )
+  const routerPattern = router({
+    neo4j: 'Database queries and graph operations',
+    web_search: 'Web lookups and information retrieval',
+    code_mode: 'Multi-tool script composition'
+  })
+
+  const routesPattern = routes({
+    neo4j: neo4jPattern,
+    web_search: webPattern,
+    code_mode: codePattern
+  })
 
   const responseSynth = synthesizer({
     mode: 'thread',
     patternId: 'response-synth'
   })
 
-  return [routerPattern, responseSynth]
+  return [routerPattern, routesPattern, responseSynth]
 }
 
 // Usage
@@ -673,23 +787,25 @@ Span names:
 ```
 harness-patterns/
 ├── index.ts              # Public exports
-├── types.ts              # Core types (UnifiedContext, PatternScope, etc.)
-├── context.server.ts     # Context factory and helpers
-├── tools.server.ts       # Tools() wrapper
-├── router.server.ts      # router()
+├── types.ts              # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, etc.)
+├── context.server.ts     # Context factory, createEvent(), generateId()
+├── tools.server.ts       # Tools() — groups MCP tools by namespace
 ├── harness.server.ts     # harness(), resumeHarness(), continueSession()
-├── patterns/
-│   ├── index.ts
-│   ├── simpleLoop.server.ts
-│   ├── actorCritic.server.ts
-│   ├── withApproval.server.ts
-│   ├── chain.server.ts
-│   ├── synthesizer.server.ts
-│   └── event-view.server.ts  # EventViewImpl
-├── state.server.ts       # Thread (conversation history)
+├── routing.server.ts     # BAML router integration (routeMessageOp)
 ├── mcp-client.server.ts  # callTool(), listTools()
-├── routing.server.ts     # BAML router integration
-└── assert.server.ts      # Server-only guards
+├── assert.server.ts      # Server-only guards
+└── patterns/
+    ├── index.ts
+    ├── router.server.ts        # router() + routes() — intent classification + dispatch
+    ├── simpleLoop.server.ts    # ReAct loop; emits callId on tool_call/tool_result
+    ├── actorCritic.server.ts   # Generate-evaluate loop; emits callId on tool pairs
+    ├── withApproval.server.ts  # Approval gate; wraps inner events with pattern_enter/exit
+    ├── parallel.server.ts      # Concurrent branches; wraps each branch with pattern_enter/exit
+    ├── guardrail.server.ts     # Rail validation; wraps inner events with pattern_enter/exit
+    ├── hook.server.ts          # Lifecycle hook; wraps inner events with pattern_enter/exit
+    ├── chain.server.ts         # Sequential composition
+    ├── synthesizer.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE
+    └── event-view.server.ts    # EventViewImpl (fluent query API)
 ```
 
 ## Design Principles

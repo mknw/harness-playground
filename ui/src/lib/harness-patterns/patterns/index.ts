@@ -3,10 +3,11 @@
  */
 
 // Patterns
+export { router, routes, type Routes, type RoutePatterns, type RouterData } from './router.server'
 export { simpleLoop, type SimpleLoopData } from './simpleLoop.server'
 export { actorCritic, type ActorCriticData } from './actorCritic.server'
 export { withApproval, approvalPredicates, type ApprovalPredicate, type WithApprovalData } from './withApproval.server'
-export { chain, configurePattern } from './chain.server'
+export { chain, runChain, configurePattern } from './chain.server'
 export { synthesizer } from './synthesizer.server'
 export { parallel } from './parallel.server'
 export { judge, type JudgeConfig, type JudgeData, type EvaluatorFn } from './judge.server'
@@ -18,6 +19,8 @@ export { EventViewImpl, createEventView } from './event-view.server'
 
 // Re-export config types from main types
 export type {
+  RouterConfig,
+  RoutesConfig,
   SimpleLoopConfig,
   ActorCriticConfig,
   SynthesizerConfig,

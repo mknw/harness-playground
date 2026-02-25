@@ -36,6 +36,10 @@ export type {
   CriticResult,
   ScriptExecutionEvent,
 
+  // Router Config Types
+  RouterConfig,
+  RoutesConfig,
+
   // Pattern Config Types
   SimpleLoopConfig,
   ActorCriticConfig,
@@ -93,7 +97,8 @@ export { Tools, ToolsFrom } from './tools.server'
 // Router
 // ============================================================================
 
-export { router, type Routes, type RoutePatterns, type RouterData } from './router.server'
+export { router, routes, type Routes, type RoutePatterns, type RouterData } from './patterns'
+export { DIRECT_RESPONSE_ROUTE } from './types'
 
 // ============================================================================
 // Harness
@@ -117,6 +122,7 @@ export {
   withApproval,
   approvalPredicates,
   chain,
+  runChain,
   synthesizer,
   configurePattern,
   parallel,

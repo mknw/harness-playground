@@ -22,7 +22,7 @@ import { ChatSidebar } from './ChatSidebar'
 import { AgentSelector } from './AgentSelector'
 import { processMessageWithAgent, approveAction, rejectAction, clearSession, extractGraphFromResult } from '~/lib/harness-client'
 import type { GraphElement } from './SupportPanel'
-import type { ContextEvent } from '~/lib/harness-patterns'
+import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
 
 // ============================================================================
 // Types
@@ -31,6 +31,7 @@ import type { ContextEvent } from '~/lib/harness-patterns'
 export interface ChatInterfaceProps {
   onGraphUpdate?: (elements: GraphElement[]) => void
   onEventsUpdate?: (events: ContextEvent[]) => void
+  onContextUpdate?: (ctx: UnifiedContext) => void
 }
 
 // ============================================================================
@@ -43,6 +44,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const [isProcessing, setIsProcessing] = createSignal(false)
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
   const [selectedAgent, setSelectedAgent] = createSignal('default')
+  // Cursor into ctx.events — tracks how many events were sent last turn so we
+  // emit only the delta (new events) rather than the full accumulated history
+  let prevEventCount = 0
 
   onCleanup(() => {
     // Clean up session when component unmounts
@@ -63,6 +67,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const handleAgentChange = (agentId: string) => {
     // Clear session when agent changes
     clearSession(sessionId)
+    prevEventCount = 0
     setSelectedAgent(agentId)
 
     // Add info message about agent change
@@ -96,9 +101,14 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         props.onGraphUpdate(graphElements)
       }
 
-      // Emit context events for observability
+      // Emit only new context events (delta since last turn)
       if (result.context?.events && props.onEventsUpdate) {
-        props.onEventsUpdate(result.context.events)
+        const newEvents = result.context.events.slice(prevEventCount)
+        prevEventCount = result.context.events.length
+        if (newEvents.length > 0) props.onEventsUpdate(newEvents)
+      }
+      if (result.context && props.onContextUpdate) {
+        props.onContextUpdate(result.context)
       }
 
       // Build assistant message
@@ -146,9 +156,14 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         props.onGraphUpdate(graphElements)
       }
 
-      // Emit context events for observability
+      // Emit only new context events (delta since last turn)
       if (result.context?.events && props.onEventsUpdate) {
-        props.onEventsUpdate(result.context.events)
+        const newEvents = result.context.events.slice(prevEventCount)
+        prevEventCount = result.context.events.length
+        if (newEvents.length > 0) props.onEventsUpdate(newEvents)
+      }
+      if (result.context && props.onContextUpdate) {
+        props.onContextUpdate(result.context)
       }
 
       // Update the message with executed tool call

@@ -17,6 +17,7 @@ import type {
   AssistantMessageEventData,
   LLMCallData
 } from '../types'
+import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
 
@@ -214,11 +215,6 @@ function buildSynthesisInputFromView(
         }
       }
 
-      // Fallback to data.loopHistory if available
-      if (!input.loopHistory && data.loopHistory) {
-        input.loopHistory = data.loopHistory
-      }
-
       input.response = data.response
       break
     }
@@ -264,6 +260,11 @@ export function synthesizer<T extends SynthesizerData>(
     try {
       // Skip if already has synthesized response
       if (skipIfHasResponse && scope.data.synthesizedResponse) {
+        return scope
+      }
+
+      // Skip BAML synthesis for direct user responses (router already produced the response)
+      if ((scope.data as Record<string, unknown>).route === DIRECT_RESPONSE_ROUTE) {
         return scope
       }
 

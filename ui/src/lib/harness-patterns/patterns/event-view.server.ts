@@ -34,7 +34,9 @@ export class EventViewImpl implements IEventView {
 
   constructor(
     private ctx: UnifiedContext,
-    config?: ViewConfig
+    config?: ViewConfig,
+    /** Pattern ID of the current scope — excluded from fromLastPattern() */
+    private selfPatternId?: string
   ) {
     // Apply initial config
     if (config) {
@@ -67,7 +69,7 @@ export class EventViewImpl implements IEventView {
   }
 
   private clone(): EventViewImpl {
-    const view = new EventViewImpl(this.ctx)
+    const view = new EventViewImpl(this.ctx, undefined, this.selfPatternId)
     view.filters = [...this.filters]
     view.limitLast = this.limitLast
     view.limitFirst = this.limitFirst
@@ -106,9 +108,12 @@ export class EventViewImpl implements IEventView {
     return this.fromPattern(lastPatternId)
   }
 
-  /** Events from the last N patterns in execution order */
+  /** Events from the last N patterns in execution order (excluding self) */
   fromLastNPatterns(n: number): EventViewImpl {
-    const patternIds = this.getPatternIds().slice(-n)
+    const ids = this.selfPatternId
+      ? this.getPatternIds().filter(id => id !== this.selfPatternId)
+      : this.getPatternIds()
+    const patternIds = ids.slice(-n)
     if (patternIds.length === 0) {
       const view = this.clone()
       view.addFilter(() => false)
@@ -262,9 +267,11 @@ export class EventViewImpl implements IEventView {
       })
   }
 
-  /** Get the ID of the last pattern that entered */
+  /** Get the ID of the last pattern that entered (excluding self) */
   private getLastPatternId(): string | undefined {
-    const ids = this.getPatternIds()
+    const ids = this.selfPatternId
+      ? this.getPatternIds().filter(id => id !== this.selfPatternId)
+      : this.getPatternIds()
     return ids.at(-1)
   }
 }
@@ -315,7 +322,8 @@ function formatEventData(event: ContextEvent): string {
 /** Create a new EventView for querying context events */
 export function createEventView(
   ctx: UnifiedContext,
-  config?: ViewConfig
+  config?: ViewConfig,
+  selfPatternId?: string
 ): EventViewImpl {
-  return new EventViewImpl(ctx, config)
+  return new EventViewImpl(ctx, config, selfPatternId)
 }

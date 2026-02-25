@@ -211,41 +211,33 @@ describe('synthesizer execution', () => {
     expect(result.data.synthesizedResponse).toBe('Response mode: my data')
   })
 
-  it('should handle thread mode with loop history', async () => {
+  it('should handle thread mode with loop history from events', async () => {
     const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
-
-    const loopHistory = {
-      iterations: [
-        {
-          turn: 0,
-          action: {
-            tool_name: 'search',
-            tool_args: '{"q":"test"}',
-            reasoning: 'Search for results',
-            status: 'success',
-            is_final: false
-          },
-          result: { items: [] },
-          timestamp: Date.now()
-        }
-      ],
-      startTime: Date.now() - 1000,
-      endTime: Date.now()
-    }
 
     const pattern = synthesizer({
       mode: 'thread',
       synthesize: async (input) => `Thread mode with ${input.loopHistory?.iterations.length ?? 0} iterations`
     })
 
-    const scope = createScope('test', { loopHistory })
+    const scope = createScope('test', {})
+    // Put controller_action and tool_result events into context so synthesizer
+    // can reconstruct loop history from the event stream (not data.loopHistory)
+    const now = Date.now()
     const mockContext = {
       sessionId: 'test',
-      createdAt: Date.now(),
+      createdAt: now,
       events: [
-        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+        { type: 'user_message' as const, ts: now, patternId: 'harness', data: { content: 'test' } },
+        { type: 'pattern_enter' as const, ts: now, patternId: 'web-search', data: { pattern: 'simpleLoop' } },
+        { type: 'controller_action' as const, ts: now + 1, patternId: 'web-search', data: {
+          action: { tool_name: 'search', tool_args: '{"q":"test"}', reasoning: 'Search for results', status: 'success', is_final: false }
+        }},
+        { type: 'tool_result' as const, ts: now + 2, patternId: 'web-search', data: {
+          tool: 'search', result: { items: [] }, success: true
+        }},
+        { type: 'pattern_exit' as const, ts: now + 3, patternId: 'web-search', data: { status: 'completed' } },
       ],
       status: 'running' as const,
       data: {},

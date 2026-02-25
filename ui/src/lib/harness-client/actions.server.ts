@@ -11,6 +11,7 @@ import {
   resumeHarness,
   continueSession,
   router,
+  routes,
   simpleLoop,
   actorCritic,
   synthesizer,
@@ -74,18 +75,17 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     },
   );
 
-  const routerPattern = router<SessionData>(
-    {
-      neo4j: "Database queries and graph operations",
-      web_search: "Web lookups and information retrieval",
-      code_mode: "Multi-tool script composition",
-    },
-    {
-      neo4j: neo4jPattern,
-      web_search: webPattern,
-      code_mode: codePattern,
-    },
-  );
+  const routeDescriptions = {
+    neo4j: "Database queries and graph operations",
+    web_search: "Web lookups and information retrieval",
+    code_mode: "Multi-tool script composition",
+  };
+
+  const routePatterns = {
+    neo4j: neo4jPattern,
+    web_search: webPattern,
+    code_mode: codePattern,
+  };
 
   // Synthesizer generates human-readable response from tool results
   const responseSynth = synthesizer<SessionData>({
@@ -93,7 +93,11 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     patternId: "response-synth",
   });
 
-  return [routerPattern, responseSynth];
+  return [
+    router<SessionData>(routeDescriptions),
+    routes<SessionData>(routePatterns),
+    responseSynth,
+  ];
 }
 
 // ============================================================================
@@ -279,12 +283,14 @@ export async function processMessageWithAgent(
  *
  * @returns Array of agent metadata
  */
-export async function getAgentList(): Promise<Array<{
-  id: string;
-  name: string;
-  description: string;
-  icon: string;
-  servers: string[];
-}>> {
+export async function getAgentList(): Promise<
+  Array<{
+    id: string;
+    name: string;
+    description: string;
+    icon: string;
+    servers: string[];
+  }>
+> {
   return getAgentMetadata();
 }

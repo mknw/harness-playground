@@ -11,10 +11,11 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn()
 }))
 
-// Mock chain to track calls
+// Mock runChain to track calls
 const mockChain = vi.fn()
 vi.mock('../../../lib/harness-patterns/patterns/chain.server', () => ({
-  chain: mockChain
+  runChain: mockChain,
+  chain: vi.fn()
 }))
 
 describe('harness', () => {

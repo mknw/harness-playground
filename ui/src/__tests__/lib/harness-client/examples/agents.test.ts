@@ -334,8 +334,8 @@ describe('Agent Harnesses', () => {
       const { issueTriageAgent } = await import('../../../../lib/harness-client/examples/issue-triage.server')
       const patterns = await validatePatterns(issueTriageAgent)
 
-      // Should have router and synthesizer
-      expect(patterns.length).toBe(2)
+      // Should have router, routes, and synthesizer
+      expect(patterns.length).toBe(3)
     })
   })
 

@@ -6,7 +6,7 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { chain } from './patterns/chain.server'
+import { runChain } from './patterns/chain.server'
 import type {
   CtxStatus,
   HarnessResult,
@@ -18,7 +18,8 @@ import {
   createContext,
   serializeContext,
   deserializeContext,
-  setError as setCtxError
+  setError as setCtxError,
+  generateId
 } from './context.server'
 
 assertServerOnImport()
@@ -62,7 +63,7 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
 
     try {
       // Execute patterns using chain
-      await chain(ctx, patterns)
+      await runChain(ctx, patterns)
 
       // Extract response from final data
       const response = ctx.data.response ?? ''
@@ -70,6 +71,7 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
       // Add assistant message event if we have a response
       if (ctx.status === 'done' && response) {
         ctx.events.push({
+          id: generateId('ev'),
           type: 'assistant_message',
           ts: Date.now(),
           patternId: 'harness',
@@ -129,6 +131,7 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
 
   // Add approval response event
   ctx.events.push({
+    id: generateId('ev'),
     type: 'approval_response',
     ts: Date.now(),
     patternId: 'harness',
@@ -137,7 +140,7 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
 
   try {
     // Re-run patterns - withApproval will handle the resume
-    await chain(ctx, patterns)
+    await runChain(ctx, patterns)
 
     const response = ctx.data.response ?? ''
     const finalStatus = ctx.status as CtxStatus // chain may mutate ctx.status
@@ -198,6 +201,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
 
   // Add new user message event
   ctx.events.push({
+    id: generateId('ev'),
     type: 'user_message',
     ts: Date.now(),
     patternId: 'harness',
@@ -206,7 +210,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
 
   try {
     // Execute patterns
-    await chain(ctx, patterns)
+    await runChain(ctx, patterns)
 
     const response = ctx.data.response ?? ''
     const finalStatus = ctx.status as CtxStatus // chain may mutate ctx.status

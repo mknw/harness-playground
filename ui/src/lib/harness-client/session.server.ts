@@ -7,7 +7,7 @@
 
 import type { HarnessResultScoped, ConfiguredPattern, WithApproval } from '../harness-patterns'
 import type { HarnessData } from '../harness-patterns/harness.server'
-import type { RouterData } from '../harness-patterns/router.server'
+import type { RouterData } from '../harness-patterns/patterns/router.server'
 import type { SimpleLoopData } from '../harness-patterns/patterns'
 
 // ============================================================================

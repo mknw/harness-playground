@@ -611,4 +611,48 @@ describe('EventViewImpl', () => {
       expect(view.lastError()).toBeUndefined()
     })
   })
+
+  describe('selfPatternId exclusion', () => {
+    it('fromLastPattern() should exclude self when selfPatternId is provided', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'pattern_enter', ts: 1, patternId: 'router-1', data: { pattern: 'router' } },
+        { type: 'assistant_message', ts: 2, patternId: 'router-1', data: { content: 'hi' } },
+        { type: 'pattern_enter', ts: 3, patternId: 'web-search', data: { pattern: 'simpleLoop' } },
+        { type: 'tool_call', ts: 4, patternId: 'web-search', data: { tool: 'search' } },
+        { type: 'tool_result', ts: 5, patternId: 'web-search', data: { tool: 'search', result: 'found', success: true } },
+        { type: 'pattern_enter', ts: 6, patternId: 'synth-1', data: { pattern: 'synthesizer' } },
+      ]
+
+      const ctx = createMockContext(events)
+      // Without selfPatternId — fromLastPattern returns synth-1 (self)
+      const viewNoSelf = createEventView(ctx)
+      expect(viewNoSelf.fromLastPattern().tools().get()).toHaveLength(0)
+
+      // With selfPatternId — fromLastPattern skips synth-1, returns web-search
+      const viewWithSelf = createEventView(ctx, undefined, 'synth-1')
+      const tools = viewWithSelf.fromLastPattern().tools().get()
+      expect(tools).toHaveLength(2)
+      expect(tools[0].patternId).toBe('web-search')
+    })
+
+    it('fromLastNPatterns() should exclude self when selfPatternId is provided', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'pattern_enter', ts: 1, patternId: 'p1', data: {} },
+        { type: 'tool_call', ts: 2, patternId: 'p1', data: {} },
+        { type: 'pattern_enter', ts: 3, patternId: 'p2', data: {} },
+        { type: 'tool_call', ts: 4, patternId: 'p2', data: {} },
+        { type: 'pattern_enter', ts: 5, patternId: 'self', data: {} },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx, undefined, 'self')
+      // Last 1 pattern (excluding self) should be p2
+      const result = view.fromLastNPatterns(1).get()
+      expect(result.every(e => e.patternId === 'p2')).toBe(true)
+    })
+  })
 })

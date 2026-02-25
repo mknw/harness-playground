@@ -57,6 +57,8 @@ export type EventType =
 
 /** A single event in the context stream */
 export interface ContextEvent {
+  /** Unique event identifier for cross-referencing */
+  id?: string
   type: EventType
   ts: number
   patternId: string
@@ -488,6 +490,25 @@ export interface LLMCallData {
 export type ShouldTrackFn = (type: EventType, trackHistory: TrackHistory) => boolean
 
 // ============================================================================
+// Router / Routes Config
+// ============================================================================
+
+/** Sentinel route name for direct conversational responses (no tool) */
+export const DIRECT_RESPONSE_ROUTE = 'user'
+
+/** Configuration for router pattern */
+export interface RouterConfig extends PatternConfig {
+  /** Route name set when responding directly without a tool (default: 'user') */
+  directResponseRoute?: string
+}
+
+/** Configuration for routes dispatch pattern */
+export interface RoutesConfig extends PatternConfig {
+  /** Must match the directResponseRoute of the paired router (default: 'user') */
+  directResponseRoute?: string
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 
@@ -500,6 +521,7 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   actorCritic: ['controller_action', 'tool_call', 'tool_result', 'critic_result'],
   synthesizer: 'assistant_message',
   router: true,
+  routes: false,
   chain: false,
   withApproval: true
 }
@@ -510,6 +532,7 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   actorCritic: 'on-success',
   synthesizer: 'always',
   router: 'always',
+  routes: 'always',
   chain: 'always',
   withApproval: 'on-success'
 }

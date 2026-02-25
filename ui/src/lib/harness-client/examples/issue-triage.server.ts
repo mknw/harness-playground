@@ -8,6 +8,7 @@
 
 import {
   router,
+  routes,
   simpleLoop,
   parallel,
   synthesizer,
@@ -56,23 +57,22 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   );
 
   // Router to dispatch based on intent
-  const routerPattern = router<SessionData>(
-    {
-      issue_context: "Fetch issue details and linked PRs from GitHub",
-      research: "Search web and knowledge graph for related context",
-    },
-    {
-      issue_context: issueContext,
-      research,
-    },
-  );
+  const routerPattern = router<SessionData>({
+    issue_context: "Fetch issue details and linked PRs from GitHub",
+    research: "Search web and knowledge graph for related context",
+  });
+
+  const routesPattern = routes<SessionData>({
+    issue_context: issueContext,
+    research,
+  });
 
   const responseSynth = synthesizer<SessionData>({
     mode: "thread",
     patternId: "triage-synth",
   });
 
-  return [routerPattern, responseSynth];
+  return [routerPattern, routesPattern, responseSynth];
 }
 
 export const issueTriageAgent: AgentConfig = {

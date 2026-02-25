@@ -16,7 +16,8 @@ import {
   enterPattern,
   exitPattern,
   resolveConfig,
-  setError
+  setError,
+  createEvent
 } from '../context.server'
 import { createEventView } from './event-view.server'
 
@@ -40,9 +41,9 @@ assertServerOnImport()
  *
  * @example
  * const agent = harness(neo4jLoop, webLoop, synth)
- * // harness uses chain internally
+ * // harness uses runChain internally
  */
-export async function chain<T extends Record<string, unknown>>(
+export async function runChain<T extends Record<string, unknown>>(
   ctx: UnifiedContext<T>,
   patterns: ConfiguredPattern<T>[]
 ): Promise<UnifiedContext<T>> {
@@ -66,8 +67,8 @@ export async function chain<T extends Record<string, unknown>>(
       // 1. Create isolated scope for this pattern
       const scope = createScope<T>(patternId, currentData)
 
-      // 2. Create view based on pattern's viewConfig
-      const view = createEventView(ctx, pattern.config.viewConfig)
+      // 2. Create view based on pattern's viewConfig (exclude self from fromLastPattern)
+      const view = createEventView(ctx, pattern.config.viewConfig, patternId)
 
       // 3. Add pattern_enter event
       enterPattern(ctx, patternId, pattern.name)
@@ -98,6 +99,51 @@ export async function chain<T extends Record<string, unknown>>(
     const msg = error instanceof Error ? error.message : String(error)
     setError(ctx, msg, 'chain')
     return ctx
+  }
+}
+
+/**
+ * Compose patterns into a single ConfiguredPattern that runs them in sequence.
+ *
+ * Unlike `runChain` (which takes a UnifiedContext), `chain` is a pattern factory
+ * that returns a ConfiguredPattern. This enables composition inside harness() or
+ * within other pattern factories like parallel() and guardrail().
+ *
+ * @param patterns - ConfiguredPatterns to execute in sequence
+ * @returns A single ConfiguredPattern wrapping all sub-patterns
+ *
+ * @example
+ * // Compose router + routes + synth as a single unit inside parallel/guardrail
+ * const routedAgent = chain(
+ *   router({ neo4j: 'DB queries', web: 'Web lookups' }),
+ *   routes({ neo4j: neo4jPattern, web: webPattern }),
+ *   synthesizer({ mode: 'thread' })
+ * )
+ *
+ * // Use in harness alongside other patterns
+ * const agent = harness(guardrail(routedAgent, piiScanRail))
+ */
+export function chain<T extends Record<string, unknown>>(
+  ...patterns: ConfiguredPattern<T>[]
+): ConfiguredPattern<T> {
+  const resolved = resolveConfig('chain', {})
+  return {
+    name: `chain(${patterns.map(p => p.name).join(', ')})`,
+    fn: async (scope, view) => {
+      let current = scope
+      for (const pattern of patterns) {
+        current.events.push(
+          createEvent('pattern_enter', pattern.config.patternId ?? pattern.name, { pattern: pattern.name })
+        )
+        const result = await pattern.fn(current, view)
+        result.events.push(
+          createEvent('pattern_exit', pattern.config.patternId ?? pattern.name, { status: 'completed' })
+        )
+        current = result
+      }
+      return current
+    },
+    config: resolved
   }
 }
 

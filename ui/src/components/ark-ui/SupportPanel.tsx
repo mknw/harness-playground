@@ -11,7 +11,7 @@ import { GraphVisualization } from './GraphVisualization';
 import { ObservabilityPanel } from './ObservabilityPanel';
 import { ToolsPanel } from './ToolsPanel';
 import type { ElementDefinition } from 'cytoscape';
-import type { ContextEvent } from '~/lib/harness-patterns';
+import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns';
 
 // ============================================================================
 // Types
@@ -34,6 +34,7 @@ export interface SupportPanelProps {
   highlightedIds?: string[];
   promptStats?: PromptStat[];
   contextEvents?: ContextEvent[];
+  unifiedContext?: UnifiedContext;
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void;
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
   onClearGraph?: () => void;
@@ -228,6 +229,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
           <Tabs.Content value="stats" h="full">
             <ObservabilityPanel
               events={props.contextEvents ?? []}
+              context={props.unifiedContext}
               onClear={props.onClearEvents}
             />
           </Tabs.Content>

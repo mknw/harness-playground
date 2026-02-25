@@ -21,7 +21,7 @@ import { assertServerOnImport } from './assert.server'
 import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, CriticResult, ScriptExecutionEvent, LLMCallData } from './types'
 import type { ToolDescription, LoopTurn, Attempt } from '../../../baml_client/types'
 import { listTools as mcpListTools } from './mcp-client.server'
-import { Collector } from '@boundaryml/baml'
+import { Collector, BamlValidationError } from '@boundaryml/baml'
 
 assertServerOnImport()
 
@@ -203,10 +203,19 @@ export function createLoopControllerAdapter(
 
     const variables = { user_message, intent, tools, turns, context }
 
-    // Call with or without collector
-    const action = collector
-      ? await b.LoopController(user_message, intent, tools, turns, context, { collector })
-      : await b.LoopController(user_message, intent, tools, turns, context)
+    // Call with or without collector.
+    // On BamlValidationError (LocalGLM returns malformed JSON), retry with GroqReasoning —
+    // BAML's built-in fallback only covers network/API errors, not parse failures.
+    let action: ControllerAction
+    try {
+      action = collector
+        ? await b.LoopController(user_message, intent, tools, turns, context, { collector })
+        : await b.LoopController(user_message, intent, tools, turns, context)
+    } catch (e) {
+      if (!(e instanceof BamlValidationError)) throw e
+      // Primary client returned unparseable output; retry with reliable Groq fallback
+      action = await b.LoopController(user_message, intent, tools, turns, context, { client: 'GroqReasoning' })
+    }
 
     // Extract LLM call data if collector present
     const llmCall = collector
@@ -219,27 +228,20 @@ export function createLoopControllerAdapter(
 
 /**
  * Parse previous_results JSON string into LoopTurn array.
+ * Expects LoopTurn[] JSON produced by simpleLoop's internal turn tracking.
  */
 function parseResultsToTurns(previous_results: string, _currentTurn: number): LoopTurn[] {
   if (!previous_results || previous_results === '[]') return []
 
   try {
-    const results = JSON.parse(previous_results)
-    if (!Array.isArray(results)) return []
-
-    return results.map((r, i) => ({
-      n: i,
-      reasoning: undefined,
-      tool_call: undefined,
-      tool_result: {
-        tool: 'unknown',
-        result: JSON.stringify(r),
-        success: true,
-        error: null
-      }
-    }))
+    const parsed = JSON.parse(previous_results)
+    if (!Array.isArray(parsed)) return []
+    // Accept LoopTurn[] format (has numeric 'n' field from simpleLoop tracking)
+    if (parsed.length > 0 && typeof parsed[0].n === 'number') {
+      return parsed as LoopTurn[]
+    }
+    return []
   } catch {
-    // If not valid JSON, return empty
     return []
   }
 }
@@ -357,92 +359,42 @@ export function createCriticAdapter(): CriticFnWithLLMData {
 // Domain-Specific Controller Adapters
 // ============================================================================
 
-/** Neo4j controller - uses LoopController with graph schema context */
+/** Neo4j controller - uses LoopController with graph schema context (schema injected via config.schema) */
 export function createNeo4jController(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(
-    toolNames,
-    `You are a Neo4j Knowledge Graph Agent.
-Use Cypher queries with LIMIT clauses for safety.
-Available tools: read_neo4j_cypher, write_neo4j_cypher, get_neo4j_schema, Return.
-When you have enough information, use "Return" tool.`
-  )
+  return createLoopControllerAdapter(toolNames)
 }
 
-/** Web search controller - uses LoopController for web search tasks */
+/** Web search controller */
 export function createWebSearchController(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(
-    toolNames,
-    `You are a Web Search Agent.
-Search for information on the web and fetch content as needed.
-Available tools: search, fetch, fetch_content, Return.
-When you have enough information, use "Return" tool.`
-  )
+  return createLoopControllerAdapter(toolNames)
 }
 
-/** Memory controller - uses LoopController for memory graph operations */
+/** Memory controller */
 export function createMemoryController(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(
-    toolNames,
-    `You are a Memory Knowledge Graph Agent.
-Store and retrieve entities and relationships in the memory graph.
-Available tools: create_entities, create_relations, add_observations,
-delete_entities, delete_relations, delete_observations,
-open_nodes, search_nodes, read_graph, Return.
-When you have completed the task, use "Return" tool.`
-  )
+  return createLoopControllerAdapter(toolNames)
 }
 
 /** Context7 documentation controller */
 export function createContext7Controller(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(
-    toolNames,
-    `You are a Documentation Lookup Agent using Context7.
-Look up library documentation by first resolving the library ID,
-then fetching relevant docs for the topic.
-Available tools: resolve-library-id, get-library-docs, Return.
-When you have the documentation needed, use "Return" tool.`
-  )
+  return createLoopControllerAdapter(toolNames)
 }
 
 /** GitHub controller */
 export function createGitHubController(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(
-    toolNames,
-    `You are a GitHub Agent.
-Search code, issues, and repositories. Fetch file contents and PR details.
-When you have enough information, use "Return" tool.`
-  )
+  return createLoopControllerAdapter(toolNames)
 }
 
 /** Filesystem controller */
 export function createFilesystemController(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(
-    toolNames,
-    `You are a Filesystem Agent.
-Read, write, search, and edit files within the workspace.
-Be careful with write operations - verify paths before modifying.
-When the task is complete, use "Return" tool.`
-  )
+  return createLoopControllerAdapter(toolNames)
 }
 
 /** Redis controller */
 export function createRedisController(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(
-    toolNames,
-    `You are a Redis Agent.
-Store and retrieve data using Redis data structures.
-Available operations: strings, hashes, lists, sets, sorted sets, JSON, vectors.
-When the task is complete, use "Return" tool.`
-  )
+  return createLoopControllerAdapter(toolNames)
 }
 
 /** Database controller */
 export function createDatabaseController(toolNames: string[]): ControllerFnWithLLMData {
-  return createLoopControllerAdapter(
-    toolNames,
-    `You are a Database Agent.
-Execute SQL queries against PostgreSQL, MySQL, or SQLite databases.
-Use parameterized queries when possible. Be careful with write operations.
-When the task is complete, use "Return" tool.`
-  )
+  return createLoopControllerAdapter(toolNames)
 }

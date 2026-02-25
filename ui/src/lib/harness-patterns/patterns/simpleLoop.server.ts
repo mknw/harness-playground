@@ -9,6 +9,7 @@ import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import { repairJson } from '../json-repair'
+import type { LoopTurn } from '../../../../baml_client/types'
 import type {
   ControllerAction,
   SimpleLoopConfig,
@@ -20,7 +21,7 @@ import type {
   ControllerActionEventData
 } from '../types'
 import { MAX_TOOL_TURNS } from '../types'
-import { trackEvent, resolveConfig, generateId } from '../context.server'
+import { trackEvent, resolveConfig, generateId, createEvent, shouldTrack } from '../context.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
 
 assertServerOnImport()
@@ -29,8 +30,8 @@ export interface SimpleLoopData {
   turn?: number
   intent?: string
   lastAction?: ControllerAction
-  lastResult?: unknown
-  results?: unknown[]
+  /** Event IDs of tool_result events (use EventView to retrieve full data) */
+  resultEventIds?: string[]
   response?: string
   /** Whether an error occurred during loop execution */
   hasError?: boolean
@@ -69,49 +70,61 @@ export function simpleLoop<T extends SimpleLoopData>(
     view: EventView
   ): Promise<PatternScope<T>> => {
     const data = scope.data
-    const results: unknown[] = [...(data.results ?? [])]
+    const resultEventIds: string[] = [...(data.resultEventIds ?? [])]
+    const turns: LoopTurn[] = []
     let hasError = false
     let errorMessage: string | undefined
 
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
-        // Get previous results from view (serialized for LLM)
-        const previousFromView = view.tools().serialize()
-        const previousResults = previousFromView || JSON.stringify(results)
+        // Build previous results as LoopTurn[] JSON for the controller
+        const previousResults = JSON.stringify(turns)
 
         // Extract intent from data or use input from view
-        const userMessage = view.messages().last(1).get()[0]
+        // Use ofType('user_message') to get the actual user query, not the router's assistant_message
+        const userMessage = view.ofType('user_message').last(1).get()[0]
         const userContent = userMessage
           ? (userMessage.data as { content: string }).content
           : ''
         const intent = data.intent ?? userContent
 
-        // Call BAML controller
+        // Call BAML controller — catch validation errors gracefully
+        // so partial results from earlier turns are preserved
+        let action: ControllerAction
         const collector = new Collector('simpleLoop')
-        const { action, llmCall } = await controller(
-          userContent,
-          intent,
-          previousResults,
-          turn,
-          config?.schema,
-          collector
-        )
+        try {
+          const controllerResult = await controller(
+            userContent,
+            intent,
+            previousResults,
+            turn,
+            config?.schema,
+            collector
+          )
+          action = controllerResult.action
 
-        // Track controller action event with LLM call data
-        trackEvent(
-          scope,
-          'controller_action',
-          { action } as ControllerActionEventData,
-          resolved.trackHistory,
-          llmCall
-        )
+          // Track controller action event with LLM call data
+          trackEvent(
+            scope,
+            'controller_action',
+            { action } as ControllerActionEventData,
+            resolved.trackHistory,
+            controllerResult.llmCall
+          )
+        } catch (controllerError) {
+          const msg = controllerError instanceof Error ? controllerError.message : String(controllerError)
+          // Exit loop gracefully with partial results instead of losing everything
+          hasError = true
+          errorMessage = msg
+          break
+        }
 
         // Check if done (is_final flag OR tool_name === 'Return')
         if (action.is_final || action.tool_name === 'Return') {
           scope.data = {
             ...scope.data,
             lastAction: action,
-            results,
+            resultEventIds,
             turn
           }
           break
@@ -147,21 +160,43 @@ export function simpleLoop<T extends SimpleLoopData>(
 
         // Execute tool
         const result = await callTool(action.tool_name, args)
-        results.push(result.data)
 
-        // Track tool result event
-        trackEvent(
-          scope,
+        // Track tool result event and capture its ID
+        const resultEvent = createEvent(
           'tool_result',
+          scope.id,
           {
             callId,
             tool: action.tool_name,
             result: result.data,
             success: result.success,
             error: result.error
-          } as ToolResultEventData,
-          resolved.trackHistory
+          } as ToolResultEventData
         )
+        if (shouldTrack('tool_result', resolved.trackHistory)) {
+          scope.events.push(resultEvent)
+        }
+        if (resultEvent.id) {
+          resultEventIds.push(resultEvent.id)
+        }
+
+        // Record completed turn for LoopController history.
+        // Truncate result to avoid overflowing reasoning models on subsequent turns.
+        const MAX_RESULT_CHARS = 2000
+        const resultStr = JSON.stringify(result.data)
+        turns.push({
+          n: turn,
+          reasoning: action.reasoning,
+          tool_call: { tool: action.tool_name, args: action.tool_args },
+          tool_result: {
+            tool: action.tool_name,
+            result: resultStr.length > MAX_RESULT_CHARS
+              ? resultStr.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
+              : resultStr,
+            success: result.success,
+            error: result.error ?? null
+          }
+        })
 
         if (!result.success) {
           hasError = true
@@ -174,8 +209,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           ...scope.data,
           turn,
           lastAction: action,
-          lastResult: result.data,
-          results
+          resultEventIds
         }
       }
 
@@ -188,7 +222,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           ...scope.data,
           hasError: true,
           errorMessage,
-          results  // Include partial results
+          resultEventIds
         }
       }
 
@@ -202,7 +236,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         ...scope.data,
         hasError: true,
         errorMessage: msg,
-        results  // Include partial results
+        resultEventIds
       }
 
       return scope

@@ -10,6 +10,7 @@
 
 import {
   router,
+  routes,
   simpleLoop,
   synthesizer,
   configurePattern,
@@ -73,16 +74,15 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     { patternId: "web-search", maxTurns: 4 },
   );
 
-  const routerPattern = router<SessionData>(
-    {
-      neo4j: "Knowledge base queries and graph operations",
-      web_search: "Web lookups and information retrieval",
-    },
-    {
-      neo4j: neo4jPattern,
-      web_search: webPattern,
-    },
-  );
+  const routerPattern = router<SessionData>({
+    neo4j: "Knowledge base queries and graph operations",
+    web_search: "Web lookups and information retrieval",
+  });
+
+  const routesPattern = routes<SessionData>({
+    neo4j: neo4jPattern,
+    web_search: webPattern,
+  });
 
   // Memory writer: capture key facts from responses
   const memoryWriter = simpleLoop<SessionData>(
@@ -135,9 +135,9 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     patternId: "memory-synth",
   });
 
-  // Main chain: track → route → memorize → synthesize
+  // Main chain: track → route → dispatch → memorize → synthesize
   // Distillation hook runs on session close
-  return [sessionTracker, routerPattern, memoryWriter, responseSynth, distillationHook];
+  return [sessionTracker, routerPattern, routesPattern, memoryWriter, responseSynth, distillationHook];
 }
 
 export const conversationalMemoryAgent: AgentConfig = {

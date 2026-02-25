@@ -328,7 +328,7 @@ describe('simpleLoop execution', () => {
     // Verify error state is propagated to scope.data
     expect(result.data.hasError).toBe(true)
     expect(result.data.errorMessage).toBe('Tool execution failed')
-    expect(result.data.results).toBeDefined()
+    expect(result.data.resultEventIds).toBeDefined()
   })
 
   it('should propagate error state to scope.data when controller crashes', async () => {
@@ -437,9 +437,9 @@ describe('simpleLoop execution', () => {
 
     const result = await pattern.fn(scope, view)
 
-    // Should have accumulated results
-    expect(result.data.results).toBeDefined()
-    expect((result.data.results as unknown[]).length).toBe(2)
+    // Should have accumulated result event IDs
+    expect(result.data.resultEventIds).toBeDefined()
+    expect((result.data.resultEventIds as string[]).length).toBe(2)
   })
 
   it('should include callId on tool_call and tool_result events', async () => {
@@ -510,8 +510,8 @@ describe('simpleLoop execution', () => {
       patternId: 'test'
     })
 
-    // Start with existing results
-    const scope = createScope('test', { results: ['previous result'] })
+    // Start with existing result event IDs
+    const scope = createScope('test', { resultEventIds: ['ev-previous'] })
     const mockContext = {
       sessionId: 'test',
       createdAt: Date.now(),
@@ -526,7 +526,7 @@ describe('simpleLoop execution', () => {
 
     const result = await pattern.fn(scope, view)
 
-    // Should preserve existing results
-    expect(result.data.results).toContain('previous result')
+    // Should preserve existing result event IDs
+    expect(result.data.resultEventIds).toContain('ev-previous')
   })
 })

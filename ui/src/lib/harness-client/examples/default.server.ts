@@ -7,6 +7,7 @@
 
 import {
   router,
+  routes,
   simpleLoop,
   actorCritic,
   synthesizer,
@@ -59,25 +60,24 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     },
   );
 
-  const routerPattern = router<SessionData>(
-    {
-      neo4j: "Database queries and graph operations",
-      web_search: "Web lookups and information retrieval",
-      code_mode: "Multi-tool script composition",
-    },
-    {
-      neo4j: neo4jPattern,
-      web_search: webPattern,
-      code_mode: codePattern,
-    },
-  );
+  const routerPattern = router<SessionData>({
+    neo4j: "Database queries and graph operations",
+    web_search: "Web lookups and information retrieval",
+    code_mode: "Multi-tool script composition",
+  });
+
+  const routesPattern = routes<SessionData>({
+    neo4j: neo4jPattern,
+    web_search: webPattern,
+    code_mode: codePattern,
+  });
 
   const responseSynth = synthesizer<SessionData>({
     mode: "thread",
     patternId: "response-synth",
   });
 
-  return [routerPattern, responseSynth];
+  return [routerPattern, routesPattern, responseSynth];
 }
 
 export const defaultAgent: AgentConfig = {

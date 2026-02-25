@@ -221,18 +221,49 @@ describe('context', () => {
       expect((ctx.events[ctx.events.length - 1].data as { n: number }).n).toBe(2)
     })
 
-    it('should not commit any events with "never" strategy', async () => {
+    it('should not commit content events with "never" strategy but still commit lifecycle', async () => {
       const { commitEvents, createContext, createScope } = await import('../../../lib/harness-patterns/context.server')
 
       const ctx = createContext('test')
       const initialEventCount = ctx.events.length
 
       const scope = createScope('pattern', {})
-      scope.events.push({ type: 'tool_call', ts: Date.now(), patternId: 'pattern', data: {} })
+      scope.events.push(
+        { type: 'pattern_enter', ts: Date.now(), patternId: 'child', data: { pattern: 'simpleLoop' } },
+        { type: 'tool_call', ts: Date.now(), patternId: 'child', data: {} },
+        { type: 'pattern_exit', ts: Date.now(), patternId: 'child', data: { status: 'completed' } }
+      )
 
       commitEvents(ctx, scope, 'never')
 
-      expect(ctx.events.length).toBe(initialEventCount)
+      // Only lifecycle events (pattern_enter + pattern_exit) should be committed
+      expect(ctx.events.length).toBe(initialEventCount + 2)
+      expect(ctx.events[initialEventCount].type).toBe('pattern_enter')
+      expect(ctx.events[initialEventCount + 1].type).toBe('pattern_exit')
+    })
+
+    it('should always commit lifecycle events regardless of strategy', async () => {
+      const { commitEvents, createContext, createScope } = await import('../../../lib/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+      const initialEventCount = ctx.events.length
+
+      const scope = createScope('pattern', {})
+      scope.events.push(
+        { type: 'pattern_enter', ts: Date.now(), patternId: 'sub', data: { pattern: 'loop' } },
+        { type: 'tool_call', ts: Date.now(), patternId: 'sub', data: { n: 1 } },
+        { type: 'tool_result', ts: Date.now(), patternId: 'sub', data: { n: 2 } },
+        { type: 'pattern_exit', ts: Date.now(), patternId: 'sub', data: { status: 'completed' } }
+      )
+
+      commitEvents(ctx, scope, 'last')
+
+      // Lifecycle (2) + last content event (1) = 3
+      expect(ctx.events.length).toBe(initialEventCount + 3)
+      const newEvents = ctx.events.slice(initialEventCount)
+      expect(newEvents.filter(e => e.type === 'pattern_enter')).toHaveLength(1)
+      expect(newEvents.filter(e => e.type === 'pattern_exit')).toHaveLength(1)
+      expect(newEvents.filter(e => e.type === 'tool_result')).toHaveLength(1)
     })
   })
 

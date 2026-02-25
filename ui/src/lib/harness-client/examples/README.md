@@ -27,18 +27,13 @@ compositions across all available MCP servers.
 | `actorCritic` | `(actor, critic, tools, config?)` | Generate-evaluate with retry |
 | `withApproval` | `(pattern, predicate)` | Pause for user approval on matching actions |
 | `synthesizer` | `(config)` | Transform tool results into natural language |
-| `router` | `(routes, patterns)` | Intent classification to sub-patterns |
+| `router` | `(routeDescriptions, config?)` | Intent classification → sets `data.route` |
+| `routes` | `(patternMap, config?)` | Dispatch to matched sub-pattern; pass-through on `'user'` route |
 | `chain` | `(ctx, patterns)` | Sequential composition |
 | `harness` | `(...patterns)` | Top-level agent entry point |
-
-### Proposed New Patterns
-
-| Pattern | Purpose |
-|---------|---------|
-| `parallel` | Execute multiple patterns concurrently via `Promise.allSettled`, merge events |
-| `guardrail` | Multi-layered validation: input rails, execution rails, output rails, circuit breakers |
-| `judge` | Score/rank results from multiple sources, select the best |
-| `hook` | Side-effect pattern triggered by lifecycle events (session close, error, etc.) |
+| `parallel` | `(...patterns)` | Execute multiple patterns concurrently, merge events with enter/exit markers |
+| `guardrail` | `(pattern, config)` | Multi-layered validation: input rails, execution rails, output rails, circuit breakers |
+| `hook` | `(pattern, config)` | Side-effect pattern triggered by lifecycle events; supports background fire-and-forget |
 
 ---
 
@@ -530,15 +525,14 @@ const research = parallel(
   }),
 );
 
-const routerPattern = router(
-  {
-    issue_context: "Fetch issue details and linked PRs from GitHub",
-    research: "Search web and knowledge graph for related context",
-  },
-  { issue_context: issueContext, research },
-);
+const routerPattern = router({
+  issue_context: "Fetch issue details and linked PRs from GitHub",
+  research: "Search web and knowledge graph for related context",
+});
 
-return [routerPattern, synthesizer({ mode: "thread", patternId: "triage-synth" })];
+const routesPattern = routes({ issue_context: issueContext, research });
+
+return [routerPattern, routesPattern, synthesizer({ mode: "thread", patternId: "triage-synth" })];
 ```
 
 ---
@@ -744,11 +738,12 @@ const sessionTracker: ConfiguredPattern<SessionData> = {
   config: resolveConfig("session-tracker", { patternId: "session-tracker" }),
 };
 
-// Router dispatches to domain patterns (neo4j, web, code)
-const routerPattern = router(routes, domainPatterns);
+// Router classifies intent; routes dispatches to domain patterns (neo4j, web)
+const routerPattern = router(routeDescriptions);
+const routesPattern = routes(domainPatterns);
 
-// Compose: track → route → memorize → synthesize
-return [sessionTracker, routerPattern, memoryWriter, responseSynth];
+// Compose: track → route → dispatch → memorize → synthesize
+return [sessionTracker, routerPattern, routesPattern, memoryWriter, responseSynth];
 ```
 
 #### Session close hook (distillation)

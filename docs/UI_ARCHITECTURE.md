@@ -223,15 +223,15 @@ import { UserMenu } from "~/components/ark-ui/UserMenu"
 │  Home | About          [Theme] [Avatar Menu]            │
 ├────────────┬──────────────────────────┬─────────────────┤
 │            │                          │                 │
-│  Sidebar   │   Chat Messages          │  Knowledge      │
-│  (64 cols) │   (ScrollArea)           │  Graph Panel    │
+│  Sidebar   │   Chat Messages          │  Support Panel  │
+│  (64 cols) │   (ScrollArea)           │  (tabbed)       │
 │            │                          │                 │
-│  [History] │ ─────────────────────────│  (placeholder)  │
-│  Thread 1  │   Chat Input             │                 │
-│  Thread 2  │   (Field.Textarea)       │                 │
-│  Thread 3  │                          │                 │
+│  [History] │ ─────────────────────────│ Neo4j|Memory|   │
+│  Thread 1  │   Chat Input             │ All|Observabi-  │
+│  Thread 2  │   (Field.Textarea)       │ lity*|Tools     │
+│  Thread 3  │                          │  (* default)    │
 │            │                          │                 │
-│ [+ New]    │                          │  [Reset] [Exp]  │
+│ [+ New]    │                          │  [↓ Save]       │
 └────────────┴──────────────────────────┴─────────────────┘
     ↑              ↑─── Splitter ───↑          ↑
 Collapsible      60% default       40% default
@@ -243,13 +243,23 @@ Collapsible      60% default       40% default
 ```tsx
 <Splitter.Root orientation="horizontal" defaultSize={[60, 40]}>
   <Splitter.Panel id="chat">
-    <ChatInterface />  {/* Sidebar + Messages + Input */}
+    <ChatInterface
+      onGraphUpdate={accumulateGraphElements}
+      onEventsUpdate={accumulateEvents}
+      onContextUpdate={setUnifiedContext}
+    />
   </Splitter.Panel>
 
-  <Splitter.ResizeTrigger id="chat:graph" />
+  <Splitter.ResizeTrigger id="chat:support" />
 
-  <Splitter.Panel id="graph">
-    <KnowledgeGraphPanel />
+  <Splitter.Panel id="support">
+    <SupportPanel
+      graphElements={graphElements()}
+      contextEvents={contextEvents()}
+      unifiedContext={unifiedContext()}
+      onClearGraph={clearGraph}
+      onClearEvents={clearEvents}
+    />
   </Splitter.Panel>
 </Splitter.Root>
 ```
@@ -296,10 +306,28 @@ Main container combining sidebar and chat area:
 - **States:** Disabled during AI processing
 - **Styling:** Neon cyan border on focus
 
-#### 5. KnowledgeGraphPanel.tsx
-- Placeholder for graph visualization
-- Header with title and description
-- Footer with action buttons (Reset View, Export Graph)
+#### 5. AgentSelector.tsx
+**Props:** `selectedAgent: string`, `onAgentChange: (id: string) => void`, `disabled: boolean`
+- Dropdown listing registered agents (default, default-neo4j, web-search, conversational-memory, etc.)
+- Clearing the session on agent switch
+
+#### 6. SupportPanel.tsx
+Tabbed right panel. **Observability is the default tab.**
+
+| Tab | Content |
+|-----|---------|
+| Neo4j | Graph visualization for Neo4j query results |
+| Memory | Graph visualization for Memory MCP entities |
+| All | Combined graph view |
+| **Observability** *(default)* | Event timeline + LLM call detail |
+| Tools | MCP tool configuration via `ToolsPanel` |
+
+#### 7. ObservabilityPanel.tsx
+Displays the full agent event timeline:
+- Events are merged into `TimelineItem[]` via `buildTimelineItems()`: `tool_call` + `tool_result` pairs sharing the same `callId` appear as a single merged row
+- Click any row → detail overlay with args / result / LLM call data
+- **Save button** (floating, bottom-right): calls `showSaveFilePicker()` to save the full `UnifiedContext` as a named JSON file; falls back to `<a download>` on browsers without File System Access API
+- Requires `context?: UnifiedContext` prop threaded down from `index.tsx` → `SupportPanel` → `ObservabilityPanel`
 
 ### Theme System
 
@@ -356,20 +384,28 @@ Main container combining sidebar and chat area:
 ### Component Data Flow
 
 ```
-ChatInterface (state management)
-    ├─ messages: Signal<Message[]>
-    ├─ isProcessing: Signal<boolean>
-    ├─ sidebarCollapsed: Signal<boolean>
-    └─ handleSendMessage()
-         │
-         ├─> ChatMessages (props.messages)
-         │       └─ Auto-scroll on new messages
-         │
-         ├─> ChatInput (props.onSend, props.disabled)
-         │       └─ Triggers handleSendMessage()
-         │
-         └─> ChatSidebar (props.collapsed, props.onToggle)
-                 └─ Dummy thread data (static)
+index.tsx (top-level state)
+    ├─ graphElements: Signal<GraphElement[]>     ← accumulated, deduplicated
+    ├─ contextEvents: Signal<ContextEvent[]>     ← accumulated per turn
+    ├─ unifiedContext: Signal<UnifiedContext?>   ← latest full session context
+    ├─ highlightedIds: Signal<string[]>          ← newly added graph node IDs
+    │
+    ├─> ChatInterface
+    │       ├─ messages: Signal<Message[]>
+    │       ├─ isProcessing: Signal<boolean>
+    │       ├─ selectedAgent: Signal<string>
+    │       │
+    │       ├─> AgentSelector (selectedAgent, onAgentChange, disabled)
+    │       ├─> ChatMessages (messages, onApproveWrite, onRejectWrite)
+    │       ├─> ChatInput (onSend, disabled)
+    │       └─> ChatSidebar (collapsed, onToggle)
+    │
+    └─> SupportPanel
+            ├─> GraphVisualization (neo4j / memory / all graph elements)
+            ├─> ObservabilityPanel (events, context, onClear)
+            │       ├─ buildTimelineItems() — merges tool pairs by callId
+            │       └─ Save button → showSaveFilePicker() / <a download>
+            └─> ToolsPanel
 ```
 
 ### Message Type
@@ -379,6 +415,14 @@ interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: Date
+  toolCall?: {                          // Present when status === 'paused' (approval gate)
+    type: string
+    status: 'pending' | 'executed' | 'error'
+    tool: string
+    explanation?: string
+    isReadOnly: boolean
+    error?: string
+  }
 }
 ```
 
@@ -419,9 +463,11 @@ onClick={() => props.onToggle()}
 ## Quick Commands
 
 ```bash
-pnpm dev        # Start dev server
-pnpm build      # Production build
-pnpm eslint     # Run linter
+pnpm dev          # Start dev server (port 3444)
+pnpm dev:exposed  # Bind to 0.0.0.0 (needed for Docker / Playwright MCP)
+pnpm build        # Production build
+pnpm eslint       # Run linter
+pnpm test:run     # Run vitest unit tests
 ```
 
 ---
@@ -453,13 +499,13 @@ ui/
 │   │       ├── ChatMessages.tsx       # Message display area
 │   │       ├── ChatInput.tsx          # Autoresize textarea
 │   │       ├── GraphVisualization.tsx # Cytoscape graph display
-│   │       ├── SupportPanel.tsx       # Tabbed support panel
-│   │       ├── ObservabilityPanel.tsx # Telemetry timeline
+│   │       ├── SupportPanel.tsx       # Tabbed right panel (Neo4j/Memory/All/Observability/Tools)
+│   │       ├── ObservabilityPanel.tsx # Event timeline + tool-pair merging + Save button
 │   │       ├── EventDetailOverlay.tsx # Event detail modal
-│   │       ├── ToolsPanel.tsx         # Tool configuration UI
-│   │       ├── ToolCallDisplay.tsx    # Tool call status display
-│   │       ├── EnvVarManager.tsx      # Environment variable config
-│   │       └── KnowledgeGraphPanel.tsx # Graph visualization panel
+│   │       ├── ToolsPanel.tsx         # MCP tool configuration UI
+│   │       ├── ToolCallDisplay.tsx    # Tool call status display (approval gate)
+│   │       ├── AgentSelector.tsx      # Agent selection dropdown
+│   │       └── EnvVarManager.tsx      # Environment variable config
 │   └── lib/
 │       ├── auth/                  # Authentication
 │       │   ├── client.ts          # StackClientApp
@@ -472,16 +518,31 @@ ui/
 │       │   ├── mcp-client.ts      # MCP SDK client
 │       │   ├── telemetry.ts       # Telemetry types
 │       │   └── tool-config.ts     # Tool configuration
-│       ├── harness-patterns/      # Server-side orchestration
-│       │   ├── orchestrator.server.ts
-│       │   ├── patterns.server.ts
-│       │   └── types.ts
-│       ├── graph/                 # Graph utilities
-│       │   ├── transform.ts       # Neo4j → Cytoscape
-│       │   └── extractors.ts      # Event data extractors
-│       └── neo4j/                 # Direct Neo4j client
-│           ├── client.ts
-│           └── queries.ts
+│       ├── harness-patterns/      # Composable agent pattern framework
+│       │   ├── index.ts           # Public exports
+│       │   ├── types.ts           # UnifiedContext, PatternScope, ContextEvent, callId, etc.
+│       │   ├── context.server.ts  # createContext(), createEvent(), generateId()
+│       │   ├── tools.server.ts    # Tools() — MCP tool grouping by namespace
+│       │   ├── router.server.ts   # router() pattern
+│       │   ├── harness.server.ts  # harness(), resumeHarness(), continueSession()
+│       │   ├── routing.server.ts  # BAML router integration
+│       │   ├── state.server.ts    # Session state (serialize / deserialize)
+│       │   ├── mcp-client.server.ts # callTool(), listTools()
+│       │   ├── assert.server.ts   # Server-only import guards
+│       │   └── patterns/
+│       │       ├── simpleLoop.server.ts   # ReAct loop + callId on tool events
+│       │       ├── actorCritic.server.ts  # Generate-evaluate + callId
+│       │       ├── withApproval.server.ts # Approval gate + pattern_enter/exit
+│       │       ├── parallel.server.ts     # Concurrent branches + pattern_enter/exit
+│       │       ├── guardrail.server.ts    # Rail validation + pattern_enter/exit
+│       │       ├── hook.server.ts         # Lifecycle hook + pattern_enter/exit
+│       │       ├── synthesizer.server.ts  # Final response synthesis
+│       │       ├── chain.server.ts        # Sequential composition
+│       │       └── event-view.server.ts   # EventViewImpl (fluent query API)
+│       └── harness-client/        # Pre-built agent server actions
+│           ├── index.ts           # processMessageWithAgent(), extractGraphFromResult()
+│           ├── types.ts           # GraphElement, HarnessData, etc.
+│           └── examples/          # 10 pre-built agent configurations
 ```
 
 ---

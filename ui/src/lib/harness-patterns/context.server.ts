@@ -52,6 +52,7 @@ export function createContext<T = Record<string, unknown>>(
 
   // Add initial user message event
   ctx.events.push({
+    id: generateId('ev'),
     type: 'user_message',
     ts: now,
     patternId: 'harness',
@@ -100,6 +101,7 @@ export function createEvent(
   llmCall?: LLMCallData
 ): ContextEvent {
   return {
+    id: generateId('ev'),
     type,
     ts: Date.now(),
     patternId,
@@ -139,28 +141,37 @@ export function trackEvent(
 // Commit Strategies
 // ============================================================================
 
+/** Event types that are always committed regardless of strategy */
+const LIFECYCLE_TYPES: Set<EventType> = new Set(['pattern_enter', 'pattern_exit'])
+
 /** Commit scope events to context based on strategy */
 export function commitEvents<T>(
   ctx: UnifiedContext<T>,
   scope: PatternScope<unknown>,
   strategy: CommitStrategy
 ): void {
+  // Lifecycle events (pattern_enter/exit) are always committed — they're structural
+  const lifecycle = scope.events.filter(e => LIFECYCLE_TYPES.has(e.type))
+  const content = scope.events.filter(e => !LIFECYCLE_TYPES.has(e.type))
+
+  ctx.events.push(...lifecycle)
+
   switch (strategy) {
     case 'always':
-      ctx.events.push(...scope.events)
+      ctx.events.push(...content)
       break
     case 'on-success':
       if (ctx.status !== 'error') {
-        ctx.events.push(...scope.events)
+        ctx.events.push(...content)
       }
       break
     case 'last':
-      if (scope.events.length > 0) {
-        ctx.events.push(scope.events.at(-1)!)
+      if (content.length > 0) {
+        ctx.events.push(content.at(-1)!)
       }
       break
     case 'never':
-      // Discard all events
+      // Discard content events (lifecycle still committed above)
       break
   }
 }
@@ -176,6 +187,7 @@ export function enterPattern<T>(
   patternName: string
 ): void {
   ctx.events.push({
+    id: generateId('ev'),
     type: 'pattern_enter',
     ts: Date.now(),
     patternId,
@@ -189,6 +201,7 @@ export function exitPattern<T>(
   patternId: string
 ): void {
   ctx.events.push({
+    id: generateId('ev'),
     type: 'pattern_exit',
     ts: Date.now(),
     patternId,
@@ -209,6 +222,7 @@ export function setError<T>(
   ctx.status = 'error'
   ctx.error = error
   ctx.events.push({
+    id: generateId('ev'),
     type: 'error',
     ts: Date.now(),
     patternId,
