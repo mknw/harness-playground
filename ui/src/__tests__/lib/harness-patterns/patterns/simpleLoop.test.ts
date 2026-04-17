@@ -328,7 +328,6 @@ describe('simpleLoop execution', () => {
     // Verify error state is propagated to scope.data
     expect(result.data.hasError).toBe(true)
     expect(result.data.errorMessage).toBe('Tool execution failed')
-    expect(result.data.resultEventIds).toBeDefined()
   })
 
   it('should propagate error state to scope.data when controller crashes', async () => {
@@ -437,9 +436,9 @@ describe('simpleLoop execution', () => {
 
     const result = await pattern.fn(scope, view)
 
-    // Should have accumulated result event IDs
-    expect(result.data.resultEventIds).toBeDefined()
-    expect((result.data.resultEventIds as string[]).length).toBe(2)
+    // Should have tool_result events from both iterations
+    const toolResults = result.events.filter(e => e.type === 'tool_result')
+    expect(toolResults.length).toBe(2)
   })
 
   it('should include callId on tool_call and tool_result events', async () => {
@@ -496,37 +495,4 @@ describe('simpleLoop execution', () => {
     expect(callData.callId).toBe(resultData.callId)
   })
 
-  it('should use existing results from scope data', async () => {
-    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
-    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
-    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
-
-    const mockController = vi.fn().mockResolvedValue({
-      action: mockFinalAction('Done'),
-      llmCall: undefined
-    })
-
-    const pattern = simpleLoop(mockController, ['Return'], {
-      patternId: 'test'
-    })
-
-    // Start with existing result event IDs
-    const scope = createScope('test', { resultEventIds: ['ev-previous'] })
-    const mockContext = {
-      sessionId: 'test',
-      createdAt: Date.now(),
-      events: [
-        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
-      ],
-      status: 'running' as const,
-      data: {},
-      input: 'test'
-    }
-    const view = createEventView(mockContext)
-
-    const result = await pattern.fn(scope, view)
-
-    // Should preserve existing result event IDs
-    expect(result.data.resultEventIds).toContain('ev-previous')
-  })
 })

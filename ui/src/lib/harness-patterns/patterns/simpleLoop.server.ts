@@ -21,17 +21,41 @@ import type {
   ControllerActionEventData
 } from '../types'
 import { MAX_TOOL_TURNS } from '../types'
-import { trackEvent, resolveConfig, generateId, createEvent, shouldTrack } from '../context.server'
+import { trackEvent, resolveConfig, generateId } from '../context.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
 
 assertServerOnImport()
+
+// ============================================================================
+// Reference Resolution
+// ============================================================================
+
+/**
+ * Resolve `ref:<eventId>` values in tool args by expanding them
+ * to the full tool result data from the UnifiedContext.
+ */
+function resolveRefs(
+  args: Record<string, unknown>,
+  view: EventView
+): Record<string, unknown> {
+  const resolved = { ...args }
+  const allEvents = view.fromAll().get()
+  for (const [key, value] of Object.entries(resolved)) {
+    if (typeof value === 'string' && value.startsWith('ref:')) {
+      const eventId = value.slice(4)
+      const event = allEvents.find(e => e.id === eventId)
+      if (event && event.type === 'tool_result') {
+        resolved[key] = (event.data as ToolResultEventData).result
+      }
+    }
+  }
+  return resolved
+}
 
 export interface SimpleLoopData {
   turn?: number
   intent?: string
   lastAction?: ControllerAction
-  /** Event IDs of tool_result events (use EventView to retrieve full data) */
-  resultEventIds?: string[]
   response?: string
   /** Whether an error occurred during loop execution */
   hasError?: boolean
@@ -70,10 +94,12 @@ export function simpleLoop<T extends SimpleLoopData>(
     view: EventView
   ): Promise<PatternScope<T>> => {
     const data = scope.data
-    const resultEventIds: string[] = [...(data.resultEventIds ?? [])]
     const turns: LoopTurn[] = []
     let hasError = false
     let errorMessage: string | undefined
+
+    // Build prior tool context from previous turns (compact pointers for older results)
+    const priorToolContext = view.fromAll().tools().serializeCompact({ recentTurns: 0 }) || undefined
 
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
@@ -99,7 +125,8 @@ export function simpleLoop<T extends SimpleLoopData>(
             previousResults,
             turn,
             config?.schema,
-            collector
+            collector,
+            priorToolContext
           )
           action = controllerResult.action
 
@@ -124,7 +151,6 @@ export function simpleLoop<T extends SimpleLoopData>(
           scope.data = {
             ...scope.data,
             lastAction: action,
-            resultEventIds,
             turn
           }
           break
@@ -150,7 +176,10 @@ export function simpleLoop<T extends SimpleLoopData>(
         // Generate correlation ID for this tool call/result pair
         const callId = generateId('tc')
 
-        // Track tool call event
+        // Resolve ref: pointers in args (expands to full tool result data from prior events)
+        const resolvedArgs = resolveRefs(args, view)
+
+        // Track tool call event (with original args for readability)
         trackEvent(
           scope,
           'tool_call',
@@ -158,27 +187,22 @@ export function simpleLoop<T extends SimpleLoopData>(
           resolved.trackHistory
         )
 
-        // Execute tool
-        const result = await callTool(action.tool_name, args)
+        // Execute tool with resolved args
+        const result = await callTool(action.tool_name, resolvedArgs)
 
-        // Track tool result event and capture its ID
-        const resultEvent = createEvent(
+        // Track tool result event
+        trackEvent(
+          scope,
           'tool_result',
-          scope.id,
           {
             callId,
             tool: action.tool_name,
             result: result.data,
             success: result.success,
             error: result.error
-          } as ToolResultEventData
+          } as ToolResultEventData,
+          resolved.trackHistory
         )
-        if (shouldTrack('tool_result', resolved.trackHistory)) {
-          scope.events.push(resultEvent)
-        }
-        if (resultEvent.id) {
-          resultEventIds.push(resultEvent.id)
-        }
 
         // Record completed turn for LoopController history.
         // Truncate result to avoid overflowing reasoning models on subsequent turns.
@@ -208,8 +232,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         scope.data = {
           ...scope.data,
           turn,
-          lastAction: action,
-          resultEventIds
+          lastAction: action
         }
       }
 
@@ -221,8 +244,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         scope.data = {
           ...scope.data,
           hasError: true,
-          errorMessage,
-          resultEventIds
+          errorMessage
         }
       }
 
@@ -235,8 +257,7 @@ export function simpleLoop<T extends SimpleLoopData>(
       scope.data = {
         ...scope.data,
         hasError: true,
-        errorMessage: msg,
-        resultEventIds
+        errorMessage: msg
       }
 
       return scope

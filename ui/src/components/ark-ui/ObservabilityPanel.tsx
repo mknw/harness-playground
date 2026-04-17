@@ -262,6 +262,10 @@ const EventRow = (props: {
   bgTint?: string
 }) => {
   const { type, patternId, data } = props.event
+
+  // Guard against malformed events (e.g. from SSE stream)
+  if (!type) return null
+
   const icon = eventIcons[type]
   const preview = getEventPreview(type, data)
   const lane = getEventLane(type)

@@ -20,7 +20,7 @@ import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
 import { AgentSelector } from './AgentSelector'
-import { processMessageWithAgent, approveAction, rejectAction, clearSession, extractGraphFromResult } from '~/lib/harness-client'
+import { approveAction, rejectAction, clearSession, extractGraphFromResult, extractGraphElements } from '~/lib/harness-client'
 import type { GraphElement } from './SupportPanel'
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
 
@@ -92,37 +92,102 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     setIsProcessing(true)
 
     try {
-      // Process message via server action with selected agent
-      const result = await processMessageWithAgent(sessionId, content, selectedAgent())
+      // Stream events via SSE endpoint for real-time updates
+      const response = await fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          message: content,
+          agentId: selectedAgent()
+        })
+      })
 
-      // Extract graph elements from result and update visualization
-      const graphElements = extractGraphFromResult(result)
-      if (graphElements.length > 0 && props.onGraphUpdate) {
-        props.onGraphUpdate(graphElements)
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`)
       }
 
-      // Emit only new context events (delta since last turn)
-      if (result.context?.events && props.onEventsUpdate) {
-        const newEvents = result.context.events.slice(prevEventCount)
-        prevEventCount = result.context.events.length
-        if (newEvents.length > 0) props.onEventsUpdate(newEvents)
-      }
-      if (result.context && props.onContextUpdate) {
-        props.onContextUpdate(result.context)
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('No response stream')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let finalResult: { response: string; data: Record<string, unknown>; status: string; context: UnifiedContext } | null = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+
+        // SSE frames are delimited by double newlines
+        const frames = buffer.split('\n\n')
+        buffer = frames.pop() ?? '' // Keep incomplete frame in buffer
+
+        for (const frame of frames) {
+          if (!frame.trim()) continue
+
+          let eventType = 'message'
+          let dataStr = ''
+
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim()
+            } else if (line.startsWith('data: ')) {
+              dataStr += line.slice(6)
+            }
+          }
+
+          if (!dataStr) continue
+
+          try {
+            const parsed = JSON.parse(dataStr)
+
+            if (eventType === 'done') {
+              finalResult = parsed
+            } else if (eventType === 'error') {
+              throw new Error(parsed.error)
+            } else if (parsed.type) {
+              // Regular event — stream to UI
+              const evt = parsed as ContextEvent
+              if (props.onEventsUpdate) {
+                props.onEventsUpdate([evt])
+              }
+
+              // Reactive graph update on tool_result events
+              if (evt.type === 'tool_result' && props.onGraphUpdate) {
+                const graphElements = extractGraphElements([evt])
+                if (graphElements.length > 0) {
+                  props.onGraphUpdate(graphElements)
+                }
+              }
+            }
+          } catch (e) {
+            if (e instanceof SyntaxError) continue // Skip malformed JSON
+            throw e
+          }
+        }
       }
 
-      // Build assistant message
+      // Update event count cursor and emit final context
+      if (finalResult?.context) {
+        prevEventCount = finalResult.context.events?.length ?? 0
+        if (props.onContextUpdate) {
+          props.onContextUpdate(finalResult.context as UnifiedContext)
+        }
+      }
+
+      // Build assistant message from final result
       const assistantMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
-        content: result.response,
+        content: finalResult?.response ?? '',
         timestamp: new Date(),
-        // Map pending approval to toolCall for UI display
-        toolCall: result.status === 'paused' && result.data.pendingAction ? {
+        toolCall: finalResult?.status === 'paused' && (finalResult.data as Record<string, unknown>).pendingAction ? {
           type: 'neo4j',
           status: 'pending',
-          tool: result.data.pendingAction.action,
-          explanation: result.data.pendingAction.reason,
+          tool: ((finalResult.data as Record<string, unknown>).pendingAction as { action: string }).action,
+          explanation: ((finalResult.data as Record<string, unknown>).pendingAction as { reason: string }).reason,
           isReadOnly: false
         } : undefined
       }

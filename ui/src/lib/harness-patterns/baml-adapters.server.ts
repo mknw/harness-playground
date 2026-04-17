@@ -48,7 +48,8 @@ export type ControllerFnWithLLMData = (
   previous_results: string,
   n_turn: number,
   schema?: string,
-  collector?: Collector
+  collector?: Collector,
+  priorContext?: string
 ) => Promise<ControllerCallResult>
 
 /** Critic function that returns result + observability data */
@@ -181,7 +182,8 @@ export function createLoopControllerAdapter(
     previous_results: string,
     n_turn: number,
     schema?: string,
-    collector?: Collector
+    collector?: Collector,
+    priorContext?: string
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
@@ -192,12 +194,13 @@ export function createLoopControllerAdapter(
     // Parse previous results into LoopTurn format
     const turns: LoopTurn[] = parseResultsToTurns(previous_results, n_turn)
 
-    // Build context from schema and prefix
+    // Build context from schema, prefix, and prior tool results
     let context: string | undefined
-    if (schema || contextPrefix) {
+    if (schema || contextPrefix || priorContext) {
       const parts: string[] = []
       if (contextPrefix) parts.push(contextPrefix)
       if (schema) parts.push(`GRAPH SCHEMA:\n${schema}`)
+      if (priorContext) parts.push(`PREVIOUS TOOL RESULTS:\n${priorContext}`)
       context = parts.join('\n\n')
     }
 

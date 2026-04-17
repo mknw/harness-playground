@@ -20,6 +20,10 @@ function LoopController(
     {% if context %}
     CONTEXT:
     {{ context }}
+
+    When previous results are shown in compact form with a reference ID (ref:ev-XXXXX),
+    you can pass that reference as a tool argument value. The system will automatically
+    expand it to the full data before executing the tool.
     {% endif %}
 
     AVAILABLE TOOLS:

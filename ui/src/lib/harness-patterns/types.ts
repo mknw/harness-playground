@@ -28,15 +28,6 @@ export interface ScriptExecutionEvent {
 /** Status of context */
 export type CtxStatus = 'running' | 'paused' | 'done' | 'error'
 
-/** @deprecated Use UnifiedContext instead */
-export interface Ctx<T = Record<string, unknown>> {
-  input: string
-  data: T
-  status: CtxStatus
-  error?: string
-  startTime: number
-}
-
 // ============================================================================
 // UnifiedContext - Source of Truth
 // ============================================================================
@@ -220,16 +211,14 @@ export interface EventView {
   since(ts: number): EventView
   get(): ContextEvent[]
   serialize(): string
+  serializeCompact(options?: { recentTurns?: number }): string
   exists(): boolean
   count(): number
   hasErrors(): boolean
   lastError(): string | undefined
 }
 
-/** @deprecated Use ScopedPattern instead */
-export type Pattern<T> = (ctx: Ctx<T>) => Promise<Ctx<T>>
-
-/** New pattern signature with isolated scope and event view */
+/** Pattern signature with isolated scope and event view */
 export type ScopedPattern<T> = (
   scope: PatternScope<T>,
   view: EventView
@@ -285,30 +274,6 @@ export interface HarnessResult<T> {
   status: CtxStatus
   duration_ms: number
 }
-
-// ============================================================================
-// Thread (deprecated - use UnifiedContext)
-// ============================================================================
-
-/**
- * @deprecated Use ContextEvent instead. ThreadEvent uses string timestamps
- * and 'tool_response' instead of 'tool_result'.
- */
-export interface ThreadEvent {
-  type:
-    | 'user_message'
-    | 'tool_call'
-    | 'tool_response'
-    | 'assistant_message'
-    | 'approval_request'
-    | 'approval_response'
-    | 'error'
-  timestamp: string
-  data: unknown
-}
-
-/** @deprecated Use UnifiedContext.events instead */
-export type SerializedThread = ThreadEvent[]
 
 // ============================================================================
 // Loop History (for thread mode synthesis)

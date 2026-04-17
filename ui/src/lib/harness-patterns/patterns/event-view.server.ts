@@ -240,6 +240,46 @@ export class EventViewImpl implements IEventView {
       .join('\n')
   }
 
+  /**
+   * Serialize events with compact pointers for older tool results.
+   *
+   * Events within the last `recentTurns` user turns render in full.
+   * Older tool_result events render as compact pointers with ref IDs,
+   * allowing the LLM to reference them via `ref:<eventId>`.
+   *
+   * @param options.recentTurns - Number of recent user turns to show in full (default: 1)
+   */
+  serializeCompact(options?: { recentTurns?: number }): string {
+    const recentTurns = options?.recentTurns ?? 1
+    const events = this.get()
+    if (events.length === 0) return ''
+
+    // Find turn boundaries by locating user_message events
+    const userMessageIndices: number[] = []
+    for (let i = 0; i < this.ctx.events.length; i++) {
+      if (this.ctx.events[i].type === 'user_message') {
+        userMessageIndices.push(i)
+      }
+    }
+
+    // Determine the timestamp cutoff: events from the last N user turns are "recent"
+    let recentCutoffTs = 0
+    if (userMessageIndices.length > recentTurns) {
+      const cutoffIdx = userMessageIndices[userMessageIndices.length - recentTurns]
+      recentCutoffTs = this.ctx.events[cutoffIdx].ts
+    }
+
+    return events
+      .map((event) => {
+        const isRecent = event.ts >= recentCutoffTs
+        if (!isRecent && event.type === 'tool_result' && event.id) {
+          return formatEventCompact(event)
+        }
+        return formatEvent(event)
+      })
+      .join('\n')
+  }
+
   /** Check if any events match */
   exists(): boolean {
     return this.get().length > 0
@@ -284,6 +324,17 @@ export class EventViewImpl implements IEventView {
 function formatEvent(event: ContextEvent): string {
   const content = formatEventData(event)
   return `<${event.type}>${content}</${event.type}>`
+}
+
+/** Format a tool_result event as a compact pointer */
+function formatEventCompact(event: ContextEvent): string {
+  const data = event.data as ToolResultEventData
+  const resultStr = typeof data.result === 'string'
+    ? data.result
+    : JSON.stringify(data.result)
+  const preview = resultStr.slice(0, 120).replace(/\n/g, ' ')
+  const suffix = resultStr.length > 120 ? '...' : ''
+  return `<tool_result id="${event.id}" tool="${data.tool}" compact="true">${preview}${suffix} (${resultStr.length} chars). Use ref:${event.id} to access full data.</tool_result>`
 }
 
 /** Format event data based on type */

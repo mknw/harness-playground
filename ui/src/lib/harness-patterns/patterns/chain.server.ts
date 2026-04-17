@@ -7,6 +7,7 @@
 import { assertServerOnImport } from '../assert.server'
 import type {
   UnifiedContext,
+  ContextEvent,
   ConfiguredPattern,
   PatternConfig
 } from '../types'
@@ -45,7 +46,8 @@ assertServerOnImport()
  */
 export async function runChain<T extends Record<string, unknown>>(
   ctx: UnifiedContext<T>,
-  patterns: ConfiguredPattern<T>[]
+  patterns: ConfiguredPattern<T>[],
+  onEvent?: (event: ContextEvent) => void
 ): Promise<UnifiedContext<T>> {
   if (patterns.length === 0) {
     return ctx
@@ -78,7 +80,15 @@ export async function runChain<T extends Record<string, unknown>>(
         const result = await pattern.fn(scope, view)
 
         // 5. Commit events based on strategy
+        const beforeLen = ctx.events.length
         commitEvents(ctx, result, pattern.config.commitStrategy!)
+
+        // 5b. Emit newly committed events via callback
+        if (onEvent) {
+          for (let j = beforeLen; j < ctx.events.length; j++) {
+            onEvent(ctx.events[j])
+          }
+        }
 
         // 6. Pass data forward
         currentData = result.data

@@ -10,21 +10,8 @@ import {
   harness,
   resumeHarness,
   continueSession,
-  router,
-  routes,
-  simpleLoop,
-  actorCritic,
-  synthesizer,
-  withApproval,
-  approvalPredicates,
-  Tools,
-  callTool,
-  createNeo4jController,
-  createWebSearchController,
-  createActorControllerAdapter,
-  createCriticAdapter,
   type HarnessResultScoped,
-  type ConfiguredPattern,
+  type ContextEvent,
 } from "../harness-patterns";
 import {
   getOrCreateSession,
@@ -36,76 +23,11 @@ import {
 import { getAgent, getAgentMetadata } from "./registry.server";
 
 // ============================================================================
-// Agent Configuration
-// ============================================================================
-
-async function getSchema(): Promise<string> {
-  const result = await callTool("get_neo4j_schema", {});
-  return result.success ? JSON.stringify(result.data) : "";
-}
-
-async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
-  const tools = await Tools();
-  const schema = await getSchema();
-
-  // Create controller adapters using the new BAML functions
-  const neo4jController = createNeo4jController(tools.neo4j ?? []);
-  const webController = createWebSearchController(tools.web ?? []);
-  const codeController = createActorControllerAdapter(tools.all);
-  const codeCritic = createCriticAdapter();
-
-  const neo4jPattern = withApproval(
-    simpleLoop<SessionData>(neo4jController, tools.neo4j ?? [], {
-      patternId: "neo4j-query",
-      schema,
-    }),
-    approvalPredicates.mutations,
-  );
-
-  const webPattern = simpleLoop<SessionData>(webController, tools.web ?? [], {
-    patternId: "web-search",
-  });
-
-  const codePattern = actorCritic<SessionData>(
-    codeController,
-    codeCritic,
-    tools.all,
-    {
-      patternId: "code-mode",
-    },
-  );
-
-  const routeDescriptions = {
-    neo4j: "Database queries and graph operations",
-    web_search: "Web lookups and information retrieval",
-    code_mode: "Multi-tool script composition",
-  };
-
-  const routePatterns = {
-    neo4j: neo4jPattern,
-    web_search: webPattern,
-    code_mode: codePattern,
-  };
-
-  // Synthesizer generates human-readable response from tool results
-  const responseSynth = synthesizer<SessionData>({
-    mode: "thread",
-    patternId: "response-synth",
-  });
-
-  return [
-    router<SessionData>(routeDescriptions),
-    routes<SessionData>(routePatterns),
-    responseSynth,
-  ];
-}
-
-// ============================================================================
 // Server Actions
 // ============================================================================
 
 /**
- * Process a user message.
+ * Process a user message using the default agent.
  *
  * @param sessionId - Unique session identifier (from createUniqueId())
  * @param message - User message content
@@ -115,33 +37,7 @@ export async function processMessage(
   sessionId: string,
   message: string,
 ): Promise<HarnessResultScoped<SessionData>> {
-  const session = getOrCreateSession(sessionId);
-
-  // Lazy init patterns
-  if (session.patterns.length === 0) {
-    session.patterns = await createPatterns();
-  }
-
-  let result: HarnessResultScoped<SessionData>;
-
-  // Continue existing session or start new one
-  if (session.serializedContext) {
-    result = await continueSession(
-      session.serializedContext,
-      session.patterns,
-      message,
-    );
-  } else {
-    const agent = harness(...session.patterns);
-    result = await agent(message, sessionId);
-  }
-
-  updateSession(sessionId, {
-    lastResult: result,
-    serializedContext: result.serialized,
-  });
-
-  return result;
+  return processMessageWithAgent(sessionId, message, "default");
 }
 
 /**
@@ -293,4 +189,61 @@ export async function getAgentList(): Promise<
   }>
 > {
   return getAgentMetadata();
+}
+
+/**
+ * Process a message with streaming events via callback.
+ * Used by the SSE endpoint for real-time event delivery.
+ *
+ * @param sessionId - Session identifier
+ * @param message - User message
+ * @param agentId - Agent ID
+ * @param onEvent - Callback for each committed event
+ * @returns HarnessResult after completion
+ */
+export async function processMessageStreaming(
+  sessionId: string,
+  message: string,
+  agentId: string = "default",
+  onEvent: (event: ContextEvent) => void,
+): Promise<HarnessResultScoped<SessionData>> {
+  const session = getOrCreateSession(sessionId);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sessionAny = session as any;
+  const currentAgentId = sessionAny.agentId as string | undefined;
+  if (currentAgentId !== agentId) {
+    session.patterns = [];
+    sessionAny.agentId = agentId;
+  }
+
+  if (session.patterns.length === 0) {
+    const agent = getAgent(agentId);
+    if (!agent) {
+      throw new Error(`Unknown agent: ${agentId}`);
+    }
+    session.patterns = await agent.createPatterns();
+    sessionAny.agentId = agentId;
+  }
+
+  let result: HarnessResultScoped<SessionData>;
+
+  if (session.serializedContext) {
+    result = await continueSession(
+      session.serializedContext,
+      session.patterns,
+      message,
+      onEvent,
+    );
+  } else {
+    const agent = harness(...session.patterns);
+    result = await agent(message, sessionId, undefined, onEvent);
+  }
+
+  updateSession(sessionId, {
+    lastResult: result,
+    serializedContext: result.serialized,
+  });
+
+  return result;
 }

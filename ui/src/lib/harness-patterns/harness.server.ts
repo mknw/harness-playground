@@ -9,6 +9,7 @@ import { assertServerOnImport } from './assert.server'
 import { runChain } from './patterns/chain.server'
 import type {
   CtxStatus,
+  ContextEvent,
   HarnessResult,
   UnifiedContext,
   ConfiguredPattern,
@@ -54,8 +55,8 @@ export interface HarnessResultScoped<T> extends HarnessResult<T> {
  */
 export function harness<T extends HarnessData & Record<string, unknown>>(
   ...patterns: ConfiguredPattern<T>[]
-): (input: string, sessionId?: string, initialData?: Partial<T>) => Promise<HarnessResultScoped<T>> {
-  return async (input, sessionId, initialData) => {
+): (input: string, sessionId?: string, initialData?: Partial<T>, onEvent?: (event: ContextEvent) => void) => Promise<HarnessResultScoped<T>> {
+  return async (input, sessionId, initialData, onEvent) => {
     const startTime = Date.now()
 
     // Create UnifiedContext
@@ -63,7 +64,7 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
 
     try {
       // Execute patterns using chain
-      await runChain(ctx, patterns)
+      await runChain(ctx, patterns, onEvent)
 
       // Extract response from final data
       const response = ctx.data.response ?? ''
@@ -114,7 +115,8 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
 export async function resumeHarness<T extends HarnessData & Record<string, unknown> & { approved?: boolean }>(
   serializedContext: string,
   patterns: ConfiguredPattern<T>[],
-  approved: boolean
+  approved: boolean,
+  onEvent?: (event: ContextEvent) => void
 ): Promise<HarnessResultScoped<T>> {
   // Restore context from serialized state
   const ctx = deserializeContext<T>(serializedContext)
@@ -140,7 +142,7 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
 
   try {
     // Re-run patterns - withApproval will handle the resume
-    await runChain(ctx, patterns)
+    await runChain(ctx, patterns, onEvent)
 
     const response = ctx.data.response ?? ''
     const finalStatus = ctx.status as CtxStatus // chain may mutate ctx.status
@@ -188,7 +190,8 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
 export async function continueSession<T extends HarnessData & Record<string, unknown>>(
   serializedContext: string,
   patterns: ConfiguredPattern<T>[],
-  newInput: string
+  newInput: string,
+  onEvent?: (event: ContextEvent) => void
 ): Promise<HarnessResultScoped<T>> {
   // Restore context from serialized state
   const ctx = deserializeContext<T>(serializedContext)
@@ -210,7 +213,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
 
   try {
     // Execute patterns
-    await runChain(ctx, patterns)
+    await runChain(ctx, patterns, onEvent)
 
     const response = ctx.data.response ?? ''
     const finalStatus = ctx.status as CtxStatus // chain may mutate ctx.status
