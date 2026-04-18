@@ -32,6 +32,10 @@ export interface ChatInterfaceProps {
   onGraphUpdate?: (elements: GraphElement[]) => void
   onEventsUpdate?: (events: ContextEvent[]) => void
   onContextUpdate?: (ctx: UnifiedContext) => void
+  /** Map of entity/relation names → graph element IDs for interactive highlighting */
+  graphEntityNames?: Map<string, string[]>
+  /** Callback to highlight specific graph element IDs */
+  onHighlightEntities?: (ids: string[]) => void
 }
 
 // ============================================================================
@@ -338,6 +342,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           messages={messages()}
           onApproveWrite={handleApproveWrite}
           onRejectWrite={handleRejectWrite}
+          graphEntityNames={props.graphEntityNames}
+          onHighlightEntities={props.onHighlightEntities}
         />
 
         {/* Input */}

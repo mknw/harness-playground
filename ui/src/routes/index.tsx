@@ -1,8 +1,9 @@
 import { Splitter } from '@ark-ui/solid/splitter'
-import { createSignal } from 'solid-js'
+import { createSignal, createMemo } from 'solid-js'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
+import { executeCypherWrite } from '~/lib/neo4j/write-action'
 
 export default function Home() {
   const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
@@ -39,6 +40,42 @@ export default function Home() {
     setUnifiedContext(undefined)
   }
 
+  // Execute Cypher write from graph UI (node edit, relation create)
+  const handleCypherWrite = async (cypher: string, params?: Record<string, unknown>) => {
+    try {
+      await executeCypherWrite(cypher, params)
+    } catch (error) {
+      console.error('Cypher write failed:', error)
+    }
+  }
+
+  // Build a set of known entity names/labels from graph elements for chat highlighting
+  const graphEntityNames = createMemo(() => {
+    const names = new Map<string, string[]>() // name → [id1, id2, ...]
+    for (const el of graphElements()) {
+      const d = el.data
+      if (!d?.id) continue
+      const label = d.label as string | undefined
+      if (label && !d.source) { // node, not edge
+        const existing = names.get(label) ?? []
+        existing.push(d.id as string)
+        names.set(label, existing)
+      }
+    }
+    // Also index edge labels → edge IDs
+    for (const el of graphElements()) {
+      const d = el.data
+      if (!d?.id || !d.source) continue // skip nodes
+      const label = d.label as string | undefined
+      if (label) {
+        const existing = names.get(label) ?? []
+        existing.push(d.id as string)
+        names.set(label, existing)
+      }
+    }
+    return names
+  })
+
   return (
     <main h="[calc(100vh-4rem)]">
       <Splitter.Root
@@ -56,6 +93,8 @@ export default function Home() {
             onGraphUpdate={accumulateGraphElements}
             onEventsUpdate={accumulateEvents}
             onContextUpdate={setUnifiedContext}
+            graphEntityNames={graphEntityNames()}
+            onHighlightEntities={setHighlightedIds}
           />
         </Splitter.Panel>
 
@@ -78,6 +117,7 @@ export default function Home() {
             unifiedContext={unifiedContext()}
             onClearGraph={clearGraph}
             onClearEvents={clearEvents}
+            onCypherWrite={handleCypherWrite}
           />
         </Splitter.Panel>
       </Splitter.Root>

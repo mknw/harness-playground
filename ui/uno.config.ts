@@ -140,6 +140,25 @@ export default defineConfig({
         .prose-chat h1 { font-size: 1.25em; }
         .prose-chat h2 { font-size: 1.15em; }
         .prose-chat h3 { font-size: 1.05em; }
+
+        /* Graph entity interactive spans in chat messages */
+        .graph-entity {
+          cursor: pointer;
+          border-bottom: 1px dashed rgba(0,255,255,0.4);
+          transition: all 0.15s ease;
+          border-radius: 2px;
+          padding: 0 2px;
+        }
+        .graph-entity:hover {
+          background: rgba(0,255,255,0.15);
+          border-bottom-color: #00ffff;
+          color: #00ffff;
+        }
+        .graph-entity.toggled {
+          background: rgba(0,255,255,0.2);
+          border-bottom: 1px solid #00ffff;
+          color: #00ffff;
+        }
       `
     }
   ]

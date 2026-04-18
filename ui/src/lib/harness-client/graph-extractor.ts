@@ -73,20 +73,86 @@ function isMemoryGraphResult(toolName: string, _result: unknown): boolean {
   return memoryTools.some(t => toolName.includes(t))
 }
 
-/** Parse Neo4j Cypher result into graph elements */
+/** Parse Neo4j Cypher result into graph elements.
+ *
+ * Handles two formats:
+ * 1. **MCP format** (from neo4j-cypher MCP server): flat record objects where
+ *    nodes are `{ name, description, ... }` and relationships are 3-element
+ *    arrays `[startNode, "TYPE", endNode]`.
+ * 2. **Neo4j driver format**: objects with `identity`/`elementId`, `labels[]`,
+ *    `properties{}`.
+ */
 function parseNeo4jResult(result: unknown, source: GraphElement['source']): GraphElement[] {
   const elements: GraphElement[] = []
 
   if (!result || typeof result !== 'object') return elements
 
+  // Handle stringified JSON (MCP may return text)
+  let parsed = result
+  if (typeof result === 'string') {
+    try { parsed = JSON.parse(result) } catch { return elements }
+  }
+
   // Handle array of records (typical Cypher result)
-  const records = Array.isArray(result) ? result : [result]
+  const records = Array.isArray(parsed) ? parsed : [parsed]
 
   for (const record of records) {
     if (!record || typeof record !== 'object') continue
 
-    // Extract nodes and relationships from record values
-    for (const value of Object.values(record as Record<string, unknown>)) {
+    const rec = record as Record<string, unknown>
+
+    for (const [key, value] of Object.entries(rec)) {
+      if (!value) continue
+
+      // MCP relationship format: [startNodeObj, "REL_TYPE", endNodeObj]
+      if (Array.isArray(value) && value.length === 3 &&
+          typeof value[1] === 'string' &&
+          value[0] && typeof value[0] === 'object' &&
+          value[2] && typeof value[2] === 'object') {
+        const startNode = value[0] as Record<string, unknown>
+        const relType = value[1] as string
+        const endNode = value[2] as Record<string, unknown>
+
+        const startId = String(startNode.name ?? startNode.id ?? `node-${key}-start`)
+        const endId = String(endNode.name ?? endNode.id ?? `node-${key}-end`)
+
+        // Add start and end nodes
+        elements.push({
+          data: { id: startId, label: startId, type: 'Node', ...startNode },
+          source
+        })
+        elements.push({
+          data: { id: endId, label: endId, type: 'Node', ...endNode },
+          source
+        })
+        // Add relationship edge
+        elements.push({
+          data: {
+            id: `${startId}-${relType}-${endId}`,
+            source: startId,
+            target: endId,
+            label: relType
+          },
+          source
+        })
+        continue
+      }
+
+      // MCP node format: plain object with properties (has name/id, no identity/elementId)
+      if (typeof value === 'object' && !Array.isArray(value) && !isNeo4jNode(value)) {
+        const obj = value as Record<string, unknown>
+        const id = String(obj.name ?? obj.id ?? `node-${key}-${elements.length}`)
+        // Skip scalar-wrapper objects (e.g. { count: 5 })
+        if (Object.keys(obj).length > 0) {
+          elements.push({
+            data: { id, label: id, type: 'Node', ...obj },
+            source
+          })
+          continue
+        }
+      }
+
+      // Neo4j driver format (identity, labels, properties)
       const extracted = extractGraphEntities(value, source)
       elements.push(...extracted)
     }

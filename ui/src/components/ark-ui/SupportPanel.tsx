@@ -39,6 +39,8 @@ export interface SupportPanelProps {
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
   onClearGraph?: () => void;
   onClearEvents?: () => void;
+  /** Callback for Cypher write operations (node edits, relation creation) */
+  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>;
 }
 
 // ============================================================================
@@ -194,6 +196,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
               onNodeClick={props.onNodeClick}
               onEdgeClick={props.onEdgeClick}
               onClearGraph={props.onClearGraph}
+              onCypherWrite={props.onCypherWrite}
               emptyMessage="No Neo4j graph data yet. Query your knowledge base to see results."
               emptyIcon="🗄️"
             />
@@ -220,6 +223,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
               onNodeClick={props.onNodeClick}
               onEdgeClick={props.onEdgeClick}
               onClearGraph={props.onClearGraph}
+              onCypherWrite={props.onCypherWrite}
               emptyMessage="No graph data yet. Interact with the agent to see results."
               emptyIcon="🕸️"
             />
@@ -274,18 +278,31 @@ interface GraphTabContentProps {
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void;
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
   onClearGraph?: () => void;
+  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>;
   emptyMessage: string;
   emptyIcon: string;
 }
 
 const GraphTabContent = (props: GraphTabContentProps) => {
-  const nodeCount = () => props.elements.filter(e => !e.data?.source).length;
-  const edgeCount = () => props.elements.filter(e => e.data?.source).length;
+  const [syncEnabled, setSyncEnabled] = createSignal(true);
+  const [frozenElements, setFrozenElements] = createSignal<ElementDefinition[]>([]);
+
+  const effectiveElements = () => syncEnabled() ? props.elements : frozenElements();
+  const nodeCount = () => effectiveElements().filter(e => !e.data?.source).length;
+  const edgeCount = () => effectiveElements().filter(e => e.data?.source).length;
+
+  const toggleSync = () => {
+    if (syncEnabled()) {
+      // Freezing: snapshot current elements
+      setFrozenElements([...props.elements]);
+    }
+    setSyncEnabled(!syncEnabled());
+  };
 
   return (
     <>
       {/* Graph Controls Bar */}
-      <Show when={props.elements.length > 0}>
+      <Show when={effectiveElements().length > 0}>
         <div
           flex="~"
           items="center"
@@ -297,25 +314,40 @@ const GraphTabContent = (props: GraphTabContentProps) => {
           <div text="xs dark-text-secondary">
             {nodeCount()} nodes, {edgeCount()} edges
           </div>
-          <button
-            onClick={() => props.onClearGraph?.()}
-            p="x-2 y-1"
-            text="xs red-400"
-            bg="red-600/10 hover:red-600/20"
-            border="1 red-500/30"
-            rounded="md"
-            cursor="pointer"
-            transition="all"
-          >
-            Clear Graph
-          </button>
+          <div flex="~" items="center" gap="2">
+            <button
+              onClick={toggleSync}
+              p="x-2 y-1"
+              text={syncEnabled() ? "xs cyan-400" : "xs amber-400"}
+              bg={syncEnabled() ? "cyan-600/10 hover:cyan-600/20" : "amber-600/10 hover:amber-600/20"}
+              border={syncEnabled() ? "1 cyan-500/30" : "1 amber-500/30"}
+              rounded="md"
+              cursor="pointer"
+              transition="all"
+              title={syncEnabled() ? "Pause graph sync with conversation" : "Resume graph sync with conversation"}
+            >
+              {syncEnabled() ? '⏸ Sync' : '▶ Sync'}
+            </button>
+            <button
+              onClick={() => props.onClearGraph?.()}
+              p="x-2 y-1"
+              text="xs red-400"
+              bg="red-600/10 hover:red-600/20"
+              border="1 red-500/30"
+              rounded="md"
+              cursor="pointer"
+              transition="all"
+            >
+              Clear Graph
+            </button>
+          </div>
         </div>
       </Show>
 
       {/* Graph or Empty State */}
       <div flex="1" overflow="hidden">
         <Show
-          when={props.elements.length > 0}
+          when={effectiveElements().length > 0}
           fallback={
             <div flex="~ col" items="center" justify="center" h="full" text="center">
               <span text="4xl mb-4">{props.emptyIcon}</span>
@@ -326,10 +358,11 @@ const GraphTabContent = (props: GraphTabContentProps) => {
           }
         >
           <GraphVisualization
-            elements={props.elements}
+            elements={effectiveElements()}
             highlightedIds={props.highlightedIds}
             onNodeClick={props.onNodeClick}
             onEdgeClick={props.onEdgeClick}
+            onCypherWrite={props.onCypherWrite}
           />
         </Show>
       </div>

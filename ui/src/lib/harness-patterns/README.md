@@ -49,7 +49,15 @@ MCP Tools ───────┘
 ## Core Concepts
 
 ```typescript
-// BAML functions are passed directly to patterns (bind to preserve 'this' context)
+// Preferred: use adapter factories from baml-adapters.server.ts
+const controller = createNeo4jController(tools.neo4j ?? [])
+simpleLoop(controller, tools.neo4j ?? [], { patternId: 'neo4j-query', schema })
+
+const actor = createActorControllerAdapter(tools.all)
+const critic = createCriticAdapter()
+actorCritic(actor, critic, tools.all, { patternId: 'code-mode' })
+
+// Alternative: pass BAML functions directly (bind to preserve 'this' context)
 simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema })
 actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all)
 
@@ -246,8 +254,8 @@ interface SimpleLoopConfig extends PatternConfig {
 2. Call BAML controller with extracted params (+ optional schema)
 3. Execute returned tool via MCP
 4. Loop until `is_final` or max turns
-5. Stores `resultEventIds: string[]` in scope data (lightweight refs to tool_result events)
-6. Controller errors are caught per-iteration — loop exits gracefully with partial results
+5. Prior tool results from earlier turns are injected as compact pointers via `serializeCompact()` — the LLM can reference them with `ref:<eventId>`, and the harness auto-expands before MCP execution (`resolveRefs()`)
+6. Controller errors are caught per-iteration — loop exits gracefully with partial results; error state (`hasError`, `errorMessage`) propagates to downstream patterns
 
 ### `actorCritic(actor, critic, tools, config?)`
 
@@ -409,21 +417,48 @@ interface RoutesConfig extends PatternConfig {
 }
 ```
 
-### `chain(ctx, patterns)`
+### `judge(evaluator, config?)`
 
-Sequential composition of patterns within a UnifiedContext.
+Evaluation pattern that scores or classifies pattern output. Used for quality gates.
+
+```typescript
+judge(evaluatorFn, {
+  patternId: 'quality-check',
+  threshold: 0.7
+})
+```
+
+**How it works:**
+1. Receives output from preceding pattern via EventView
+2. Calls evaluator function to score/classify
+3. Sets `data.judgment` with result
+4. Can be used in actor-critic loops or standalone quality gates
+
+### `chain(ctx, patterns, onEvent?)`
+
+Sequential composition of patterns within a UnifiedContext. Optional `onEvent` callback is invoked for each newly committed event (used by SSE streaming).
 
 ```typescript
 await chain(ctx, [pattern1, pattern2, pattern3])
+
+// With streaming callback
+await chain(ctx, patterns, (event) => {
+  stream.write(`data: ${JSON.stringify(event)}\n\n`)
+})
 ```
 
 ### `harness(...patterns)`
 
-Compose patterns into a callable agent.
+Compose patterns into a callable agent. Accepts optional `onEvent` callback for real-time event streaming.
 
 ```typescript
 const agent = harness(routerPattern, synthesizerPattern)
 const result = await agent('Show me all Person nodes', sessionId)
+
+// With SSE streaming
+const result = await agent('query', sessionId, undefined, (event) => {
+  controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+})
 
 interface HarnessResultScoped<T> {
   response: string
@@ -483,9 +518,18 @@ view.since(timestamp)
 // Execution
 view.get()        // ContextEvent[]
 view.serialize()  // XML format for LLM
+view.serializeCompact({ recentTurns: 1 })  // Compact pointers for older results, full for recent
 view.exists()     // boolean
 view.count()      // number
 ```
+
+**Compact serialization**: `serializeCompact()` renders older `tool_result` events as compact pointers:
+```xml
+<tool_result id="ev-abc123" tool="search" compact="true">
+247 results retrieved (12,847 chars). Use ref:ev-abc123 to access full data.
+</tool_result>
+```
+Events within the last `recentTurns` user turns are rendered in full. The LLM can use `ref:<eventId>` in tool args; `resolveRefs()` in simpleLoop auto-expands them before MCP execution.
 
 ## Configuration System
 
@@ -687,7 +731,6 @@ Here are the field mappings:
 ## Full Example
 
 ```typescript
-import { b } from '../../../baml_client'
 import {
   harness,
   router,
@@ -698,7 +741,11 @@ import {
   withApproval,
   approvalPredicates,
   Tools,
-  callTool
+  callTool,
+  createNeo4jController,
+  createWebSearchController,
+  createActorControllerAdapter,
+  createCriticAdapter
 } from '../harness-patterns'
 
 async function getSchema(): Promise<string> {
@@ -710,11 +757,11 @@ async function createPatterns() {
   const tools = await Tools()
   const schema = await getSchema()
 
-  // Bind BAML methods to preserve 'this' context
-  const neo4jController = b.Neo4jController.bind(b)
-  const webController = b.WebSearchController.bind(b)
-  const codeController = b.CodeModeController.bind(b)
-  const codeCritic = b.CodeModeCritic.bind(b)
+  // Use adapter factories (preferred over b.bind())
+  const neo4jController = createNeo4jController(tools.neo4j ?? [])
+  const webController = createWebSearchController(tools.web ?? [])
+  const actor = createActorControllerAdapter(tools.all)
+  const critic = createCriticAdapter()
 
   const neo4jPattern = withApproval(
     simpleLoop(neo4jController, tools.neo4j ?? [], {
@@ -728,7 +775,7 @@ async function createPatterns() {
     patternId: 'web-search'
   })
 
-  const codePattern = actorCritic(codeController, codeCritic, tools.all, {
+  const codePattern = actorCritic(actor, critic, tools.all, {
     patternId: 'code-mode'
   })
 
@@ -786,26 +833,29 @@ Span names:
 
 ```
 harness-patterns/
-├── index.ts              # Public exports
-├── types.ts              # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, etc.)
-├── context.server.ts     # Context factory, createEvent(), generateId()
-├── tools.server.ts       # Tools() — groups MCP tools by namespace
-├── harness.server.ts     # harness(), resumeHarness(), continueSession()
-├── routing.server.ts     # BAML router integration (routeMessageOp)
-├── mcp-client.server.ts  # callTool(), listTools()
-├── assert.server.ts      # Server-only guards
+├── index.ts                # Public exports
+├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, etc.)
+├── context.server.ts       # Context factory, createEvent(), generateId()
+├── tools.server.ts         # Tools() — groups MCP tools by namespace
+├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
+├── routing.server.ts       # BAML router integration (routeMessageOp)
+├── mcp-client.server.ts    # callTool(), listTools()
+├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, etc.
+├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas)
+├── assert.server.ts        # Server-only guards
 └── patterns/
     ├── index.ts
     ├── router.server.ts        # router() + routes() — intent classification + dispatch
-    ├── simpleLoop.server.ts    # ReAct loop; emits callId on tool_call/tool_result
+    ├── simpleLoop.server.ts    # ReAct loop; emits callId on tool_call/tool_result; resolveRefs() for compact pointers
     ├── actorCritic.server.ts   # Generate-evaluate loop; emits callId on tool pairs
+    ├── judge.server.ts         # Evaluation pattern for quality gates
     ├── withApproval.server.ts  # Approval gate; wraps inner events with pattern_enter/exit
     ├── parallel.server.ts      # Concurrent branches; wraps each branch with pattern_enter/exit
     ├── guardrail.server.ts     # Rail validation; wraps inner events with pattern_enter/exit
     ├── hook.server.ts          # Lifecycle hook; wraps inner events with pattern_enter/exit
-    ├── chain.server.ts         # Sequential composition
+    ├── chain.server.ts         # Sequential composition; accepts onEvent? for SSE streaming
     ├── synthesizer.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE
-    └── event-view.server.ts    # EventViewImpl (fluent query API)
+    └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)
 ```
 
 ## Design Principles

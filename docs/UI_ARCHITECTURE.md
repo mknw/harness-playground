@@ -297,6 +297,9 @@ Main container combining sidebar and chat area:
   - Empty state with icon
 - **User messages:** Right-aligned, cyber-700 background
 - **AI messages:** Left-aligned, dark-bg-tertiary background
+- **Chat-Graph Entity Linking:** After rendering markdown, `annotateEntities()` post-processes the HTML to wrap known entity and relation names in `<span class="graph-entity" data-entity-name="..." data-entity-ids="...">` elements. Hovering highlights matching graph nodes/edges; clicking toggles a persistent highlight. A module-level `toggledEntities` Set tracks persistent state. Event delegation on the messages container handles all interactions via `handleMouseOver`, `handleMouseOut`, `handleClick`.
+  - **Props:** `graphEntityNames?: Map<string, string[]>` (name → element IDs, built in `index.tsx` from graph elements), `onHighlightEntities?: (ids: string[]) => void`
+  - **CSS:** `.graph-entity` styles in `uno.config.ts` (dashed underline, cyan glow on hover/toggle)
 
 #### 4. ChatInput.tsx
 - **Field.Textarea** with `autoresize` prop
@@ -322,7 +325,34 @@ Tabbed right panel. **Observability is the default tab.**
 | **Observability** *(default)* | Event timeline + LLM call detail |
 | Tools | MCP tool configuration via `ToolsPanel` |
 
-#### 7. ObservabilityPanel.tsx
+**Conversation Sync toggle:** Each graph tab's controls bar has a ⏸/▶ "Sync" button (cyan when live, amber when paused). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed. Enables viewing a graph snapshot while a new query runs in the background.
+
+#### 7. GraphVisualization.tsx
+Cytoscape.js graph component with dark futuristic theme.
+
+**Deferred Rendering (inactive tab support):** Ark UI sets `hidden` on inactive `Tabs.Content`, giving zero container dimensions. A `ResizeObserver` on `containerRef` drives a `visible()` signal. The element-update `createEffect` reads `visible()` — when the tab becomes active and the container gains non-zero dimensions, the observer fires, `visible` becomes `true`, and the effect re-runs automatically with the already-accumulated `props.elements`. Elements are always collected in `index.tsx` regardless of which tab is active.
+
+**Features:**
+- Incremental graph updates (additive, preserves positions)
+- Collapsible Display Controls panel: node size, edge width, font size, edge labels toggle
+- Node properties panel on click (inline `data` + `properties` merged)
+- Inline property editing (pencil icon → textarea → Cypher persist via `onCypherWrite`)
+- Relation creation mode (purple banner, click source then target)
+- Node creation form ("+ Node" toolbar button — Name, Label, Description)
+- `highlightedIds` prop adds `.highlighted` CSS class to matching elements
+
+**Props:**
+```typescript
+{
+  elements: ElementDefinition[]
+  highlightedIds?: string[]         // IDs to visually highlight (from chat entity hover/toggle)
+  onNodeClick?: (id, data) => void
+  onEdgeClick?: (id, data) => void
+  onCypherWrite?: (cypher, params?) => Promise<void>  // For write operations
+}
+```
+
+#### 8. ObservabilityPanel.tsx
 Displays the full agent event timeline:
 - Events are merged into `TimelineItem[]` via `buildTimelineItems()`: `tool_call` + `tool_result` pairs sharing the same `callId` appear as a single merged row
 - Click any row → detail overlay with args / result / LLM call data
@@ -389,19 +419,25 @@ index.tsx (top-level state)
     ├─ contextEvents: Signal<ContextEvent[]>     ← accumulated per turn
     ├─ unifiedContext: Signal<UnifiedContext?>   ← latest full session context
     ├─ highlightedIds: Signal<string[]>          ← newly added graph node IDs
+    ├─ graphEntityNames: Memo<Map<string, string[]>>  ← name → element IDs (for chat linking)
     │
     ├─> ChatInterface
     │       ├─ messages: Signal<Message[]>
     │       ├─ isProcessing: Signal<boolean>
     │       ├─ selectedAgent: Signal<string>
+    │       │   Props: graphEntityNames, onHighlightEntities
     │       │
     │       ├─> AgentSelector (selectedAgent, onAgentChange, disabled)
-    │       ├─> ChatMessages (messages, onApproveWrite, onRejectWrite)
+    │       ├─> ChatMessages (messages, graphEntityNames, onHighlightEntities, onApproveWrite, onRejectWrite)
+    │       │       └─ annotateEntities() — wraps entity names in interactive spans post-render
     │       ├─> ChatInput (onSend, disabled)
     │       └─> ChatSidebar (collapsed, onToggle)
     │
     └─> SupportPanel
-            ├─> GraphVisualization (neo4j / memory / all graph elements)
+            │   Props: graphElements, highlightedIds, onCypherWrite
+            ├─> GraphVisualization (elements, highlightedIds, onCypherWrite)
+            │       ├─ ResizeObserver → visible() signal (deferred rendering)
+            │       └─ Inline edit / relation create / node create → onCypherWrite
             ├─> ObservabilityPanel (events, context, onClear)
             │       ├─ buildTimelineItems() — merges tool pairs by callId
             │       └─ Save button → showSaveFilePicker() / <a download>
@@ -539,6 +575,9 @@ ui/
 │       │       ├── synthesizer.server.ts  # Final response synthesis
 │       │       ├── chain.server.ts        # Sequential composition
 │       │       └── event-view.server.ts   # EventViewImpl (fluent query API)
+│       ├── neo4j/
+│       │   ├── queries.ts         # runManualCypher(), getNodeProperties()
+│       │   └── write-action.ts    # executeCypherWrite() — parameterized Cypher writes from graph UI
 │       └── harness-client/        # Pre-built agent server actions
 │           ├── index.ts           # processMessageWithAgent(), extractGraphFromResult()
 │           ├── types.ts           # GraphElement, HarnessData, etc.
