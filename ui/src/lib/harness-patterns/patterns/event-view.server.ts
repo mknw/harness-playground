@@ -27,10 +27,13 @@ assertServerOnImport()
 type EventFilter = (event: ContextEvent) => boolean
 
 export class EventViewImpl implements IEventView {
+  /** Predicate filters applied sequentially (AND chain) in get() */
   private filters: EventFilter[] = []
   private limitLast?: number
   private limitFirst?: number
   private sinceTs?: number
+  /** Rolling turn window — slices events at the Nth-to-last user_message boundary */
+  private fromLastNTurnsCount?: number
 
   constructor(
     private ctx: UnifiedContext,
@@ -44,22 +47,58 @@ export class EventViewImpl implements IEventView {
     }
   }
 
+  /**
+   * Apply ViewConfig by pushing filters directly to this instance.
+   *
+   * Previously this called cloning selector methods (fromPatterns(), ofTypes(),
+   * etc.) whose return values were discarded — making applyConfig a no-op.
+   * Fixed to mutate `this` directly.
+   *
+   * Application order in get():
+   *   1. sinceTs       — timestamp cutoff
+   *   2. fromLastNTurns — turn-based slice (needs user_message events for
+   *                       boundary detection, so runs before type filters)
+   *   3. filters[]     — pattern scope + type predicates (AND chain)
+   *   4. limitFirst / limitLast — quantity caps
+   */
   private applyConfig(config: ViewConfig): void {
+    // ── Pattern scope (mutually exclusive: first match wins) ──
+    // These restrict which pattern's events are visible.
+    // Setting fromLast: false with no other scope option disables pattern
+    // filtering entirely, giving cross-turn visibility over all events.
     if (config.fromPatterns && config.fromPatterns.length > 0) {
-      this.fromPatterns(config.fromPatterns)
+      const idSet = new Set(config.fromPatterns)
+      this.filters.push((e) => idSet.has(e.patternId))
     } else if (config.fromLastN !== undefined) {
-      this.fromLastNPatterns(config.fromLastN)
+      const all = this.selfPatternId
+        ? this.getPatternIds().filter(id => id !== this.selfPatternId)
+        : this.getPatternIds()
+      const ids = new Set(all.slice(-config.fromLastN))
+      if (ids.size > 0) this.filters.push((e) => ids.has(e.patternId))
+      else this.filters.push(() => false)
     } else if (config.fromLast !== false) {
-      // Default to fromLast: true
-      this.fromLastPattern()
+      // Default: only see events from the immediately preceding pattern
+      const lastId = this.getLastPatternId()
+      if (lastId) this.filters.push((e) => e.patternId === lastId)
+      else this.filters.push(() => false)
     }
 
+    // ── Turn-based rolling window ──
+    // Stored as a field and applied in get() BEFORE the filters loop,
+    // because we need user_message events present to detect turn boundaries.
+    if (config.fromLastNTurns !== undefined) {
+      this.fromLastNTurnsCount = config.fromLastNTurns
+    }
+
+    // ── Type filter ──
     if (config.eventTypes && config.eventTypes.length > 0) {
-      this.ofTypes(config.eventTypes)
+      const typeSet = new Set(config.eventTypes)
+      this.filters.push((e) => typeSet.has(e.type))
     }
 
+    // ── Quantity limit ──
     if (config.limit !== undefined) {
-      this.last(config.limit)
+      this.limitLast = config.limit
     }
   }
 
@@ -68,12 +107,14 @@ export class EventViewImpl implements IEventView {
     return this
   }
 
+  /** Create a shallow copy preserving all filters, limits, and window state */
   private clone(): EventViewImpl {
     const view = new EventViewImpl(this.ctx, undefined, this.selfPatternId)
     view.filters = [...this.filters]
     view.limitLast = this.limitLast
     view.limitFirst = this.limitFirst
     view.sinceTs = this.sinceTs
+    view.fromLastNTurnsCount = this.fromLastNTurnsCount
     return view
   }
 
@@ -204,25 +245,53 @@ export class EventViewImpl implements IEventView {
     return view
   }
 
+  /**
+   * Rolling window: keep only events from the last N user turns.
+   * A "turn" = one user_message event. Events before the Nth-to-last
+   * user_message are excluded. Applied in get() before predicate filters
+   * so that user_message boundaries are still present for detection.
+   */
+  fromLastNTurns(n: number): EventViewImpl {
+    const view = this.clone()
+    view.fromLastNTurnsCount = n
+    return view
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Execution
   // ─────────────────────────────────────────────────────────────────────────
 
-  /** Execute query and return events */
+  /**
+   * Execute query and return matching events.
+   *
+   * Pipeline order:
+   *   1. sinceTs          — hard timestamp cutoff
+   *   2. fromLastNTurns   — slice at Nth-to-last user_message boundary
+   *                         (runs before filters so user_message events are
+   *                          present for boundary detection even when the
+   *                          caller later filters to other types)
+   *   3. filters[]        — predicate chain (pattern scope, event types, …)
+   *   4. limitFirst/Last  — quantity caps on the final result
+   */
   get(): ContextEvent[] {
     let events = this.ctx.events
 
-    // Apply timestamp filter first
+    // 1. Timestamp cutoff
     if (this.sinceTs !== undefined) {
       events = events.filter((e) => e.ts >= this.sinceTs!)
     }
 
-    // Apply all filters
+    // 2. Turn-based rolling window
+    if (this.fromLastNTurnsCount !== undefined) {
+      events = sliceByLastNTurns(events, this.fromLastNTurnsCount)
+    }
+
+    // 3. Predicate filters (AND chain — each pass narrows further)
     for (const filter of this.filters) {
       events = events.filter(filter)
     }
 
-    // Apply limits
+    // 4. Quantity caps
     if (this.limitFirst !== undefined) {
       events = events.slice(0, this.limitFirst)
     }
@@ -314,6 +383,31 @@ export class EventViewImpl implements IEventView {
       : this.getPatternIds()
     return ids.at(-1)
   }
+}
+
+// ============================================================================
+// Turn Window Helper
+// ============================================================================
+
+/**
+ * Slice an event array to keep only events from the last N user turns.
+ * A turn boundary is defined by a user_message event.
+ * If fewer than N turns exist, all events are returned.
+ */
+function sliceByLastNTurns(events: ContextEvent[], n: number): ContextEvent[] {
+  // Find indices of all user_message events — these mark turn boundaries
+  const userMsgIndices = events
+    .map((e, i) => (e.type === 'user_message' ? i : -1))
+    .filter(i => i >= 0)
+
+  if (userMsgIndices.length === 0) return events
+
+  // Slice from the Nth-to-last user_message onwards
+  const startIdx = userMsgIndices.length > n
+    ? userMsgIndices[userMsgIndices.length - n]
+    : 0
+
+  return events.slice(startIdx)
 }
 
 // ============================================================================

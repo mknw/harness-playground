@@ -117,6 +117,10 @@ export interface ViewConfig {
   eventTypes?: EventType[]
   /** Max events to include */
   limit?: number
+  /** Rolling window: include only events from the last N user turns.
+   *  A "turn" boundary is defined by a user_message event.
+   *  Applied before type/pattern filters so boundaries can be detected. */
+  fromLastNTurns?: number
 }
 
 /** Base configuration for all patterns */
@@ -209,6 +213,8 @@ export interface EventView {
   last(n: number): EventView
   first(n: number): EventView
   since(ts: number): EventView
+  /** Rolling window: keep only events from the last N user turns */
+  fromLastNTurns(n: number): EventView
   get(): ContextEvent[]
   serialize(): string
   serializeCompact(options?: { recentTurns?: number }): string

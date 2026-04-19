@@ -52,9 +52,13 @@
 - URL content fetching and ingestion
 - Google Drive document import
 
-## Next steps
+### Multi-turn Conversation History (Phase 1: Router)
+- [x] Fix `applyConfig` bug in EventViewImpl (was calling cloning methods, discarding return values)
+- [x] Add `fromLastNTurns` rolling window to ViewConfig + EventView fluent API
+- [x] Router extracts message history from last N turns and passes to BAML Router
+- [x] Default: `{ fromLast: false, fromLastNTurns: 5, eventTypes: ['user_message', 'assistant_message'] }`
 
-- history not taken into account within normal messages. why? point to existing `.harness-logs/context-cl-3-2026-04-18-no-history.json`.
+## Next steps
 
 ## Future features
 - Show "error, trying again" interesting run within knowledge graph: `.harness-logs/context-cl-3-2026-04-18-consider-error.json`.

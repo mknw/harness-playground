@@ -514,6 +514,7 @@ view.actions()    // Shorthand: controller_action
 view.last(5)
 view.first(3)
 view.since(timestamp)
+view.fromLastNTurns(3)   // Rolling window: last 3 user turns
 
 // Execution
 view.get()        // ContextEvent[]
@@ -560,6 +561,7 @@ interface ViewConfig {
   fromLast?: boolean        // Only previous pattern (default: true)
   eventTypes?: EventType[]  // Filter by event type
   limit?: number            // Max events to include
+  fromLastNTurns?: number   // Rolling window: last N user turns
 }
 ```
 
@@ -568,8 +570,13 @@ interface ViewConfig {
 | `fromLast: true` | See only the previous pattern's events | Default behavior |
 | `fromPatterns: ['neo4j']` | See events from specific pattern(s) | Cross-pattern queries |
 | `fromLastN: 3` | See events from last 3 patterns | Broader context |
+| `fromLastNTurns: 5` | Rolling window over last 5 user turns | Multi-turn history |
 | `eventTypes: ['tool_result']` | Filter to specific event types | Focus on results |
 | `limit: 10` | Cap number of events returned | Limit context size |
+
+A "turn" is defined by a `user_message` event. `fromLastNTurns` slices the event stream at the Nth-to-last `user_message` boundary. It is applied *before* type filters so that boundary detection works regardless of which `eventTypes` are selected.
+
+> **Note:** `since(ts)` is available on the fluent API (`view.since(timestamp)`) but is not a ViewConfig option.
 
 ```typescript
 // Example: synthesizer needs to see tool results from neo4j pattern
@@ -577,9 +584,15 @@ synthesizer({
   mode: 'thread',
   viewConfig: { fromPatterns: ['neo4j-query'], eventTypes: ['tool_result'] }
 })
+
+// Example: router with cross-turn message history (3-turn window)
+router({ neo4j: 'Database queries' }, {
+  viewConfig: { fromLast: false, fromLastNTurns: 3, eventTypes: ['user_message', 'assistant_message'] }
+})
 ```
 
 **Defaults by pattern:**
+- `router`: `viewConfig: { fromLast: false, fromLastNTurns: 5, eventTypes: ['user_message', 'assistant_message'] }`
 - `simpleLoop`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
 - `actorCritic`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
 - `synthesizer`: `trackHistory: 'assistant_message'`, `commitStrategy: 'always'`
@@ -680,7 +693,7 @@ router() calls routeMessageOp() → BAML-backed intent classifier
 
 BAML Inputs:
   message : string         ← most recent user_message content
-  history : Message[]      ← [] (empty in current impl)
+  history : Message[]      ← from viewConfig (default: last 5 turns)
   routes  : RouteOption[]  ← { name, description } from routeDescriptions
 
 BAML Return:

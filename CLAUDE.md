@@ -15,6 +15,7 @@ pnpm test             # Watch mode
 pnpm baml-generate    # Regenerate baml_client/ from baml_src/
 pnpm baml-test        # Run BAML tests
 pnpm dev:llama        # Start local GLM-4.7-Flash inference server (port 8080)
+pnpm exec tsc --noEmit --project tsconfig.json  # Type-check (from ui/)
 ```
 
 Run a single test file:

@@ -18,8 +18,10 @@ import type {
   EventView,
   ConfiguredPattern,
   AssistantMessageEventData,
+  UserMessageEventData,
   RouterConfig,
-  RoutesConfig
+  RoutesConfig,
+  ViewConfig
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
@@ -67,7 +69,17 @@ export function router<T extends RouterData>(
   routeDescriptions: Routes,
   config?: RouterConfig
 ): ConfiguredPattern<T> {
-  const resolved = resolveConfig('router', config)
+  // Default viewConfig: cross-turn visibility of the last 5 turns, messages only.
+  // Caller can override entirely by passing their own viewConfig in config.
+  const DEFAULT_ROUTER_VIEW: ViewConfig = {
+    fromLast: false,           // no pattern scope filter → see all events across turns
+    fromLastNTurns: 5,         // rolling window of 5 user turns
+    eventTypes: ['user_message', 'assistant_message']
+  }
+  const resolved = resolveConfig('router', {
+    viewConfig: DEFAULT_ROUTER_VIEW,
+    ...config,                 // caller's config overrides defaults (including viewConfig)
+  })
   const directRoute = config?.directResponseRoute ?? DIRECT_RESPONSE_ROUTE
 
   const fn = async (
@@ -75,11 +87,23 @@ export function router<T extends RouterData>(
     view: EventView
   ): Promise<PatternScope<T>> => {
     try {
-      // Get user message from view
-      const userMessage = view.messages().last(1).get()[0]
-      const userContent = userMessage
-        ? (userMessage.data as { content: string }).content
+      // view is pre-configured by viewConfig (last N turns of user/assistant messages).
+      // Extract all messages, then split into current user message + prior history.
+      const allMessages = view.get()
+
+      // Current user message = the last user_message in the window
+      const currentMsg = [...allMessages].reverse().find(e => e.type === 'user_message')
+      const userContent = currentMsg
+        ? (currentMsg.data as UserMessageEventData).content
         : ''
+
+      // History = all messages except the current user_message, mapped to {role, content}
+      const history = allMessages
+        .filter(e => e !== currentMsg)
+        .map(e => ({
+          role: e.type === 'user_message' ? 'user' : 'assistant',
+          content: (e.data as UserMessageEventData | AssistantMessageEventData).content
+        }))
 
       // Convert routes Record<string,string> to Array<{name,description}>
       const routeArray = Object.entries(routeDescriptions).map(([name, description]) => ({
@@ -89,7 +113,7 @@ export function router<T extends RouterData>(
 
       // Route message using BAML with collector for observability
       const collector = new Collector('router')
-      const result = await routeMessageOp(userContent, [], routeArray, collector)
+      const result = await routeMessageOp(userContent, history, routeArray, collector)
 
       // No tool needed - return conversational response directly
       if (!result.tool_call_needed) {
