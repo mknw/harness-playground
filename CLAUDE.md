@@ -132,6 +132,12 @@ UnoCSS attributify mode — always use attribute syntax:
 
 Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secondary,tertiary}`, `dark-border-{primary,secondary}`, `neon-{cyan,magenta,purple}`, `cyber-{600,700,800}`.
 
+**Icons** (`@unocss/preset-icons` + `@iconify-json/mdi` installed):
+- Use MDI icons via `class="i-mdi-<icon-name>"` (note: requires `class=`, not attributify syntax)
+- Example: `<span class="i-mdi-database-outline" style={{ width: '20px', height: '20px', color: '#22d3ee' }} />`
+- Browse icons at [https://icones.js.org](https://icones.js.org) — filter by `mdi`
+- The `color` HTML attribute conflicts with attributify; use inline `style={{ color: '...' }}` for icon color
+
 ---
 
 ## Documentation

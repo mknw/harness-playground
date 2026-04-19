@@ -149,6 +149,13 @@ interface CriticResult {
   explanation: string
   suggested_approach?: string
 }
+
+// Compact reference to a tool result from a prior turn (for cross-turn memory)
+interface PriorResult {
+  ref_id: string        // Event ID — LLM passes as ref:<ref_id> in tool args
+  tool: string          // Tool that produced the result
+  summary: string       // LLM-generated summary or truncated preview
+}
 ```
 
 ## Context Flow
@@ -244,8 +251,10 @@ simpleLoop(b.Neo4jController.bind(b), tools.neo4j, {
 })
 
 interface SimpleLoopConfig extends PatternConfig {
-  schema?: string       // Injected as 5th param to controller
-  maxTurns?: number     // Default: 5
+  schema?: string              // Injected as context to controller
+  maxTurns?: number            // Default: 5
+  rememberPriorTurns?: boolean // Include prior tool results (default: true)
+  priorTurnCount?: number      // How many prior user turns (default: 3)
 }
 ```
 
@@ -254,8 +263,9 @@ interface SimpleLoopConfig extends PatternConfig {
 2. Call BAML controller with extracted params (+ optional schema)
 3. Execute returned tool via MCP
 4. Loop until `is_final` or max turns
-5. Prior tool results from earlier turns are injected as compact pointers via `serializeCompact()` — the LLM can reference them with `ref:<eventId>`, and the harness auto-expands before MCP execution (`resolveRefs()`)
+5. Prior tool results from earlier turns are passed as `turns_previous_runs: PriorResult[]` — a structured array separate from the current task's `turns`. The LLM can reference them with `ref:<ref_id>` in tool args; `resolveRefs()` auto-expands before MCP execution. Controlled by `rememberPriorTurns` (default: true) and `priorTurnCount` (default: 3).
 6. Controller errors are caught per-iteration — loop exits gracefully with partial results; error state (`hasError`, `errorMessage`) propagates to downstream patterns
+7. After the response reaches the user, `scheduleSummarization()` runs in the background: it summarizes each `tool_result` with a lightweight model (`DescribeFallback`) and stores the summary on the event. These summaries appear as `PriorResult.summary` on subsequent turns.
 
 ### `actorCritic(actor, critic, tools, config?)`
 
@@ -524,13 +534,20 @@ view.exists()     // boolean
 view.count()      // number
 ```
 
-**Compact serialization**: `serializeCompact()` renders older `tool_result` events as compact pointers:
+**Compact serialization**: `serializeCompact()` renders older `tool_result` events as compact pointers. If an LLM-generated summary exists (via `scheduleSummarization()`), it replaces the raw preview:
 ```xml
 <tool_result id="ev-abc123" tool="search" compact="true">
-247 results retrieved (12,847 chars). Use ref:ev-abc123 to access full data.
+Returned 247 results including... (12,847 chars). Use ref:ev-abc123 to access full data.
 </tool_result>
 ```
-Events within the last `recentTurns` user turns are rendered in full. The LLM can use `ref:<eventId>` in tool args; `resolveRefs()` in simpleLoop auto-expands them before MCP execution.
+Events within the last `recentTurns` user turns are rendered in full. Hidden or archived events (`ToolResultEventData.hidden` / `.archived`) are excluded from compact output. The LLM can use `ref:<eventId>` in tool args; `resolveRefs()` in simpleLoop auto-expands them before MCP execution (also skips hidden/archived events).
+
+**Data Stash**: `ToolResultEventData` supports three visibility fields:
+- `summary?: string` — LLM-generated summary (populated async by `scheduleSummarization()`)
+- `hidden?: boolean` — excluded from LLM context, shown grayed-out in UI
+- `archived?: boolean` — excluded from LLM context, moved to Archived section in UI
+
+These are mutated post-commit via `enrichToolResult(ctx, eventId, { summary?, hidden?, archived? })`. The UI manages hide/archive via `POST /api/stash`.
 
 ## Configuration System
 
@@ -608,7 +625,7 @@ transformed into prompt-friendly types. The table below shows which harness
 | Harness `EventType` | Event Payload (TS) | BAML Type | Consumed By |
 |---|---|---|---|
 | `tool_call` | `ToolCallEventData` (`callId?`, `tool`, `args`) | `ToolCall` | `LoopTurn.tool_call`, `Attempt.action` |
-| `tool_result` | `ToolResultEventData` (`callId?`, `tool`, `result`, `success`, `error?`) | `ToolResult` | `LoopTurn.tool_result`, `Attempt.result/error` |
+| `tool_result` | `ToolResultEventData` (`callId?`, `tool`, `result`, `success`, `error?`, `summary?`, `hidden?`, `archived?`) | `ToolResult` | `LoopTurn.tool_result`, `Attempt.result/error`, `PriorResult` |
 | `controller_action` | `ControllerActionEventData` | _(embedded in `LoopTurn.reasoning`)_ | simpleLoop, actorCritic |
 | `critic_result` | `CriticResultEventData` | _(embedded in `Attempt.feedback`)_ | actorCritic |
 | `user_message` | `UserMessageEventData` | `Message { role, content }` | router (history) |
@@ -630,11 +647,12 @@ Events read (ViewConfig default: fromLast, trackHistory: 'tool_result')
 └── tool_result        ──► LoopTurn.tool_result { tool, result, success, error }
 
 BAML Inputs:
-  user_message : string           ← ctx.input
-  intent       : string           ← extracted from routing or ctx.input
-  tools        : ToolDescription[]← MCP listTools() → { name, description, args_schema }
-  turns        : LoopTurn[]       ← assembled from scope events per turn
-  context      : string?          ← optional (e.g. neo4j schema)
+  user_message          : string           ← ctx.input
+  intent                : string           ← extracted from routing or ctx.input
+  tools                 : ToolDescription[]← MCP listTools() → { name, description, args_schema }
+  turns                 : LoopTurn[]       ← current task turns (assembled from scope events)
+  context               : string?          ← optional (e.g. neo4j schema)
+  turns_previous_runs   : PriorResult[]?   ← prior turns (from viewConfig, default: last 3 turns)
 
 BAML Return → ControllerAction:
   reasoning : string    → stored as controller_action event
@@ -853,13 +871,14 @@ harness-patterns/
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
 ├── mcp-client.server.ts    # callTool(), listTools()
-├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, etc.
+├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, describeToolResultOp, etc.
+├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas)
 ├── assert.server.ts        # Server-only guards
 └── patterns/
     ├── index.ts
     ├── router.server.ts        # router() + routes() — intent classification + dispatch
-    ├── simpleLoop.server.ts    # ReAct loop; emits callId on tool_call/tool_result; resolveRefs() for compact pointers
+    ├── simpleLoop.server.ts    # ReAct loop; emits callId on tool_call/tool_result; resolveRefs(); config-driven cross-turn memory
     ├── actorCritic.server.ts   # Generate-evaluate loop; emits callId on tool pairs
     ├── judge.server.ts         # Evaluation pattern for quality gates
     ├── withApproval.server.ts  # Approval gate; wraps inner events with pattern_enter/exit

@@ -79,5 +79,10 @@
 
 ## Next steps
 
+### Data Stash Improvements
+- Improve data result tooltip display in Data Stash (richer formatting, expandable detail)
+- Fix `presetIcons` type mismatch in `uno.config.ts` (version skew between `@unocss/preset-icons@66.6` and `unocss@66.5`)
+- Investigate graph visualizer not updating when data and connections are fetched separately
+
 ## Future features
 - Show "error, trying again" interesting run within knowledge graph: `.harness-logs/context-cl-3-2026-04-18-consider-error.json`.

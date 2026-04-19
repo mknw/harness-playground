@@ -40,11 +40,13 @@
   "devDependencies": {
     "@boundaryml/baml": "0.219.0",
     "@eslint/js": "^9.38.0",
+    "@iconify-json/mdi": "^1.2.3",
     "@solid-devtools/debugger": "^0.28.1",
     "@solidjs/testing-library": "^0.8.10",
     "@types/node": "^24.9.2",
     "@unocss/eslint-config": "^66.5.4",
     "@unocss/preset-attributify": "^66.5.4",
+    "@unocss/preset-icons": "^66.6.8",
     "@unocss/preset-wind4": "^66.5.4",
     "@vitest/coverage-v8": "^4.0.18",
     "eslint": "^9.38.0",

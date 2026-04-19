@@ -2,11 +2,19 @@ import { defineConfig, presetAttributify, presetWebFonts , transformerAttributif
 // import transformerAttributifyJsx from '@unocss/transformer-attributify-jsx'
 
 import presetWind4 from '@unocss/preset-wind4'
+import presetIcons from '@unocss/preset-icons'
 
 export default defineConfig({
   presets: [
     presetAttributify(),
     presetWind4(),
+    presetIcons({
+      scale: 1.2,
+      extraProperties: {
+        'display': 'inline-block',
+        'vertical-align': 'middle',
+      },
+    }),
     presetWebFonts({
       provider: 'google',
       fonts: {
