@@ -6,6 +6,8 @@
  */
 import type { APIEvent } from "@solidjs/start/server";
 import { processMessageStreaming } from "../../lib/harness-client/actions.server";
+import { updateSession } from "../../lib/harness-client/session.server";
+import { scheduleSummarization, serializeContext } from "../../lib/harness-patterns";
 
 export async function POST(event: APIEvent) {
   const body = await event.request.json();
@@ -48,6 +50,18 @@ export async function POST(event: APIEvent) {
         });
         controller.enqueue(encoder.encode(`event: done\ndata: ${doneData}\n\n`));
         controller.close();
+
+        // Fire-and-forget: summarize this turn's tool results in the background.
+        // Runs after the SSE stream is closed — user already has the response.
+        // Summaries are stored on tool_result events and persisted to session,
+        // so they appear as compact pointers on subsequent turns.
+        scheduleSummarization(result.context, async () => {
+          updateSession(sessionId, {
+            serializedContext: serializeContext(result.context),
+          });
+        }).catch((err) =>
+          console.error("[summarize] background summarization failed:", err),
+        );
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         controller.enqueue(

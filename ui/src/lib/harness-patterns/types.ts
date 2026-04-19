@@ -183,6 +183,10 @@ export interface SimpleLoopConfig extends PatternConfig {
   schema?: string
   /** Max turns before forcing exit (default: 5) */
   maxTurns?: number
+  /** Include tool results from prior turns in controller context (default: true) */
+  rememberPriorTurns?: boolean
+  /** Number of prior user turns to include (default: 3) */
+  priorTurnCount?: number
 }
 
 /** Configuration for actorCritic pattern */
@@ -380,6 +384,12 @@ export interface ToolResultEventData {
   result: unknown
   success: boolean
   error?: string
+  /** LLM-generated summary of result (populated async after response) */
+  summary?: string
+  /** Hidden from LLM context (grayed out in Data tab, excluded from serializeCompact) */
+  hidden?: boolean
+  /** Moved to Archived section (also excluded from LLM context) */
+  archived?: boolean
 }
 
 /** Data payload for controller_action event */

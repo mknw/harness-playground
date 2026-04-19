@@ -210,6 +210,25 @@ export function exitPattern<T>(
 }
 
 // ============================================================================
+// Post-Hoc Event Mutation
+// ============================================================================
+
+/**
+ * Enrich a committed tool_result event with summary or visibility state.
+ * Mutates the event in-place — caller must re-serialize the context to persist.
+ */
+export function enrichToolResult<T>(
+  ctx: UnifiedContext<T>,
+  eventId: string,
+  patch: { summary?: string; hidden?: boolean; archived?: boolean }
+): boolean {
+  const event = ctx.events.find(e => e.id === eventId && e.type === 'tool_result')
+  if (!event) return false
+  Object.assign(event.data as object, patch)
+  return true
+}
+
+// ============================================================================
 // Context Status Helpers
 // ============================================================================
 

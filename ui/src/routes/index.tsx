@@ -1,11 +1,13 @@
 import { Splitter } from '@ark-ui/solid/splitter'
-import { createSignal, createMemo } from 'solid-js'
+import { createSignal, createMemo, createUniqueId } from 'solid-js'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
-import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
+import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
+import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 
 export default function Home() {
+  const sessionId = createUniqueId()
   const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
   const [contextEvents, setContextEvents] = createSignal<ContextEvent[]>([])
@@ -49,6 +51,27 @@ export default function Home() {
     }
   }
 
+  // Handle data stash actions (hide/unhide/archive/unarchive)
+  const handleStashAction = async (eventId: string, action: StashAction) => {
+    // Optimistic UI update: mutate local signal immediately
+    setContextEvents(prev => prev.map(e => {
+      if (e.id !== eventId || e.type !== 'tool_result') return e
+      const d = { ...(e.data as ToolResultEventData) }
+      if (action === 'hide') d.hidden = true
+      if (action === 'unhide') d.hidden = false
+      if (action === 'archive') { d.archived = true; d.hidden = false }
+      if (action === 'unarchive') d.archived = false
+      return { ...e, data: d }
+    }))
+
+    // Persist to server
+    await fetch('/api/stash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, eventId, action }),
+    })
+  }
+
   // Build a set of known entity names/labels from graph elements for chat highlighting
   const graphEntityNames = createMemo(() => {
     const names = new Map<string, string[]>() // name → [id1, id2, ...]
@@ -90,6 +113,7 @@ export default function Home() {
         {/* Chat Panel */}
         <Splitter.Panel id="chat">
           <ChatInterface
+            sessionId={sessionId}
             onGraphUpdate={accumulateGraphElements}
             onEventsUpdate={accumulateEvents}
             onContextUpdate={setUnifiedContext}
@@ -118,6 +142,8 @@ export default function Home() {
             onClearGraph={clearGraph}
             onClearEvents={clearEvents}
             onCypherWrite={handleCypherWrite}
+            sessionId={sessionId}
+            onStashAction={handleStashAction}
           />
         </Splitter.Panel>
       </Splitter.Root>

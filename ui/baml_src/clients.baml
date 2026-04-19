@@ -196,6 +196,14 @@ client<llm> SynthesizerFallback {
   }
 }
 
+// Lightweight summarization — tiny/fast model for tool result descriptions
+client<llm> DescribeFallback {
+  provider fallback
+  options {
+    strategy [LocalGLM, GroqFast]
+  }
+}
+
 // https://docs.boundaryml.com/docs/snippets/clients/fallback
 client<llm> OpenaiFallback {
   provider fallback

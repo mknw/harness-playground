@@ -19,7 +19,7 @@
 
 import { assertServerOnImport } from './assert.server'
 import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, CriticResult, ScriptExecutionEvent, LLMCallData } from './types'
-import type { ToolDescription, LoopTurn, Attempt } from '../../../baml_client/types'
+import type { ToolDescription, LoopTurn, Attempt, PriorResult } from '../../../baml_client/types'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 
@@ -49,7 +49,7 @@ export type ControllerFnWithLLMData = (
   n_turn: number,
   schema?: string,
   collector?: Collector,
-  priorContext?: string
+  priorResults?: PriorResult[]
 ) => Promise<ControllerCallResult>
 
 /** Critic function that returns result + observability data */
@@ -183,7 +183,7 @@ export function createLoopControllerAdapter(
     n_turn: number,
     schema?: string,
     collector?: Collector,
-    priorContext?: string
+    priorResults?: PriorResult[]
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
@@ -194,17 +194,16 @@ export function createLoopControllerAdapter(
     // Parse previous results into LoopTurn format
     const turns: LoopTurn[] = parseResultsToTurns(previous_results, n_turn)
 
-    // Build context from schema, prefix, and prior tool results
+    // Build context from schema and contextPrefix only (prior tool results go into priorResults)
     let context: string | undefined
-    if (schema || contextPrefix || priorContext) {
+    if (schema || contextPrefix) {
       const parts: string[] = []
       if (contextPrefix) parts.push(contextPrefix)
       if (schema) parts.push(`GRAPH SCHEMA:\n${schema}`)
-      if (priorContext) parts.push(`PREVIOUS TOOL RESULTS:\n${priorContext}`)
       context = parts.join('\n\n')
     }
 
-    const variables = { user_message, intent, tools, turns, context }
+    const variables = { user_message, intent, tools, turns, context, turns_previous_runs: priorResults }
 
     // Call with or without collector.
     // On BamlValidationError (LocalGLM returns malformed JSON), retry with GroqReasoning —
@@ -212,12 +211,12 @@ export function createLoopControllerAdapter(
     let action: ControllerAction
     try {
       action = collector
-        ? await b.LoopController(user_message, intent, tools, turns, context, { collector })
-        : await b.LoopController(user_message, intent, tools, turns, context)
+        ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, { collector })
+        : await b.LoopController(user_message, intent, tools, turns, context, priorResults)
     } catch (e) {
       if (!(e instanceof BamlValidationError)) throw e
       // Primary client returned unparseable output; retry with reliable Groq fallback
-      action = await b.LoopController(user_message, intent, tools, turns, context, { client: 'GroqReasoning' })
+      action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, { client: 'GroqReasoning' })
     }
 
     // Extract LLM call data if collector present
@@ -355,6 +354,28 @@ export function createCriticAdapter(): CriticFnWithLLMData {
       : undefined
 
     return { result, llmCall }
+  }
+}
+
+// ============================================================================
+// Tool Result Summarization
+// ============================================================================
+
+/**
+ * Summarize a tool result using a lightweight model.
+ * Non-fatal: returns empty string on failure.
+ */
+export async function describeToolResultOp(
+  tool: string,
+  toolArgs: string,
+  reasoning: string,
+  result: string
+): Promise<string> {
+  try {
+    const { b } = await import('../../../baml_client')
+    return await b.ResultDescribe(tool, toolArgs, reasoning, result)
+  } catch {
+    return ''
   }
 }
 

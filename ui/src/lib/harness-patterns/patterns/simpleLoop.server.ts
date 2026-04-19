@@ -9,7 +9,7 @@ import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import { repairJson } from '../json-repair'
-import type { LoopTurn } from '../../../../baml_client/types'
+import type { LoopTurn, PriorResult } from '../../../../baml_client/types'
 import type {
   ControllerAction,
   SimpleLoopConfig,
@@ -45,7 +45,11 @@ function resolveRefs(
       const eventId = value.slice(4)
       const event = allEvents.find(e => e.id === eventId)
       if (event && event.type === 'tool_result') {
-        resolved[key] = (event.data as ToolResultEventData).result
+        const d = event.data as ToolResultEventData
+        // Skip hidden/archived results — refs to excluded data stay unresolved
+        if (!d.hidden && !d.archived) {
+          resolved[key] = d.result
+        }
       }
     }
   }
@@ -98,8 +102,31 @@ export function simpleLoop<T extends SimpleLoopData>(
     let hasError = false
     let errorMessage: string | undefined
 
-    // Build prior tool context from previous turns (compact pointers for older results)
-    const priorToolContext = view.fromAll().tools().serializeCompact({ recentTurns: 0 }) || undefined
+    // Build structured references to tool results from previous tasks.
+    // These are passed as turns_previous_runs (separate from the current task's turns)
+    // so the LLM can clearly distinguish prior context from current work.
+    // Summaries (populated async after prior responses) are used when available.
+    let priorResults: PriorResult[] | undefined
+    if (config?.rememberPriorTurns !== false) {
+      const turnCount = config?.priorTurnCount ?? 3
+      const priorEvents = view.fromLastNTurns(turnCount).ofType('tool_result').get()
+        .filter(e => {
+          const d = e.data as ToolResultEventData
+          return !!e.id && !d.hidden && !d.archived && d.success
+        })
+      if (priorEvents.length > 0) {
+        priorResults = priorEvents.map(e => {
+          const d = e.data as ToolResultEventData
+          const rawResult = typeof d.result === 'string' ? d.result : JSON.stringify(d.result)
+          const preview = d.summary ?? rawResult.slice(0, 200).replace(/\n/g, ' ')
+          return {
+            ref_id: e.id!,
+            tool: d.tool,
+            summary: preview + (!d.summary && rawResult.length > 200 ? '...' : '')
+          }
+        })
+      }
+    }
 
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
@@ -126,7 +153,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             turn,
             config?.schema,
             collector,
-            priorToolContext
+            priorResults
           )
           action = controllerResult.action
 

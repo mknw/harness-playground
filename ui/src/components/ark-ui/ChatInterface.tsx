@@ -15,7 +15,7 @@
  * - Session ID per component instance
  */
 
-import { createSignal, createUniqueId, onMount, onCleanup } from 'solid-js'
+import { createSignal, onMount, onCleanup } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
@@ -29,6 +29,8 @@ import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
 // ============================================================================
 
 export interface ChatInterfaceProps {
+  /** Session ID for server-side state (shared with SupportPanel for stash actions) */
+  sessionId: string
   onGraphUpdate?: (elements: GraphElement[]) => void
   onEventsUpdate?: (events: ContextEvent[]) => void
   onContextUpdate?: (ctx: UnifiedContext) => void
@@ -43,7 +45,7 @@ export interface ChatInterfaceProps {
 // ============================================================================
 
 export const ChatInterface = (props: ChatInterfaceProps) => {
-  const sessionId = createUniqueId()
+  const sessionId = props.sessionId
   const [messages, setMessages] = createSignal<Message[]>([])
   const [isProcessing, setIsProcessing] = createSignal(false)
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)

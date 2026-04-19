@@ -1,12 +1,18 @@
 // simpleLoop.baml - Default prompt for the simpleLoop pattern
 // Task-agnostic: intent, tools, and turn history are injected at runtime.
+//
+// Parameters:
+//   turns               — tool calls/results from the CURRENT task (this invocation)
+//   turns_previous_runs — compact references to results from PREVIOUS tasks/sessions
+//                         (separate so the LLM can distinguish past context from current work)
 
 function LoopController(
   user_message: string,
   intent: string,
   tools: ToolDescription[],
   turns: LoopTurn[],
-  context: string?
+  context: string?,
+  turns_previous_runs: PriorResult[]?
 ) -> ControllerAction {
   client ControllerFallback
   prompt #"
@@ -20,10 +26,6 @@ function LoopController(
     {% if context %}
     CONTEXT:
     {{ context }}
-
-    When previous results are shown in compact form with a reference ID (ref:ev-XXXXX),
-    you can pass that reference as a tool argument value. The system will automatically
-    expand it to the full data before executing the tool.
     {% endif %}
 
     AVAILABLE TOOLS:
@@ -33,8 +35,20 @@ function LoopController(
     {% endfor %}
     - Return: Signal task completion (tool_args = final answer or summary)
 
+    {% if turns_previous_runs and turns_previous_runs|length > 0 %}
+    RESULTS FROM PREVIOUS TASKS:
+    The following data was retrieved in prior requests. You may reference it as
+    context or re-use it without re-fetching. To pass a full result as a tool
+    argument, use the reference ID: pass "ref:<ref_id>" as the argument value
+    and the system will automatically expand it to the full data.
+
+    {% for r in turns_previous_runs %}
+    - [ref:{{ r.ref_id }}] {{ r.tool }}: {{ r.summary }}
+    {% endfor %}
+    {% endif %}
+
     {% if turns|length > 0 %}
-    PREVIOUS TURNS:
+    CURRENT TASK — PREVIOUS TURNS:
     {% for turn in turns %}
     --- Turn {{ turn.n }} ---
     {% if turn.reasoning %}Reasoning: {{ turn.reasoning }}{% endif %}

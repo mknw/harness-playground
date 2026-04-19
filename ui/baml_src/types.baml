@@ -48,6 +48,18 @@ class Attempt {
 }
 
 // ============================================================================
+// Cross-Turn Data References
+// ============================================================================
+
+/// A compact reference to a tool result from a previous task/turn.
+/// The LLM can pass ref:<ref_id> as a tool argument value to retrieve full data.
+class PriorResult {
+  ref_id string @description("Event ID — pass as ref:<ref_id> in tool arguments to expand full data")
+  tool string @description("Tool that produced this result")
+  summary string @description("Brief summary or preview of the result")
+}
+
+// ============================================================================
 // Routing Types
 // ============================================================================
 

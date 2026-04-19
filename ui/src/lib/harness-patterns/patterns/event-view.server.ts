@@ -338,7 +338,14 @@ export class EventViewImpl implements IEventView {
       recentCutoffTs = this.ctx.events[cutoffIdx].ts
     }
 
-    return events
+    // Exclude hidden/archived tool_results from LLM context
+    const visibleEvents = events.filter(event => {
+      if (event.type !== 'tool_result') return true
+      const d = event.data as ToolResultEventData
+      return !d.hidden && !d.archived
+    })
+
+    return visibleEvents
       .map((event) => {
         const isRecent = event.ts >= recentCutoffTs
         if (!isRecent && event.type === 'tool_result' && event.id) {
@@ -420,14 +427,15 @@ function formatEvent(event: ContextEvent): string {
   return `<${event.type}>${content}</${event.type}>`
 }
 
-/** Format a tool_result event as a compact pointer */
+/** Format a tool_result event as a compact pointer (uses summary if available) */
 function formatEventCompact(event: ContextEvent): string {
   const data = event.data as ToolResultEventData
   const resultStr = typeof data.result === 'string'
     ? data.result
     : JSON.stringify(data.result)
-  const preview = resultStr.slice(0, 120).replace(/\n/g, ' ')
-  const suffix = resultStr.length > 120 ? '...' : ''
+  // Prefer LLM-generated summary over raw result slice for the compact preview
+  const preview = data.summary ?? resultStr.slice(0, 120).replace(/\n/g, ' ')
+  const suffix = !data.summary && resultStr.length > 120 ? '...' : ''
   return `<tool_result id="${event.id}" tool="${data.tool}" compact="true">${preview}${suffix} (${resultStr.length} chars). Use ref:${event.id} to access full data.</tool_result>`
 }
 
@@ -451,7 +459,8 @@ function formatEventData(event: ContextEvent): string {
       if (!data.success) {
         return `${data.tool} ERROR: ${data.error}`
       }
-      return `${data.tool}: ${JSON.stringify(data.result)}`
+      const base = `${data.tool}: ${JSON.stringify(data.result)}`
+      return data.summary ? `${base}\n[Summary: ${data.summary}]` : base
     }
     default:
       return typeof event.data === 'object'

@@ -2,13 +2,14 @@
  * Support Panel Component
  *
  * Tabbed interface for knowledge graph visualization and observability tools
- * Tabs: Neo4j Graph | Memory Graph | Observability | Actions | Documents | Tools
+ * Tabs: Neo4j Graph | Memory Graph | Observability | Data | Actions | Documents | Tools
  */
 
 import { Tabs } from '@ark-ui/solid/tabs';
 import { Show, createSignal, createMemo } from 'solid-js';
 import { GraphVisualization } from './GraphVisualization';
 import { ObservabilityPanel } from './ObservabilityPanel';
+import { DataStashPanel, type StashAction } from './DataStashPanel';
 import { ToolsPanel } from './ToolsPanel';
 import type { ElementDefinition } from 'cytoscape';
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns';
@@ -41,6 +42,10 @@ export interface SupportPanelProps {
   onClearEvents?: () => void;
   /** Callback for Cypher write operations (node edits, relation creation) */
   onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>;
+  /** Session ID for stash API calls */
+  sessionId?: string;
+  /** Callback for data stash actions (hide/unhide/archive/unarchive) */
+  onStashAction?: (eventId: string, action: StashAction) => Promise<void>;
 }
 
 // ============================================================================
@@ -148,6 +153,22 @@ export const SupportPanel = (props: SupportPanelProps) => {
           </Tabs.Trigger>
 
           <Tabs.Trigger
+            value="data"
+            p="x-3 y-2"
+            text="sm dark-text-primary"
+            cursor="pointer"
+            border="b-2 transparent"
+            transition="all"
+            data-state={selectedTab() === 'data' ? 'active' : 'inactive'}
+            style={{
+              "border-bottom-color": selectedTab() === 'data' ? '#22d3ee' : 'transparent',
+              "color": selectedTab() === 'data' ? '#22d3ee' : '#a1a1aa'
+            }}
+          >
+            Data
+          </Tabs.Trigger>
+
+          <Tabs.Trigger
             value="tools"
             p="x-3 y-2"
             text="sm dark-text-primary"
@@ -235,6 +256,15 @@ export const SupportPanel = (props: SupportPanelProps) => {
               events={props.contextEvents ?? []}
               context={props.unifiedContext}
               onClear={props.onClearEvents}
+            />
+          </Tabs.Content>
+
+          {/* Data Stash Tab */}
+          <Tabs.Content value="data" h="full">
+            <DataStashPanel
+              events={props.contextEvents ?? []}
+              sessionId={props.sessionId ?? ''}
+              onStashAction={props.onStashAction ?? (async () => {})}
             />
           </Tabs.Content>
 

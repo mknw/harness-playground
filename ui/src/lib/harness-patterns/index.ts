@@ -172,7 +172,8 @@ export {
   generateId,
   resolveConfig,
   getDefaultTrackHistory,
-  getDefaultCommitStrategy
+  getDefaultCommitStrategy,
+  enrichToolResult
 } from './context.server'
 
 // ============================================================================
@@ -182,6 +183,7 @@ export {
 export { callTool, listTools, getMcpClient, closeMcpClient } from './mcp-client.server'
 export { assertServer, ServerOnlyError } from './assert.server'
 export { routeMessageOp } from './routing.server'
+export { scheduleSummarization } from './summarize.server'
 
 // BAML Adapters
 export {

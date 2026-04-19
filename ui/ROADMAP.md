@@ -41,6 +41,16 @@
 - Layout persistence across sessions
 - Minimap for large graphs
 
+### actorCritic Generalization
+- Decouple actorCritic from code_mode (currently hardcoded to `ScriptExecutionEvent`)
+- Make it a general-purpose actor-critic usable with MCP tools
+- Add data stash support (rememberPriorTurns / priorTurnCount)
+
+### Multi-turn Conversation History (Phase 2: Synthesizer + Loop)
+- Add `history: Message[]` to BAML `Synthesize` function
+- Add optional `history: Message[]` to BAML `LoopController`
+- Pass conversation history from EventView to synthesizer and loop patterns
+
 ### Actions Tab
 - Context-based action suggestions
 - n8n workflow trigger UI (list workflows, manual trigger with parameters, webhook config)
@@ -57,6 +67,15 @@
 - [x] Add `fromLastNTurns` rolling window to ViewConfig + EventView fluent API
 - [x] Router extracts message history from last N turns and passes to BAML Router
 - [x] Default: `{ fromLast: false, fromLastNTurns: 5, eventTypes: ['user_message', 'assistant_message'] }`
+
+### Data Stash — Cross-Turn Tool Result Memory
+- [x] `rememberPriorTurns` / `priorTurnCount` config on `SimpleLoopConfig`
+- [x] `ResultDescribe` BAML function for async tool result summarization (`DescribeFallback` client)
+- [x] `ToolResultEventData` extended with `summary`, `hidden`, `archived` fields
+- [x] `serializeCompact()` and `resolveRefs()` respect hidden/archived flags
+- [x] Background summarization fires after SSE response (fire-and-forget from `api/events.ts`)
+- [x] Data Stash tab in SupportPanel with Current Turn / Previous Turns / Archived sections
+- [x] Hide/unhide/archive/unarchive via `POST /api/stash` with optimistic UI updates
 
 ## Next steps
 
