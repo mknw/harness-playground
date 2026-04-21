@@ -137,16 +137,24 @@ export class EventViewImpl implements IEventView {
     return view
   }
 
-  /** Events from the immediately preceding pattern */
+  /** Events from the most recent execution of the immediately preceding pattern.
+   *  Scoped to the last pattern_enter → pattern_exit boundary for that ID,
+   *  so repeated executions of the same pattern across turns don't bleed. */
   fromLastPattern(): EventViewImpl {
     const lastPatternId = this.getLastPatternId()
     if (!lastPatternId) {
-      // Return empty view if no previous pattern
       const view = this.clone()
       view.addFilter(() => false)
       return view
     }
-    return this.fromPattern(lastPatternId)
+
+    // Build a set of events within the last execution boundary for O(1) lookup
+    const [startIdx, endIdx] = this.getLastExecutionBounds(lastPatternId)
+    const boundaryEvents = new Set(this.ctx.events.slice(startIdx, endIdx + 1))
+
+    const view = this.clone()
+    view.addFilter((e) => boundaryEvents.has(e) && e.patternId === lastPatternId)
+    return view
   }
 
   /** Events from the last N patterns in execution order (excluding self) */
@@ -389,6 +397,35 @@ export class EventViewImpl implements IEventView {
       ? this.getPatternIds().filter(id => id !== this.selfPatternId)
       : this.getPatternIds()
     return ids.at(-1)
+  }
+
+  /**
+   * Get the [startIdx, endIdx] bounds of the last execution of a pattern.
+   * Scans backwards for the last pattern_enter, then forwards for
+   * the matching pattern_exit (or end of events if still running).
+   */
+  private getLastExecutionBounds(patternId: string): [number, number] {
+    const events = this.ctx.events
+    let startIdx = 0
+
+    // Scan backwards for the last pattern_enter with this ID
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === 'pattern_enter' && events[i].patternId === patternId) {
+        startIdx = i
+        break
+      }
+    }
+
+    // Scan forwards from startIdx for the matching pattern_exit
+    let endIdx = events.length - 1
+    for (let i = startIdx + 1; i < events.length; i++) {
+      if (events[i].type === 'pattern_exit' && events[i].patternId === patternId) {
+        endIdx = i
+        break
+      }
+    }
+
+    return [startIdx, endIdx]
   }
 }
 

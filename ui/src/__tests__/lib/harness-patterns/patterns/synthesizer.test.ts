@@ -16,16 +16,18 @@ vi.mock('../../../../../baml_client', () => ({
   }
 }))
 
-// Mock Collector
-vi.mock('@boundaryml/baml', () => ({
-  Collector: vi.fn().mockImplementation(() => ({
-    last: {
+// Mock Collector — must be a real class so `new Collector()` works
+vi.mock('@boundaryml/baml', () => {
+  class MockCollector {
+    last = {
       rawLlmResponse: 'Raw response',
       usage: { inputTokens: 100, outputTokens: 50 },
       calls: [{ httpRequest: { body: { messages: [] } } }]
     }
-  }))
-}))
+    constructor(_name?: string) {}
+  }
+  return { Collector: MockCollector }
+})
 
 describe('synthesizer', () => {
   beforeEach(() => {
@@ -176,11 +178,35 @@ describe('synthesizer execution', () => {
     expect((result.events[0].data as { content: string }).content).toBe('Test response')
   })
 
-  // Note: Testing default BAML synthesis requires integration test setup
-  // since the dynamic import in defaultSynthesize is hard to mock
-  it.skip('should call default synthesis with BAML when no custom function provided', async () => {
-    // This test is skipped - requires integration test setup
-    expect(true).toBe(true)
+  it('should call default synthesis with BAML when no custom function provided', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    // No custom synthesize function — should use defaultSynthesize → b.Synthesize mock
+    const pattern = synthesizer({
+      mode: 'message',
+      trackHistory: true
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test query' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test query'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Should have used the BAML mock's return value
+    expect(result.data.synthesizedResponse).toBe('Synthesized response from BAML')
+    expect(result.events.filter(e => e.type === 'assistant_message')).toHaveLength(1)
   })
 
   it('should handle response mode', async () => {

@@ -144,36 +144,51 @@ export function trackEvent(
 /** Event types that are always committed regardless of strategy */
 const LIFECYCLE_TYPES: Set<EventType> = new Set(['pattern_enter', 'pattern_exit'])
 
-/** Commit scope events to context based on strategy */
+/** Commit scope events to context based on strategy.
+ *  Preserves original event order — lifecycle events (pattern_enter/exit) are
+ *  always committed regardless of strategy, interleaved with content events
+ *  in their original position. */
 export function commitEvents<T>(
   ctx: UnifiedContext<T>,
   scope: PatternScope<unknown>,
   strategy: CommitStrategy
 ): void {
-  // Lifecycle events (pattern_enter/exit) are always committed — they're structural
-  const lifecycle = scope.events.filter(e => LIFECYCLE_TYPES.has(e.type))
-  const content = scope.events.filter(e => !LIFECYCLE_TYPES.has(e.type))
-
-  ctx.events.push(...lifecycle)
-
   switch (strategy) {
     case 'always':
-      ctx.events.push(...content)
+      // All events in original order
+      ctx.events.push(...scope.events)
       break
     case 'on-success':
       if (ctx.status !== 'error') {
-        ctx.events.push(...content)
+        ctx.events.push(...scope.events)
+      } else {
+        // Only lifecycle events
+        ctx.events.push(...scope.events.filter(e => LIFECYCLE_TYPES.has(e.type)))
       }
       break
-    case 'last':
-      if (content.length > 0) {
-        ctx.events.push(content.at(-1)!)
+    case 'last': {
+      // Lifecycle events + last content event, preserving order
+      const lastContentIdx = findLastIndex(scope.events, e => !LIFECYCLE_TYPES.has(e.type))
+      for (let i = 0; i < scope.events.length; i++) {
+        const e = scope.events[i]
+        if (LIFECYCLE_TYPES.has(e.type) || i === lastContentIdx) {
+          ctx.events.push(e)
+        }
       }
       break
+    }
     case 'never':
-      // Discard content events (lifecycle still committed above)
+      // Only lifecycle events
+      ctx.events.push(...scope.events.filter(e => LIFECYCLE_TYPES.has(e.type)))
       break
   }
+}
+
+function findLastIndex<T>(arr: T[], pred: (item: T) => boolean): number {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (pred(arr[i])) return i
+  }
+  return -1
 }
 
 // ============================================================================

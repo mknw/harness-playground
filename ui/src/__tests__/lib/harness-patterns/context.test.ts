@@ -280,6 +280,181 @@ describe('context', () => {
       expect(deserialized.data).toEqual(ctx.data)
       expect(deserialized.events.length).toBe(ctx.events.length)
     })
+
+    it('should preserve hidden/archived/summary fields through round-trip', async () => {
+      const { createContext, serializeContext, deserializeContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+
+      const ctx = createContext('test message')
+      ctx.events.push({
+        type: 'tool_result',
+        ts: Date.now(),
+        patternId: 'p1',
+        id: 'ev-roundtrip',
+        data: { tool: 'search', result: 'data', success: true }
+      })
+
+      // Enrich with Data Stash fields
+      enrichToolResult(ctx, 'ev-roundtrip', {
+        summary: 'Found search results',
+        hidden: true
+      })
+
+      // Serialize and deserialize
+      const serialized = serializeContext(ctx)
+      const deserialized = deserializeContext(serialized)
+
+      const event = deserialized.events.find(e => e.id === 'ev-roundtrip')
+      expect(event).toBeDefined()
+      const data = event!.data as { summary?: string; hidden?: boolean; archived?: boolean }
+      expect(data.summary).toBe('Found search results')
+      expect(data.hidden).toBe(true)
+      expect(data.archived).toBeUndefined()
+    })
+
+    it('should preserve archived state through round-trip', async () => {
+      const { createContext, serializeContext, deserializeContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+      ctx.events.push({
+        type: 'tool_result',
+        ts: Date.now(),
+        patternId: 'p1',
+        id: 'ev-archived-rt',
+        data: { tool: 'fetch', result: 'page', success: true }
+      })
+
+      enrichToolResult(ctx, 'ev-archived-rt', { archived: true, summary: 'Fetched page content' })
+
+      const deserialized = deserializeContext(serializeContext(ctx))
+      const event = deserialized.events.find(e => e.id === 'ev-archived-rt')
+      const data = event!.data as { archived?: boolean; summary?: string }
+      expect(data.archived).toBe(true)
+      expect(data.summary).toBe('Fetched page content')
+    })
+  })
+
+  describe('enrichToolResult', () => {
+    it('should add summary to a tool_result event', async () => {
+      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+      ctx.events.push({
+        type: 'tool_result',
+        ts: Date.now(),
+        patternId: 'p1',
+        id: 'ev-abc123',
+        data: { tool: 'read_neo4j_cypher', result: { nodes: [] }, success: true }
+      })
+
+      const found = enrichToolResult(ctx, 'ev-abc123', { summary: 'Found 0 nodes in the graph.' })
+
+      expect(found).toBe(true)
+      const data = ctx.events[ctx.events.length - 1].data as { summary?: string }
+      expect(data.summary).toBe('Found 0 nodes in the graph.')
+    })
+
+    it('should set hidden flag on a tool_result event', async () => {
+      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+      ctx.events.push({
+        type: 'tool_result',
+        ts: Date.now(),
+        patternId: 'p1',
+        id: 'ev-def456',
+        data: { tool: 'search', result: 'data', success: true }
+      })
+
+      const found = enrichToolResult(ctx, 'ev-def456', { hidden: true })
+
+      expect(found).toBe(true)
+      const data = ctx.events[ctx.events.length - 1].data as { hidden?: boolean }
+      expect(data.hidden).toBe(true)
+    })
+
+    it('should set archived flag on a tool_result event', async () => {
+      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+      ctx.events.push({
+        type: 'tool_result',
+        ts: Date.now(),
+        patternId: 'p1',
+        id: 'ev-ghi789',
+        data: { tool: 'fetch', result: 'page content', success: true }
+      })
+
+      const found = enrichToolResult(ctx, 'ev-ghi789', { archived: true })
+
+      expect(found).toBe(true)
+      const data = ctx.events[ctx.events.length - 1].data as { archived?: boolean }
+      expect(data.archived).toBe(true)
+    })
+
+    it('should apply multiple fields at once', async () => {
+      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+      ctx.events.push({
+        type: 'tool_result',
+        ts: Date.now(),
+        patternId: 'p1',
+        id: 'ev-multi',
+        data: { tool: 'search', result: 'data', success: true }
+      })
+
+      enrichToolResult(ctx, 'ev-multi', { summary: 'Found data', hidden: true })
+
+      const data = ctx.events[ctx.events.length - 1].data as { summary?: string; hidden?: boolean }
+      expect(data.summary).toBe('Found data')
+      expect(data.hidden).toBe(true)
+    })
+
+    it('should return false when event not found', async () => {
+      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+
+      const found = enrichToolResult(ctx, 'ev-nonexistent', { summary: 'test' })
+
+      expect(found).toBe(false)
+    })
+
+    it('should not modify non-tool_result events with matching id', async () => {
+      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+      ctx.events.push({
+        type: 'tool_call',
+        ts: Date.now(),
+        patternId: 'p1',
+        id: 'ev-toolcall',
+        data: { tool: 'search', args: {} }
+      })
+
+      const found = enrichToolResult(ctx, 'ev-toolcall', { summary: 'should not apply' })
+
+      expect(found).toBe(false)
+    })
+
+    it('should mutate event in-place (not clone)', async () => {
+      const { createContext, enrichToolResult } = await import('../../../lib/harness-patterns/context.server')
+
+      const ctx = createContext('test')
+      const eventData = { tool: 'search', result: 'data', success: true }
+      ctx.events.push({
+        type: 'tool_result',
+        ts: Date.now(),
+        patternId: 'p1',
+        id: 'ev-inplace',
+        data: eventData
+      })
+
+      enrichToolResult(ctx, 'ev-inplace', { summary: 'mutated' })
+
+      // The original data object reference should be mutated
+      expect((eventData as { summary?: string }).summary).toBe('mutated')
+    })
   })
 
   describe('status helpers', () => {

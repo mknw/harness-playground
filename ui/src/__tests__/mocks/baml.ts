@@ -63,6 +63,8 @@ export interface MockBAMLClientOptions {
   routerResult?: { intent: string; needs_tool: boolean; route: string | null; response: string }
   /** Synthesize result */
   synthesizeResult?: string
+  /** ResultDescribe result */
+  resultDescribeResult?: string
 }
 
 /**
@@ -104,6 +106,10 @@ export function mockBAMLClient(options: MockBAMLClientOptions = {}) {
 
     Synthesize: vi.fn(async () => {
       return options.synthesizeResult ?? 'Synthesized response'
+    }),
+
+    ResultDescribe: vi.fn(async () => {
+      return options.resultDescribeResult ?? 'Tool result summary'
     })
   }
 }

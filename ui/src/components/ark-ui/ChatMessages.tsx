@@ -1,4 +1,5 @@
 
+import { Collapsible } from '@ark-ui/solid/collapsible'
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
 import { For, Show, createEffect, createSignal } from 'solid-js'
 import type { ElementDefinition } from 'cytoscape'

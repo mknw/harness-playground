@@ -441,6 +441,427 @@ describe('simpleLoop execution', () => {
     expect(toolResults.length).toBe(2)
   })
 
+  it('should build priorResults from prior turn tool_results', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn().mockResolvedValue({
+      action: mockFinalAction('Done'),
+      llmCall: undefined
+    })
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test',
+      rememberPriorTurns: true,
+      priorTurnCount: 3
+    })
+
+    const scope = createScope('test', { intent: 'second query' })
+    // Context with a prior turn that has tool_result events
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'first query' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-prior1', data: { tool: 'read_neo4j_cypher', result: { nodes: ['A', 'B'] }, success: true, summary: 'Found 2 nodes A and B.' } },
+        { type: 'user_message' as const, ts: 3, patternId: 'harness', data: { content: 'second query' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'second query'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    expect(mockController).toHaveBeenCalled()
+    // priorResults is the 7th argument (index 6)
+    const priorResults = mockController.mock.calls[0][6]
+    expect(priorResults).toBeDefined()
+    expect(priorResults).toHaveLength(1)
+    expect(priorResults[0].ref_id).toBe('ev-prior1')
+    expect(priorResults[0].tool).toBe('read_neo4j_cypher')
+    expect(priorResults[0].summary).toBe('Found 2 nodes A and B.')
+  })
+
+  it('should exclude hidden tool_results from priorResults', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn().mockResolvedValue({
+      action: mockFinalAction('Done'),
+      llmCall: undefined
+    })
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test',
+      rememberPriorTurns: true
+    })
+
+    const scope = createScope('test', { intent: 'query' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'first query' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-visible', data: { tool: 'search', result: 'visible', success: true } },
+        { type: 'tool_result' as const, ts: 3, patternId: 'p1', id: 'ev-hidden', data: { tool: 'fetch', result: 'hidden', success: true, hidden: true } },
+        { type: 'user_message' as const, ts: 4, patternId: 'harness', data: { content: 'second query' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'second query'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    const priorResults = mockController.mock.calls[0][6]
+    expect(priorResults).toBeDefined()
+    expect(priorResults).toHaveLength(1)
+    expect(priorResults[0].ref_id).toBe('ev-visible')
+  })
+
+  it('should exclude archived tool_results from priorResults', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn().mockResolvedValue({
+      action: mockFinalAction('Done'),
+      llmCall: undefined
+    })
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test',
+      rememberPriorTurns: true
+    })
+
+    const scope = createScope('test', { intent: 'query' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'first query' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-ok', data: { tool: 'search', result: 'ok', success: true } },
+        { type: 'tool_result' as const, ts: 3, patternId: 'p1', id: 'ev-arch', data: { tool: 'fetch', result: 'archived', success: true, archived: true } },
+        { type: 'user_message' as const, ts: 4, patternId: 'harness', data: { content: 'second query' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'second query'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    const priorResults = mockController.mock.calls[0][6]
+    expect(priorResults).toHaveLength(1)
+    expect(priorResults[0].ref_id).toBe('ev-ok')
+  })
+
+  it('should not build priorResults when rememberPriorTurns is false', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn().mockResolvedValue({
+      action: mockFinalAction('Done'),
+      llmCall: undefined
+    })
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test',
+      rememberPriorTurns: false
+    })
+
+    const scope = createScope('test', { intent: 'query' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'first' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-prior', data: { tool: 'search', result: 'data', success: true } },
+        { type: 'user_message' as const, ts: 3, patternId: 'harness', data: { content: 'second' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'second'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    // priorResults (7th arg) should be undefined
+    const priorResults = mockController.mock.calls[0][6]
+    expect(priorResults).toBeUndefined()
+  })
+
+  it('should use raw result preview when no summary for priorResults', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn().mockResolvedValue({
+      action: mockFinalAction('Done'),
+      llmCall: undefined
+    })
+
+    const longResult = 'x'.repeat(300)
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test',
+      rememberPriorTurns: true
+    })
+
+    const scope = createScope('test', { intent: 'query' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'first' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-long', data: { tool: 'search', result: longResult, success: true } },
+        { type: 'user_message' as const, ts: 3, patternId: 'harness', data: { content: 'second' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'second'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    const priorResults = mockController.mock.calls[0][6]
+    expect(priorResults).toHaveLength(1)
+    // Should be truncated to 200 chars + '...'
+    expect(priorResults[0].summary.length).toBeLessThanOrEqual(204) // 200 + '...'
+    expect(priorResults[0].summary).toContain('...')
+  })
+
+  it('should limit priorResults to priorTurnCount turns', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn().mockResolvedValue({
+      action: mockFinalAction('Done'),
+      llmCall: undefined
+    })
+
+    // priorTurnCount: 2 — include results from the last 2 user turns (turns 2+3)
+    // Turn 1 results should be excluded
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test',
+      rememberPriorTurns: true,
+      priorTurnCount: 2
+    })
+
+    const scope = createScope('test', { intent: 'query' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        // Turn 1 (oldest — should NOT be included with priorTurnCount=2)
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'first' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-turn1', data: { tool: 'search', result: 'old data', success: true } },
+        // Turn 2 (prior — should be included)
+        { type: 'user_message' as const, ts: 3, patternId: 'harness', data: { content: 'second' } },
+        { type: 'tool_result' as const, ts: 4, patternId: 'p1', id: 'ev-turn2', data: { tool: 'fetch', result: 'recent data', success: true } },
+        // Turn 3 (current — included in window but has no tool_results yet)
+        { type: 'user_message' as const, ts: 5, patternId: 'harness', data: { content: 'third' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'third'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    const priorResults = mockController.mock.calls[0][6]
+    expect(priorResults).toBeDefined()
+    // Only ev-turn2 should be included (turn 2 is in window), ev-turn1 is outside
+    expect(priorResults).toHaveLength(1)
+    expect(priorResults[0].ref_id).toBe('ev-turn2')
+  })
+
+  it('should exclude failed tool_results from priorResults', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn().mockResolvedValue({
+      action: mockFinalAction('Done'),
+      llmCall: undefined
+    })
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test',
+      rememberPriorTurns: true
+    })
+
+    const scope = createScope('test', { intent: 'query' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'first' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-ok', data: { tool: 'search', result: 'good data', success: true } },
+        { type: 'tool_result' as const, ts: 3, patternId: 'p1', id: 'ev-fail', data: { tool: 'fetch', result: null, success: false, error: 'timeout' } },
+        { type: 'user_message' as const, ts: 4, patternId: 'harness', data: { content: 'second' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'second'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    const priorResults = mockController.mock.calls[0][6]
+    // Only the successful result should be included
+    expect(priorResults).toHaveLength(1)
+    expect(priorResults[0].ref_id).toBe('ev-ok')
+  })
+
+  it('should not resolve refs to hidden tool_result events', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    // Controller requests a tool with a ref: to a hidden event
+    const mockController = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"data":"ref:ev-hidden-ref"}' }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        action: mockFinalAction('Done'),
+        llmCall: undefined
+      })
+
+    callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test',
+      trackHistory: true
+    })
+
+    const scope = createScope('test', { intent: 'query' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'query' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-hidden-ref', data: { tool: 'search', result: 'secret data', success: true, hidden: true } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'query'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    // callTool should have been called with the unresolved ref string (not expanded)
+    expect(callToolMock).toHaveBeenCalledWith(
+      'read_neo4j_cypher',
+      expect.objectContaining({ data: 'ref:ev-hidden-ref' })
+    )
+  })
+
+  it('should resolve refs to visible tool_result events', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    // Controller requests a tool with a ref: to a visible event
+    const mockController = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"data":"ref:ev-visible-ref"}' }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        action: mockFinalAction('Done'),
+        llmCall: undefined
+      })
+
+    callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test',
+      trackHistory: true
+    })
+
+    const scope = createScope('test', { intent: 'query' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'query' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-visible-ref', data: { tool: 'search', result: { nodes: ['A', 'B'] }, success: true } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'query'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    // callTool should have been called with the expanded result data (not the ref string)
+    expect(callToolMock).toHaveBeenCalledWith(
+      'read_neo4j_cypher',
+      expect.objectContaining({ data: { nodes: ['A', 'B'] } })
+    )
+  })
+
+  it('should not resolve refs to archived tool_result events', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"data":"ref:ev-archived-ref"}' }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        action: mockFinalAction('Done'),
+        llmCall: undefined
+      })
+
+    callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test',
+      trackHistory: true
+    })
+
+    const scope = createScope('test', { intent: 'query' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'query' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-archived-ref', data: { tool: 'search', result: 'archived data', success: true, archived: true } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'query'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    // callTool should have been called with the unresolved ref string
+    expect(callToolMock).toHaveBeenCalledWith(
+      'read_neo4j_cypher',
+      expect.objectContaining({ data: 'ref:ev-archived-ref' })
+    )
+  })
+
   it('should include callId on tool_call and tool_result events', async () => {
     const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')

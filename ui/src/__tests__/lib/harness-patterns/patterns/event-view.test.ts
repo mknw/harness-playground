@@ -125,6 +125,47 @@ describe('EventViewImpl', () => {
       const result = view.fromLastPattern().get()
       expect(result).toHaveLength(0)
     })
+
+    it('should only return events from the last execution when a pattern runs multiple times', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      // Simulates two user turns both routing to the same 'neo4j-query' pattern
+      const events: ContextEvent[] = [
+        // Turn 1: neo4j-query execution
+        { type: 'pattern_enter', ts: 1, patternId: 'neo4j-query', data: {} },
+        { type: 'tool_call', ts: 2, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher' } },
+        { type: 'tool_result', ts: 3, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher', result: 'turn1-data', success: true } },
+        { type: 'pattern_exit', ts: 4, patternId: 'neo4j-query', data: {} },
+        // Turn 1: synthesizer
+        { type: 'pattern_enter', ts: 5, patternId: 'response-synth', data: {} },
+        { type: 'assistant_message', ts: 6, patternId: 'response-synth', data: { content: 'turn1 response' } },
+        { type: 'pattern_exit', ts: 7, patternId: 'response-synth', data: {} },
+        // Turn 2: neo4j-query execution (same patternId)
+        { type: 'pattern_enter', ts: 8, patternId: 'neo4j-query', data: {} },
+        { type: 'tool_call', ts: 9, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher' } },
+        { type: 'tool_result', ts: 10, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher', result: 'turn2-data', success: true } },
+        { type: 'pattern_exit', ts: 11, patternId: 'neo4j-query', data: {} },
+        // Turn 2: synthesizer (self — excluded)
+        { type: 'pattern_enter', ts: 12, patternId: 'response-synth', data: {} },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx, undefined, 'response-synth')
+
+      const result = view.fromLastPattern().get()
+
+      // Should only contain events from the SECOND neo4j-query execution (ts 8-11)
+      expect(result).toHaveLength(4)
+      expect(result.every(e => e.ts >= 8 && e.ts <= 11)).toBe(true)
+
+      // Specifically: should NOT contain turn 1 events
+      const turn1Data = result.find(e => e.type === 'tool_result' && (e.data as Record<string, unknown>).result === 'turn1-data')
+      expect(turn1Data).toBeUndefined()
+
+      // Should contain turn 2 tool_result
+      const turn2Data = result.find(e => e.type === 'tool_result' && (e.data as Record<string, unknown>).result === 'turn2-data')
+      expect(turn2Data).toBeDefined()
+    })
   })
 
   describe('fromLastNPatterns()', () => {
@@ -335,6 +376,88 @@ describe('EventViewImpl', () => {
     })
   })
 
+  describe('fromLastNTurns()', () => {
+    it('should return events from the last N user turns', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        // Turn 1
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'first' } },
+        { type: 'tool_call', ts: 2, patternId: 'p1', data: { tool: 'a' } },
+        { type: 'tool_result', ts: 3, patternId: 'p1', data: { tool: 'a', result: 'r1', success: true } },
+        // Turn 2
+        { type: 'user_message', ts: 4, patternId: 'p1', data: { content: 'second' } },
+        { type: 'tool_call', ts: 5, patternId: 'p1', data: { tool: 'b' } },
+        { type: 'tool_result', ts: 6, patternId: 'p1', data: { tool: 'b', result: 'r2', success: true } },
+        // Turn 3
+        { type: 'user_message', ts: 7, patternId: 'p1', data: { content: 'third' } },
+        { type: 'tool_call', ts: 8, patternId: 'p1', data: { tool: 'c' } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      // Last 1 turn: only turn 3 events
+      const last1 = view.fromLastNTurns(1).get()
+      expect(last1).toHaveLength(2) // user_message + tool_call from turn 3
+      expect(last1[0].ts).toBe(7)
+
+      // Last 2 turns: turns 2 and 3
+      const last2 = view.fromLastNTurns(2).get()
+      expect(last2).toHaveLength(5) // turns 2+3
+      expect(last2[0].ts).toBe(4)
+    })
+
+    it('should return all events when N exceeds turn count', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'only turn' } },
+        { type: 'tool_call', ts: 2, patternId: 'p1', data: { tool: 'a' } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.fromLastNTurns(10).get()
+      expect(result).toHaveLength(2)
+    })
+
+    it('should chain with type filters', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'first' } },
+        { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-old', data: { tool: 'a', result: 'old', success: true } },
+        { type: 'user_message', ts: 3, patternId: 'p1', data: { content: 'second' } },
+        { type: 'tool_result', ts: 4, patternId: 'p1', id: 'ev-new', data: { tool: 'b', result: 'new', success: true } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      // Last 1 turn, tool_results only — should get ev-new only
+      const result = view.fromLastNTurns(1).ofType('tool_result').get()
+      expect(result).toHaveLength(1)
+      expect(result[0].id).toBe('ev-new')
+    })
+
+    it('should return all events when no user_messages exist', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'tool_call', ts: 1, patternId: 'p1', data: { tool: 'a' } },
+        { type: 'tool_result', ts: 2, patternId: 'p1', data: { tool: 'a', result: 'r', success: true } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.fromLastNTurns(1).get()
+      expect(result).toHaveLength(2)
+    })
+  })
+
   describe('serialize()', () => {
     it('should serialize events to XML format', async () => {
       const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
@@ -534,6 +657,59 @@ describe('EventViewImpl', () => {
       expect(patternIds).toContain('p2')
       expect(patternIds).toContain('p3')
     })
+
+    it('should apply fromLastNTurns via ViewConfig', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        // Turn 1
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'first' } },
+        { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-1', data: { tool: 'a', result: 'old', success: true } },
+        // Turn 2
+        { type: 'user_message', ts: 3, patternId: 'p1', data: { content: 'second' } },
+        { type: 'tool_result', ts: 4, patternId: 'p1', id: 'ev-2', data: { tool: 'b', result: 'new', success: true } },
+      ]
+
+      const ctx = createMockContext(events)
+      // Apply via ViewConfig constructor param (the path used by router and simpleLoop)
+      const view = createEventView(ctx, {
+        fromLast: false,
+        fromLastNTurns: 1,
+        eventTypes: ['tool_result']
+      })
+
+      const result = view.get()
+      // Should only get tool_result from turn 2
+      expect(result).toHaveLength(1)
+      expect(result[0].id).toBe('ev-2')
+    })
+
+    it('should combine fromLastNTurns with eventTypes in ViewConfig', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'first' } },
+        { type: 'tool_call', ts: 2, patternId: 'p1', data: { tool: 'a', args: {} } },
+        { type: 'tool_result', ts: 3, patternId: 'p1', data: { tool: 'a', result: 'r1', success: true } },
+        { type: 'user_message', ts: 4, patternId: 'p1', data: { content: 'second' } },
+        { type: 'tool_call', ts: 5, patternId: 'p1', data: { tool: 'b', args: {} } },
+        { type: 'tool_result', ts: 6, patternId: 'p1', data: { tool: 'b', result: 'r2', success: true } },
+        { type: 'assistant_message', ts: 7, patternId: 'p1', data: { content: 'response' } },
+      ]
+
+      const ctx = createMockContext(events)
+      // Config like the router default: last 2 turns, only messages
+      const view = createEventView(ctx, {
+        fromLast: false,
+        fromLastNTurns: 2,
+        eventTypes: ['user_message', 'assistant_message']
+      })
+
+      const result = view.get()
+      // Should get: user_message(first), user_message(second), assistant_message
+      expect(result).toHaveLength(3)
+      expect(result.every(e => ['user_message', 'assistant_message'].includes(e.type))).toBe(true)
+    })
   })
 
   describe('errors()', () => {
@@ -609,6 +785,177 @@ describe('EventViewImpl', () => {
       const view = createEventView(ctx)
 
       expect(view.lastError()).toBeUndefined()
+    })
+  })
+
+  describe('serializeCompact — hidden/archived filtering', () => {
+    it('should exclude hidden tool_result events from compact serialization', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'query' } },
+        { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-visible', data: { tool: 'search', result: 'visible data', success: true } },
+        { type: 'tool_result', ts: 3, patternId: 'p1', id: 'ev-hidden', data: { tool: 'fetch', result: 'hidden data', success: true, hidden: true } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.serializeCompact()
+      expect(result).toContain('visible data')
+      expect(result).not.toContain('hidden data')
+    })
+
+    it('should exclude archived tool_result events from compact serialization', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'query' } },
+        { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-visible', data: { tool: 'search', result: 'active data', success: true } },
+        { type: 'tool_result', ts: 3, patternId: 'p1', id: 'ev-archived', data: { tool: 'fetch', result: 'archived data', success: true, archived: true } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.serializeCompact()
+      expect(result).toContain('active data')
+      expect(result).not.toContain('archived data')
+    })
+
+    it('should include non-tool_result events even when hidden/archived flags exist on other events', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'query' } },
+        { type: 'tool_call', ts: 2, patternId: 'p1', data: { tool: 'search', args: {} } },
+        { type: 'tool_result', ts: 3, patternId: 'p1', id: 'ev-hidden', data: { tool: 'search', result: 'hidden', success: true, hidden: true } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.serializeCompact()
+      // tool_call should still be present
+      expect(result).toContain('tool_call')
+      expect(result).toContain('search')
+      // hidden tool_result should be excluded
+      expect(result).not.toContain('hidden')
+    })
+  })
+
+  describe('serializeCompact — summary in compact pointers', () => {
+    it('should use LLM summary in compact pointer when available', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        // Turn 1 (older — will be compacted)
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'first query' } },
+        { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-old', data: { tool: 'search', result: 'raw result data that is very long', success: true, summary: 'Found 3 search results about testing.' } },
+        // Turn 2 (current — rendered in full)
+        { type: 'user_message', ts: 3, patternId: 'p1', data: { content: 'second query' } },
+        { type: 'tool_result', ts: 4, patternId: 'p1', id: 'ev-new', data: { tool: 'fetch', result: 'current result', success: true } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.serializeCompact({ recentTurns: 1 })
+      // Older event should use summary in compact pointer
+      expect(result).toContain('Found 3 search results about testing.')
+      expect(result).toContain('compact="true"')
+      expect(result).toContain('ref:ev-old')
+      // Current turn event should be rendered in full
+      expect(result).toContain('current result')
+    })
+
+    it('should fall back to raw result slice when no summary available', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const longResult = 'x'.repeat(200)
+      const events: ContextEvent[] = [
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'first query' } },
+        { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-old', data: { tool: 'search', result: longResult, success: true } },
+        { type: 'user_message', ts: 3, patternId: 'p1', data: { content: 'second query' } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.serializeCompact({ recentTurns: 1 })
+      // Should contain truncated raw result with "..."
+      expect(result).toContain('...')
+      expect(result).toContain('compact="true"')
+      expect(result).toContain('ref:ev-old')
+    })
+
+    it('should include accurate char count in compact pointer', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const resultData = 'Exact length test data'
+      const events: ContextEvent[] = [
+        { type: 'user_message', ts: 1, patternId: 'p1', data: { content: 'first query' } },
+        { type: 'tool_result', ts: 2, patternId: 'p1', id: 'ev-counted', data: { tool: 'search', result: resultData, success: true } },
+        { type: 'user_message', ts: 3, patternId: 'p1', data: { content: 'second query' } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.serializeCompact({ recentTurns: 1 })
+      // The char count should match the raw result string length (not JSON.stringify)
+      const expectedLen = resultData.length
+      expect(result).toContain(`(${expectedLen} chars)`)
+      expect(result).toContain('tool="search"')
+      expect(result).toContain('ref:ev-counted')
+    })
+  })
+
+  describe('serialize — tool_result with summary', () => {
+    it('should append summary to full tool_result serialization', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'tool_result', ts: 1, patternId: 'p1', data: { tool: 'search', result: { items: [1, 2] }, success: true, summary: 'Found 2 items matching the query.' } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.serialize()
+      expect(result).toContain('[Summary: Found 2 items matching the query.]')
+      expect(result).toContain('search')
+    })
+
+    it('should not append summary tag when no summary exists', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'tool_result', ts: 1, patternId: 'p1', data: { tool: 'search', result: { items: [1] }, success: true } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.serialize()
+      expect(result).not.toContain('[Summary:')
+      expect(result).toContain('search')
+    })
+
+    it('should not append summary for error results', async () => {
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        { type: 'tool_result', ts: 1, patternId: 'p1', data: { tool: 'search', result: null, success: false, error: 'Connection refused', summary: 'Should not show' } },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx)
+
+      const result = view.serialize()
+      expect(result).toContain('ERROR')
+      expect(result).toContain('Connection refused')
+      expect(result).not.toContain('[Summary:')
     })
   })
 

@@ -76,15 +76,17 @@ vi.mock('../../../../../baml_client', () => ({
   }
 }))
 
-vi.mock('@boundaryml/baml', () => ({
-  Collector: vi.fn().mockImplementation(() => ({
-    last: {
+vi.mock('@boundaryml/baml', () => {
+  class MockCollector {
+    last = {
       rawLlmResponse: 'Raw response',
       usage: { inputTokens: 100, outputTokens: 50 },
       calls: [{ httpRequest: { body: {} } }]
     }
-  }))
-}))
+    constructor(_name?: string) {}
+  }
+  return { Collector: MockCollector }
+})
 
 vi.mock('../../../../lib/harness-patterns/tools.server', () => ({
   Tools: vi.fn(async () => mockToolSets),
