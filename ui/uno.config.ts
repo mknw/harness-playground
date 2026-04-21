@@ -163,6 +163,50 @@ export default defineConfig({
         .prose-chat h2 { font-size: 1.15em; }
         .prose-chat h3 { font-size: 1.05em; }
 
+        /* Thinking/reasoning collapsible */
+        .think-root {
+          margin: -12px -12px 8px -12px;
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+          border-radius: 8px 8px 0 0;
+          overflow: hidden;
+        }
+        .think-trigger {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          width: 100%;
+          padding: 4px 8px;
+          background: rgba(255,255,255,0.03);
+          cursor: pointer;
+          font-size: 0.75rem;
+          color: #71717a;
+          border: none;
+          text-align: left;
+        }
+        .think-trigger:hover {
+          background: rgba(255,255,255,0.06);
+        }
+        .think-preview {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .think-content {
+          max-height: 50vh;
+          overflow-y: auto;
+          padding: 8px 10px;
+          background: rgba(0,0,0,0.2);
+          border-top: 1px solid rgba(255,255,255,0.05);
+        }
+        .think-body {
+          font-size: 0.8rem;
+          color: #71717a;
+          line-height: 1.5;
+        }
+        .think-body p { margin: 0.3em 0; }
+        .think-body p:first-child { margin-top: 0; }
+        .think-body p:last-child { margin-bottom: 0; }
+
         /* Graph entity interactive spans in chat messages */
         .graph-entity {
           cursor: pointer;

@@ -89,6 +89,20 @@ function annotateEntities(
   return segments.join('')
 }
 
+// ============================================================================
+// Think Block Extraction
+// ============================================================================
+
+/** Separate <think> blocks from visible content */
+function extractThinking(content: string): { thinking: string | null; body: string } {
+  const match = content.match(/^<think>([\s\S]*?)<\/think>\s*/)
+  if (!match) return { thinking: null, body: content }
+  return {
+    thinking: match[1].trim(),
+    body: content.slice(match[0].length)
+  }
+}
+
 export const ChatMessages = (props: ChatMessagesProps) => {
   let bottomRef: HTMLDivElement | undefined
   let messagesContainerRef: HTMLDivElement | undefined
@@ -219,12 +233,31 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                         </div>
                       }
                     >
-                      <div
-                        text="sm"
-                        class="prose-chat"
-                        // eslint-disable-next-line solid/no-innerhtml
-                        innerHTML={renderAssistantContent(message.content)}
-                      />
+                      {(() => {
+                        const { thinking, body } = extractThinking(message.content)
+                        return (
+                          <>
+                            <Show when={thinking}>
+                              <Collapsible.Root class="think-root">
+                                <Collapsible.Trigger class="think-trigger">
+                                  <span class="i-mdi-brain" style={{ width: '14px', height: '14px', 'flex-shrink': 0 }} />
+                                  <span class="think-preview">{thinking!.slice(0, 140)}</span>
+                                </Collapsible.Trigger>
+                                <Collapsible.Content class="think-content">
+                                  {/* eslint-disable-next-line solid/no-innerhtml */}
+                                  <div class="think-body" innerHTML={marked.parse(thinking!) as string} />
+                                </Collapsible.Content>
+                              </Collapsible.Root>
+                            </Show>
+                            <div
+                              text="sm"
+                              class="prose-chat"
+                              // eslint-disable-next-line solid/no-innerhtml
+                              innerHTML={renderAssistantContent(body)}
+                            />
+                          </>
+                        )
+                      })()}
                     </Show>
 
                     <div text="xs dark-text-tertiary" m="t-1">
