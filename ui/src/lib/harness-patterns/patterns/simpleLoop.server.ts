@@ -61,10 +61,6 @@ export interface SimpleLoopData {
   intent?: string
   lastAction?: ControllerAction
   response?: string
-  /** Whether an error occurred during loop execution */
-  hasError?: boolean
-  /** Error message if hasError is true */
-  errorMessage?: string
 }
 
 /**
@@ -112,7 +108,8 @@ export function simpleLoop<T extends SimpleLoopData>(
       const priorEvents = view.fromLastNTurns(turnCount).ofType('tool_result').get()
         .filter(e => {
           const d = e.data as ToolResultEventData
-          return !!e.id && !d.hidden && !d.archived && d.success
+          return !!e.id && !d.hidden && !d.archived
+            && (d.success || config?.includeFailedResults)
         })
       if (priorEvents.length > 0) {
         priorResults = priorEvents.map(e => {
@@ -264,29 +261,14 @@ export function simpleLoop<T extends SimpleLoopData>(
       }
 
       if (hasError) {
-        // Track error event
+        // Track error event — downstream patterns read errors via view.errors()
         trackEvent(scope, 'error', { error: errorMessage }, true)
-
-        // Propagate error state to scope.data for downstream patterns
-        scope.data = {
-          ...scope.data,
-          hasError: true,
-          errorMessage
-        }
       }
 
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       trackEvent(scope, 'error', { error: msg }, true)
-
-      // Propagate error state to scope.data for downstream patterns
-      scope.data = {
-        ...scope.data,
-        hasError: true,
-        errorMessage: msg
-      }
-
       return scope
     }
   }

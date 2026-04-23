@@ -166,9 +166,10 @@ function buildSynthesisInputFromView(
     mode,
     userMessage: userContent,
     intent: data.intent ?? userContent,
-    // Propagate error state from upstream patterns
-    hasError: data.hasError,
-    errorMessage: data.errorMessage
+    // Read error state from view (scoped by synthesizer's ViewConfig)
+    // rather than from data stash, so errors naturally expire with the view window
+    hasError: view.hasErrors(),
+    errorMessage: view.lastError()
   }
 
   switch (mode) {

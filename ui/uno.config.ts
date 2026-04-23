@@ -182,6 +182,7 @@ export default defineConfig({
           color: #71717a;
           border: none;
           text-align: left;
+          transition: background 0.15s ease;
         }
         .think-trigger:hover {
           background: rgba(255,255,255,0.06);
@@ -192,20 +193,25 @@ export default defineConfig({
           white-space: nowrap;
         }
         .think-content {
+          overflow: hidden;
+          transition: max-height 0.25s ease, opacity 0.2s ease;
+        }
+        .think-content[data-state="open"] {
           max-height: 50vh;
           overflow-y: auto;
-          padding: 8px 10px;
-          background: rgba(0,0,0,0.2);
-          border-top: 1px solid rgba(255,255,255,0.05);
+          opacity: 1;
+        }
+        .think-content[data-state="closed"] {
+          max-height: 0;
+          opacity: 0;
         }
         .think-body {
+          padding: 8px 10px;
+          background: rgba(0,0,0,0.15);
+          border-top: 1px solid rgba(255,255,255,0.05);
           font-size: 0.8rem;
-          color: #71717a;
-          line-height: 1.5;
+          opacity: 0.6;
         }
-        .think-body p { margin: 0.3em 0; }
-        .think-body p:first-child { margin-top: 0; }
-        .think-body p:last-child { margin-bottom: 0; }
 
         /* Graph entity interactive spans in chat messages */
         .graph-entity {

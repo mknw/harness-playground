@@ -105,7 +105,7 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 | `CriticFallback` | Evaluation/critique (LocalGLM → GroqEval) |
 | `SynthesizerFallback` | Response synthesis |
 
-**Known limitation:** Groq `gpt-oss-120b` fails structured output (`BamlValidationError`) on turn 2+ with larger context. Errors are caught per-iteration; synthesizer handles `has_error` propagation.
+**Known limitation:** Groq `gpt-oss-120b` fails structured output (`BamlValidationError`) on turn 2+ with larger context. Errors are caught per-iteration and tracked as events; synthesizer reads errors via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
 
 ---
 

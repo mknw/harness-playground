@@ -201,6 +201,14 @@ export async function continueSession<T extends HarnessData & Record<string, unk
   // Update input and reset status for new turn
   ctx.input = newInput
   ctx.status = 'running'
+  ctx.error = undefined
+
+  // Clear stale error fields from data — errors are now event-scoped
+  // and read via EventView, not carried forward in the data stash
+  if (ctx.data && typeof ctx.data === 'object') {
+    delete (ctx.data as Record<string, unknown>).hasError
+    delete (ctx.data as Record<string, unknown>).errorMessage
+  }
 
   // Add new user message event
   ctx.events.push({

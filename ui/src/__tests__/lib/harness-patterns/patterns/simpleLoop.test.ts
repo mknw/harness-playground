@@ -289,7 +289,7 @@ describe('simpleLoop execution', () => {
     expect(JSON.stringify(errorEvents[0].data)).toContain('Connection failed')
   })
 
-  it('should propagate error state to scope.data when tool fails', async () => {
+  it('should track error event when tool fails', async () => {
     const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
@@ -325,12 +325,13 @@ describe('simpleLoop execution', () => {
 
     const result = await pattern.fn(scope, view)
 
-    // Verify error state is propagated to scope.data
-    expect(result.data.hasError).toBe(true)
-    expect(result.data.errorMessage).toBe('Tool execution failed')
+    // Verify error is tracked as an event, not in scope.data
+    const errorEvents = result.events.filter(e => e.type === 'error')
+    expect(errorEvents.length).toBeGreaterThan(0)
+    expect(JSON.stringify(errorEvents[0].data)).toContain('Tool execution failed')
   })
 
-  it('should propagate error state to scope.data when controller crashes', async () => {
+  it('should track error event when controller crashes', async () => {
     const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
     const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
@@ -356,9 +357,10 @@ describe('simpleLoop execution', () => {
 
     const result = await pattern.fn(scope, view)
 
-    // Verify error state is propagated to scope.data
-    expect(result.data.hasError).toBe(true)
-    expect(result.data.errorMessage).toBe('Controller exception')
+    // Verify error is tracked as an event, not in scope.data
+    const errorEvents = result.events.filter(e => e.type === 'error')
+    expect(errorEvents.length).toBeGreaterThan(0)
+    expect(JSON.stringify(errorEvents[0].data)).toContain('Controller exception')
   })
 
   it('should handle controller errors gracefully', async () => {

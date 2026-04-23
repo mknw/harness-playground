@@ -187,6 +187,8 @@ export interface SimpleLoopConfig extends PatternConfig {
   rememberPriorTurns?: boolean
   /** Number of prior user turns to include (default: 3) */
   priorTurnCount?: number
+  /** Include failed tool results in prior turn context (default: false) */
+  includeFailedResults?: boolean
 }
 
 /** Configuration for actorCritic pattern */
@@ -348,10 +350,6 @@ export interface SynthesizerData {
   synthesizedResponse?: string
   intent?: string
   loopHistory?: LoopHistory
-  /** Whether an error occurred in upstream patterns */
-  hasError?: boolean
-  /** Error message from upstream patterns */
-  errorMessage?: string
 }
 
 // ============================================================================

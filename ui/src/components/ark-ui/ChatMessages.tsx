@@ -245,7 +245,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                                 </Collapsible.Trigger>
                                 <Collapsible.Content class="think-content">
                                   {/* eslint-disable-next-line solid/no-innerhtml */}
-                                  <div class="think-body" innerHTML={marked.parse(thinking!) as string} />
+                                  <div class="think-body prose-chat" innerHTML={marked.parse(thinking!) as string} />
                                 </Collapsible.Content>
                               </Collapsible.Root>
                             </Show>

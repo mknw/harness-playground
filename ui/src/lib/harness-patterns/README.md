@@ -255,6 +255,7 @@ interface SimpleLoopConfig extends PatternConfig {
   maxTurns?: number            // Default: 5
   rememberPriorTurns?: boolean // Include prior tool results (default: true)
   priorTurnCount?: number      // How many prior user turns (default: 3)
+  includeFailedResults?: boolean // Include failed tool results in prior context (default: false)
 }
 ```
 
@@ -264,7 +265,7 @@ interface SimpleLoopConfig extends PatternConfig {
 3. Execute returned tool via MCP
 4. Loop until `is_final` or max turns
 5. Prior tool results from earlier turns are passed as `turns_previous_runs: PriorResult[]` — a structured array separate from the current task's `turns`. The LLM can reference them with `ref:<ref_id>` in tool args; `resolveRefs()` auto-expands before MCP execution. Controlled by `rememberPriorTurns` (default: true) and `priorTurnCount` (default: 3).
-6. Controller errors are caught per-iteration — loop exits gracefully with partial results; error state (`hasError`, `errorMessage`) propagates to downstream patterns
+6. Controller errors are caught per-iteration — loop exits gracefully with partial results; errors are tracked as events and read by downstream patterns via `view.hasErrors()` / `view.lastError()`, scoped by ViewConfig (so they naturally expire with the view window)
 7. After the response reaches the user, `scheduleSummarization()` runs in the background: it summarizes each `tool_result` with a lightweight model (`DescribeFallback`) and stores the summary on the event. These summaries appear as `PriorResult.summary` on subsequent turns.
 
 ### `actorCritic(actor, critic, tools, config?)`
@@ -634,7 +635,7 @@ transformed into prompt-friendly types. The table below shows which harness
 | `pattern_exit` | `PatternExitEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `withApproval`, `guardrail` |
 | `approval_request` | `ApprovalRequestEventData` | _(not sent to BAML)_ | withApproval only |
 | `approval_response` | `ApprovalResponseEventData` | _(not sent to BAML)_ | withApproval only |
-| `error` | `ErrorEventData` | _(not sent to BAML)_ | harness error handling |
+| `error` | `ErrorEventData` | _(read via `view.hasErrors()`)_ | synthesizer (error context), harness error handling |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -693,16 +694,23 @@ BAML Return → CriticResult:
 ```
 Events read (ViewConfig: typically fromPatterns or fromLast)
 ├── tool_call    ──► LoopTurn.tool_call
-└── tool_result  ──► LoopTurn.tool_result
+├── tool_result  ──► LoopTurn.tool_result
+└── error        ──► hasError / errorMessage (via view.hasErrors() / view.lastError())
 
 BAML Inputs:
   user_message : string       ← ctx.input
   intent       : string       ← from data or ctx.input
   turns        : LoopTurn[]   ← assembled from preceding pattern events
+  hasError     : boolean      ← view.hasErrors() — scoped by synthesizer's ViewConfig
+  errorMessage : string?      ← view.lastError() — naturally expires with view window
 
 BAML Return → string (assistant response text)
   → stored as assistant_message event
 ```
+
+> **Error scoping**: The synthesizer reads error state from EventView, not from the data stash.
+> This means errors are scoped by the synthesizer's `ViewConfig` (e.g. `fromLastNTurns: 1`) and
+> naturally expire — they don't persist across turns via serialization.
 
 #### router() + routes()
 
