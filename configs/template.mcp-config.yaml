@@ -2,7 +2,7 @@ neo4j-cypher:
   enabled: true
   uri: bolt://neo4j:7687
   username: neo4j
-  password: password
+  password: <NEO4J_PASSWORD>
   database: neo4j
   read_only: false
 
@@ -24,6 +24,7 @@ rust-mcp-filesystem:
 
 github:
   enabled: true
+  personal_access_token: <GITHUB_PERSONAL_ACCESS_TOKEN>
 
 memory:
   enabled: true
@@ -33,12 +34,12 @@ redis:
   host: redis
   port: "6379"
   username: ""
-  password: ""
+  password: <REDIS_PASSWORD>
   ssl: false
 
 database-server:
   enabled: true
-  database_url: postgresql://postgres:password@postgres:5432/kgagent
+  database_url: <DATABASE_URL>
 
 playwright:
   enabled: true

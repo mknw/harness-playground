@@ -4,6 +4,9 @@
 # Harness debug logs
 .harness-logs/
 
+# MCP config (contains secrets — use template.mcp-config.yaml as reference)
+configs/mcp-config.yaml
+
 # Python-generated files
 __pycache__/
 *.py[oc]
