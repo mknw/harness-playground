@@ -1,8 +1,9 @@
 
+import { Collapsible } from '@ark-ui/solid/collapsible'
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
 import { For, Show, createEffect, createSignal } from 'solid-js'
 import type { ElementDefinition } from 'cytoscape'
-import type { ToolCallInfo } from '~/lib/utcp-baml-agent/server'
+import type { ToolCallInfo } from './types'
 import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
 
@@ -25,10 +26,86 @@ interface ChatMessagesProps {
   messages: Message[]
   onApproveWrite?: (messageId: string) => void
   onRejectWrite?: (messageId: string) => void
+  /** Map of entity/relation names → graph element IDs */
+  graphEntityNames?: Map<string, string[]>
+  /** Callback to highlight graph element IDs (hover/click) */
+  onHighlightEntities?: (ids: string[]) => void
+}
+
+// ============================================================================
+// Entity Highlighting in Markdown
+// ============================================================================
+
+/** Tracks which entity names have been toggled on (click to persist highlight) */
+const toggledEntities = new Set<string>()
+
+/**
+ * Post-process rendered markdown HTML to wrap known entity/relation names
+ * in interactive spans. Matches are case-insensitive, whole-word.
+ * Avoids matching inside HTML tags or code blocks.
+ */
+function annotateEntities(
+  html: string,
+  entityNames: Map<string, string[]>
+): string {
+  if (!entityNames || entityNames.size === 0) return html
+
+  // Sort names by length (longest first) to avoid partial matches
+  const names = [...entityNames.keys()].sort((a, b) => b.length - a.length)
+  // Only match names with 2+ chars to avoid noise
+  const filteredNames = names.filter(n => n.length >= 2)
+  if (filteredNames.length === 0) return html
+
+  // Build regex that matches any entity name as a whole word
+  const escaped = filteredNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const pattern = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi')
+
+  // Split HTML into tag vs text segments to avoid matching inside tags
+  const segments = html.split(/(<[^>]+>)/g)
+  let inCode = false
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+
+    // Track code block boundaries
+    if (seg.startsWith('<code') || seg.startsWith('<pre')) inCode = true
+    if (seg === '</code>' || seg === '</pre>') { inCode = false; continue }
+
+    // Skip HTML tags and code content
+    if (seg.startsWith('<') || inCode) continue
+
+    // Replace entity names in text segments
+    segments[i] = seg.replace(pattern, (match) => {
+      // Find the canonical name (case-insensitive lookup)
+      const key = [...entityNames.keys()].find(k => k.toLowerCase() === match.toLowerCase())
+      if (!key) return match
+      const ids = entityNames.get(key)!
+      const idsAttr = ids.join(',')
+      const isToggled = toggledEntities.has(key)
+      return `<span class="graph-entity${isToggled ? ' toggled' : ''}" data-entity-name="${key}" data-entity-ids="${idsAttr}" title="Click to pin highlight">${match}</span>`
+    })
+  }
+
+  return segments.join('')
+}
+
+// ============================================================================
+// Think Block Extraction
+// ============================================================================
+
+/** Separate <think> blocks from visible content */
+function extractThinking(content: string): { thinking: string | null; body: string } {
+  const match = content.match(/^<think>([\s\S]*?)<\/think>\s*/)
+  if (!match) return { thinking: null, body: content }
+  return {
+    thinking: match[1].trim(),
+    body: content.slice(match[0].length)
+  }
 }
 
 export const ChatMessages = (props: ChatMessagesProps) => {
   let bottomRef: HTMLDivElement | undefined
+  let messagesContainerRef: HTMLDivElement | undefined
   const [prevCount, setPrevCount] = createSignal(0)
 
   // Auto-scroll ONLY when new messages are added (not on content updates)
@@ -45,14 +122,72 @@ export const ChatMessages = (props: ChatMessagesProps) => {
     setPrevCount(currentCount)
   })
 
+  // Event delegation for entity hover/click on the messages container
+  const handleMouseOver = (e: MouseEvent) => {
+    const target = (e.target as HTMLElement).closest('.graph-entity') as HTMLElement | null
+    if (!target || !props.onHighlightEntities) return
+    const ids = target.dataset.entityIds?.split(',') ?? []
+    // Combine with any toggled entities
+    const allToggled = getAllToggledIds(props.graphEntityNames)
+    props.onHighlightEntities([...new Set([...ids, ...allToggled])])
+  }
+
+  const handleMouseOut = (e: MouseEvent) => {
+    const target = (e.target as HTMLElement).closest('.graph-entity') as HTMLElement | null
+    if (!target || !props.onHighlightEntities) return
+    // Restore to only toggled entities
+    const allToggled = getAllToggledIds(props.graphEntityNames)
+    props.onHighlightEntities(allToggled)
+  }
+
+  const handleClick = (e: MouseEvent) => {
+    const target = (e.target as HTMLElement).closest('.graph-entity') as HTMLElement | null
+    if (!target) return
+    const name = target.dataset.entityName
+    if (!name) return
+
+    // Toggle
+    if (toggledEntities.has(name)) {
+      toggledEntities.delete(name)
+      target.classList.remove('toggled')
+    } else {
+      toggledEntities.add(name)
+      target.classList.add('toggled')
+    }
+
+    // Also update all other spans with the same entity name
+    messagesContainerRef?.querySelectorAll(`.graph-entity[data-entity-name="${name}"]`).forEach(el => {
+      el.classList.toggle('toggled', toggledEntities.has(name))
+    })
+
+    // Update highlights
+    if (props.onHighlightEntities) {
+      const allToggled = getAllToggledIds(props.graphEntityNames)
+      props.onHighlightEntities(allToggled)
+    }
+  }
+
   const getInitials = (role: string) => {
     return role === 'user' ? 'U' : 'AI'
+  }
+
+  /** Render assistant message with entity annotation */
+  const renderAssistantContent = (content: string) => {
+    const html = marked.parse(content ?? '') as string
+    return annotateEntities(html, props.graphEntityNames ?? new Map())
   }
 
   return (
     <ScrollArea.Root style={{ flex: 1, overflow: 'hidden', 'min-height': 0 }}>
       <ScrollArea.Viewport style={{ height: '100%' }}>
-        <ScrollArea.Content p="4" space="y-4">
+        <ScrollArea.Content
+          ref={messagesContainerRef}
+          p="4"
+          space="y-4"
+          onMouseOver={handleMouseOver}
+          onMouseOut={handleMouseOut}
+          onClick={handleClick}
+        >
           <For each={props.messages}>
             {(message) => (
               <div flex="~ col" gap="2">
@@ -98,11 +233,31 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                         </div>
                       }
                     >
-                      <div
-                        text="sm"
-                        class="prose-chat"
-                        innerHTML={marked.parse(message.content) as string}
-                      />
+                      {(() => {
+                        const { thinking, body } = extractThinking(message.content)
+                        return (
+                          <>
+                            <Show when={thinking}>
+                              <Collapsible.Root class="think-root">
+                                <Collapsible.Trigger class="think-trigger">
+                                  <span class="i-mdi-brain" style={{ width: '14px', height: '14px', 'flex-shrink': 0 }} />
+                                  <span class="think-preview">{thinking!.slice(0, 140)}</span>
+                                </Collapsible.Trigger>
+                                <Collapsible.Content class="think-content">
+                                  {/* eslint-disable-next-line solid/no-innerhtml */}
+                                  <div class="think-body prose-chat" innerHTML={marked.parse(thinking!) as string} />
+                                </Collapsible.Content>
+                              </Collapsible.Root>
+                            </Show>
+                            <div
+                              text="sm"
+                              class="prose-chat"
+                              // eslint-disable-next-line solid/no-innerhtml
+                              innerHTML={renderAssistantContent(body)}
+                            />
+                          </>
+                        )
+                      })()}
                     </Show>
 
                     <div text="xs dark-text-tertiary" m="t-1">
@@ -176,4 +331,19 @@ export const ChatMessages = (props: ChatMessagesProps) => {
       </ScrollArea.Scrollbar>
     </ScrollArea.Root>
   )
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/** Collect all graph element IDs for currently toggled entity names */
+function getAllToggledIds(entityNames?: Map<string, string[]>): string[] {
+  if (!entityNames) return []
+  const ids: string[] = []
+  for (const name of toggledEntities) {
+    const entityIds = entityNames.get(name)
+    if (entityIds) ids.push(...entityIds)
+  }
+  return [...new Set(ids)]
 }

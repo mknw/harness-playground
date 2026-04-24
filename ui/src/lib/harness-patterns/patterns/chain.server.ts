@@ -1,0 +1,179 @@
+/**
+ * Chain Pattern
+ *
+ * Composes multiple patterns into a single sequence.
+ */
+
+import { assertServerOnImport } from '../assert.server'
+import type {
+  UnifiedContext,
+  ContextEvent,
+  ConfiguredPattern,
+  PatternConfig
+} from '../types'
+import {
+  createScope,
+  commitEvents,
+  enterPattern,
+  exitPattern,
+  resolveConfig,
+  setError,
+  createEvent
+} from '../context.server'
+import { createEventView } from './event-view.server'
+
+assertServerOnImport()
+
+/**
+ * Execute configured patterns in sequence with proper scope lifecycle.
+ *
+ * For each pattern:
+ * 1. Creates isolated PatternScope
+ * 2. Creates EventView based on pattern's viewConfig
+ * 3. Adds pattern_enter event
+ * 4. Executes pattern function
+ * 5. Commits events based on commitStrategy
+ * 6. Adds pattern_exit event
+ * 7. Passes data forward
+ *
+ * @param ctx - UnifiedContext to execute in
+ * @param patterns - ConfiguredPatterns to execute in sequence
+ * @returns Updated UnifiedContext
+ *
+ * @example
+ * const agent = harness(neo4jLoop, webLoop, synth)
+ * // harness uses runChain internally
+ */
+export async function runChain<T extends Record<string, unknown>>(
+  ctx: UnifiedContext<T>,
+  patterns: ConfiguredPattern<T>[],
+  onEvent?: (event: ContextEvent) => void
+): Promise<UnifiedContext<T>> {
+  if (patterns.length === 0) {
+    return ctx
+  }
+
+  try {
+    let currentData = ctx.data
+
+    for (let i = 0; i < patterns.length; i++) {
+      const pattern = patterns[i]
+
+      // Stop if status changed from running
+      if (ctx.status !== 'running') {
+        break
+      }
+
+      const patternId = pattern.config.patternId!
+
+      // 1. Create isolated scope for this pattern
+      const scope = createScope<T>(patternId, currentData)
+
+      // 2. Create view based on pattern's viewConfig (exclude self from fromLastPattern)
+      const view = createEventView(ctx, pattern.config.viewConfig, patternId)
+
+      // 3. Add pattern_enter event
+      enterPattern(ctx, patternId, pattern.name)
+
+      try {
+        // 4. Execute pattern
+        const result = await pattern.fn(scope, view)
+
+        // 5. Commit events based on strategy
+        const beforeLen = ctx.events.length
+        commitEvents(ctx, result, pattern.config.commitStrategy!)
+
+        // 5b. Emit newly committed events via callback
+        if (onEvent) {
+          for (let j = beforeLen; j < ctx.events.length; j++) {
+            onEvent(ctx.events[j])
+          }
+        }
+
+        // 6. Pass data forward
+        currentData = result.data
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        setError(ctx, msg, patternId)
+      }
+
+      // 7. Add pattern_exit event
+      exitPattern(ctx, patternId)
+    }
+
+    // Update final data
+    ctx.data = currentData
+
+    return ctx
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error)
+    setError(ctx, msg, 'chain')
+    return ctx
+  }
+}
+
+/**
+ * Compose patterns into a single ConfiguredPattern that runs them in sequence.
+ *
+ * Unlike `runChain` (which takes a UnifiedContext), `chain` is a pattern factory
+ * that returns a ConfiguredPattern. This enables composition inside harness() or
+ * within other pattern factories like parallel() and guardrail().
+ *
+ * @param patterns - ConfiguredPatterns to execute in sequence
+ * @returns A single ConfiguredPattern wrapping all sub-patterns
+ *
+ * @example
+ * // Compose router + routes + synth as a single unit inside parallel/guardrail
+ * const routedAgent = chain(
+ *   router({ neo4j: 'DB queries', web: 'Web lookups' }),
+ *   routes({ neo4j: neo4jPattern, web: webPattern }),
+ *   synthesizer({ mode: 'thread' })
+ * )
+ *
+ * // Use in harness alongside other patterns
+ * const agent = harness(guardrail(routedAgent, piiScanRail))
+ */
+export function chain<T extends Record<string, unknown>>(
+  ...patterns: ConfiguredPattern<T>[]
+): ConfiguredPattern<T> {
+  const resolved = resolveConfig('chain', {})
+  return {
+    name: `chain(${patterns.map(p => p.name).join(', ')})`,
+    fn: async (scope, view) => {
+      let current = scope
+      for (const pattern of patterns) {
+        current.events.push(
+          createEvent('pattern_enter', pattern.config.patternId ?? pattern.name, { pattern: pattern.name })
+        )
+        const result = await pattern.fn(current, view)
+        result.events.push(
+          createEvent('pattern_exit', pattern.config.patternId ?? pattern.name, { status: 'completed' })
+        )
+        current = result
+      }
+      return current
+    },
+    config: resolved
+  }
+}
+
+/**
+ * Create a ConfiguredPattern from a ScopedPattern function.
+ *
+ * @param name - Pattern name for tracing
+ * @param fn - Scoped pattern function
+ * @param config - Pattern configuration
+ * @returns ConfiguredPattern ready for chain
+ */
+export function configurePattern<T extends Record<string, unknown>>(
+  name: string,
+  fn: ConfiguredPattern<T>['fn'],
+  config?: PatternConfig
+): ConfiguredPattern<T> {
+  const resolved = resolveConfig(name, config)
+  return {
+    name,
+    fn,
+    config: resolved
+  }
+}

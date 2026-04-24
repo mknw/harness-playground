@@ -1,0 +1,553 @@
+# Harness Patterns API Reference
+
+Complete API documentation for the harness-patterns framework.
+
+> **Source:** See [`ui/src/lib/harness-patterns/`](../../ui/src/lib/harness-patterns/) for implementation details.
+
+---
+
+## Types
+
+### UnifiedContext
+
+Source of truth for session state.
+
+```typescript
+interface UnifiedContext<T> {
+  sessionId: string
+  createdAt: number
+  events: ContextEvent[]
+  status: CtxStatus           // 'running' | 'paused' | 'done' | 'error'
+  error?: string
+  data: T
+  input: string
+}
+```
+
+### ContextEvent
+
+Events tagged with pattern origin.
+
+```typescript
+interface ContextEvent {
+  type: EventType
+  ts: number
+  patternId: string
+  data: unknown
+}
+
+type EventType =
+  | 'user_message' | 'assistant_message'
+  | 'tool_call' | 'tool_result'
+  | 'controller_action' | 'critic_result'
+  | 'pattern_enter' | 'pattern_exit'
+  | 'approval_request' | 'approval_response'
+  | 'error'
+```
+
+### PatternScope
+
+Isolated workspace for pattern execution.
+
+```typescript
+interface PatternScope<T> {
+  id: string
+  events: ContextEvent[]      // Local events (uncommitted)
+  data: T
+  startTime: number
+}
+```
+
+### ConfiguredPattern
+
+Pattern with configuration metadata.
+
+```typescript
+interface ConfiguredPattern<T> {
+  name: string
+  fn: ScopedPattern<T>
+  config: PatternConfig
+}
+
+type ScopedPattern<T> = (
+  scope: PatternScope<T>,
+  view: EventView
+) => Promise<PatternScope<T>>
+```
+
+### BAML Types
+
+```typescript
+// From baml_client - standardized controller output
+interface ControllerAction {
+  reasoning: string
+  tool_name: string           // Tool to call, or 'Return'
+  tool_args: string           // JSON payload
+  status: string
+  is_final: boolean
+}
+
+// Critic evaluation result
+interface CriticResult {
+  is_sufficient: boolean
+  explanation: string
+  suggested_approach?: string
+}
+```
+
+---
+
+## Patterns
+
+### simpleLoop
+
+ReAct-style decide-execute loop.
+
+```typescript
+function simpleLoop<T>(
+  controller: ControllerFn,
+  tools: string[],
+  config?: SimpleLoopConfig
+): ConfiguredPattern<T>
+
+interface SimpleLoopConfig extends PatternConfig {
+  schema?: string             // Injected to controller
+  maxTurns?: number           // Default: 5
+}
+```
+
+### actorCritic
+
+Generate-evaluate loop with retry logic.
+
+```typescript
+function actorCritic<T>(
+  actor: ControllerFn,
+  critic: CriticFn,
+  tools: string[],
+  config?: ActorCriticConfig
+): ConfiguredPattern<T>
+
+interface ActorCriticConfig extends PatternConfig {
+  availableTools?: string[]
+  maxRetries?: number         // Default: 3
+}
+```
+
+### withApproval
+
+Wrap pattern to pause for user approval.
+
+```typescript
+function withApproval<T>(
+  pattern: ConfiguredPattern<T>,
+  predicate: ApprovalPredicate,
+  config?: PatternConfig
+): ConfiguredPattern<T>
+
+type ApprovalPredicate = (action: ControllerAction) => boolean
+
+// Built-in predicates
+approvalPredicates.writes     // tool_name includes 'write'
+approvalPredicates.deletes    // tool_name includes 'delete'
+approvalPredicates.mutations  // write, delete, create, update, insert, remove
+```
+
+### synthesizer
+
+Generate human-readable response from pattern output.
+
+```typescript
+function synthesizer<T>(config: SynthesizerConfig): ConfiguredPattern<T>
+
+interface SynthesizerConfig extends PatternConfig {
+  mode: 'message' | 'response' | 'thread'
+  synthesize?: SynthesisFn
+  skipIfHasResponse?: boolean
+}
+```
+
+### router
+
+Route to patterns based on intent classification.
+
+```typescript
+function router<T>(
+  routes: Routes,
+  patterns: RoutePatterns<T>,
+  config?: PatternConfig
+): ConfiguredPattern<T>
+
+type Routes = Record<string, string>  // name -> description
+type RoutePatterns<T> = Record<string, ConfiguredPattern<T>>
+```
+
+### parallel
+
+Execute patterns concurrently.
+
+```typescript
+function parallel<T>(
+  patterns: ConfiguredPattern<T>[],
+  config?: PatternConfig
+): ConfiguredPattern<T>
+```
+
+**Behavior:**
+- Runs all patterns via `Promise.allSettled`
+- Merges events from fulfilled patterns
+- Logs errors from rejected patterns
+- Merges data from all branches
+
+### judge
+
+Evaluate and rank outputs from parallel patterns.
+
+```typescript
+function judge<T>(
+  evaluator: EvaluatorFn,
+  config?: JudgeConfig
+): ConfiguredPattern<T>
+
+type EvaluatorFn = (
+  query: string,
+  candidates: Array<{ source: string; content: string }>
+) => Promise<{
+  reasoning: string
+  rankings: Array<{ source: string; score: number; reason: string }>
+  best: { source: string; content: string } | null
+}>
+
+interface JudgeConfig extends PatternConfig {
+  // Uses patternId for identification
+}
+```
+
+### guardrail
+
+Wrap pattern with validation rails.
+
+```typescript
+function guardrail<T>(
+  pattern: ConfiguredPattern<T>,
+  config: GuardrailConfig<T>
+): ConfiguredPattern<T>
+
+interface GuardrailConfig<T> extends PatternConfig {
+  rails: Rail<T>[]
+  circuitBreaker?: CircuitBreakerConfig
+  onBlock?: (rail: string, reason: string) => void
+}
+
+interface Rail<T> {
+  name: string
+  phase: 'input' | 'execution' | 'output'
+  check: (ctx: RailContext<T>) => Promise<RailResult>
+}
+
+interface RailResult {
+  ok: boolean
+  reason?: string
+  action?: 'block' | 'warn' | 'redact' | 'retry'
+  redacted?: string
+}
+
+interface CircuitBreakerConfig {
+  maxFailures: number
+  windowMs: number
+  cooldownMs: number
+}
+```
+
+**Built-in Rails:**
+```typescript
+piiScanRail       // Detect and redact secrets/tokens
+pathAllowlistRail // Block paths outside workspace
+driftDetectorRail // Detect large file changes (>60%)
+```
+
+### hook
+
+Execute pattern on lifecycle events.
+
+```typescript
+function hook<T>(
+  pattern: ConfiguredPattern<T>,
+  config: HookConfig<T>
+): ConfiguredPattern<T>
+
+interface HookConfig<T> extends PatternConfig {
+  trigger: HookTrigger
+  background?: boolean        // Fire-and-forget
+}
+
+type HookTrigger = 'session_close' | 'error' | 'approval_timeout' | 'custom'
+```
+
+### chain
+
+Sequential pattern composition.
+
+```typescript
+async function chain<T>(
+  ctx: UnifiedContext<T>,
+  patterns: ConfiguredPattern<T>[]
+): Promise<UnifiedContext<T>>
+```
+
+### configurePattern
+
+Create a custom pattern from a function.
+
+```typescript
+function configurePattern<T>(
+  name: string,
+  fn: ScopedPattern<T>,
+  config?: PatternConfig
+): ConfiguredPattern<T>
+```
+
+---
+
+## Harness Functions
+
+### harness
+
+Create callable agent from patterns.
+
+```typescript
+function harness<T>(
+  ...patterns: ConfiguredPattern<T>[]
+): (input: string, sessionId?: string, initialData?: Partial<T>) => Promise<HarnessResultScoped<T>>
+
+interface HarnessResultScoped<T> {
+  response: string
+  data: T
+  status: CtxStatus
+  duration_ms: number
+  context: UnifiedContext<T>
+  serialized: string          // JSON for persistence
+}
+```
+
+### resumeHarness
+
+Resume paused harness after approval.
+
+```typescript
+async function resumeHarness<T>(
+  serializedContext: string,
+  patterns: ConfiguredPattern<T>[],
+  approved: boolean
+): Promise<HarnessResultScoped<T>>
+```
+
+### continueSession
+
+Continue session with new input.
+
+```typescript
+async function continueSession<T>(
+  serializedContext: string,
+  patterns: ConfiguredPattern<T>[],
+  newInput: string
+): Promise<HarnessResultScoped<T>>
+```
+
+---
+
+## Tools
+
+### Tools
+
+Fetch and group MCP tools by namespace.
+
+```typescript
+async function Tools(): Promise<ToolSet>
+
+type ToolSet = Record<string, string[]> & { all: string[] }
+
+// Example:
+const tools = await Tools()
+tools.neo4j  // ['read_neo4j_cypher', 'write_neo4j_cypher', ...]
+tools.web    // ['search', 'fetch', 'fetch_content']
+tools.all    // All available tools
+```
+
+### callTool
+
+Execute MCP tool.
+
+```typescript
+async function callTool(
+  toolName: string,
+  args: Record<string, unknown>
+): Promise<ToolCallResult>
+
+interface ToolCallResult {
+  success: boolean
+  data: unknown
+  error?: string
+}
+```
+
+### listTools
+
+List available MCP tools.
+
+```typescript
+async function listTools(): Promise<MCPToolDescription[]>
+
+interface MCPToolDescription {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+```
+
+---
+
+## BAML Adapters
+
+Factory functions for creating BAML-backed controllers:
+
+```typescript
+// Generic adapters
+createLoopControllerAdapter(tools: string[]): ControllerFn
+createActorControllerAdapter(tools: string[]): ControllerFn
+createCriticAdapter(): CriticFn
+
+// Namespace-specific adapters
+createNeo4jController(tools: string[]): ControllerFn
+createWebSearchController(tools: string[]): ControllerFn
+createMemoryController(tools: string[]): ControllerFn
+createContext7Controller(tools: string[]): ControllerFn
+createGitHubController(tools: string[]): ControllerFn
+createFilesystemController(tools: string[]): ControllerFn
+createRedisController(tools: string[]): ControllerFn
+createDatabaseController(tools: string[]): ControllerFn
+```
+
+---
+
+## EventView API
+
+Fluent API for querying events.
+
+```typescript
+function createEventView<T>(ctx: UnifiedContext<T>): EventView
+
+interface EventView {
+  // Pattern selectors
+  fromPattern(id: string): EventView
+  fromPatterns(ids: string[]): EventView
+  fromLastPattern(): EventView
+  fromLastNPatterns(n: number): EventView
+  fromAll(): EventView
+
+  // Type selectors
+  ofType(type: EventType): EventView
+  ofTypes(types: EventType[]): EventView
+  tools(): EventView          // tool_call + tool_result
+  messages(): EventView       // user_message + assistant_message
+  actions(): EventView        // controller_action
+
+  // Quantity selectors
+  last(n: number): EventView
+  first(n: number): EventView
+  since(ts: number): EventView
+
+  // Execution
+  get(): ContextEvent[]
+  serialize(): string         // XML format for LLM
+  exists(): boolean
+  count(): number
+}
+```
+
+---
+
+## Configuration
+
+### PatternConfig
+
+Base configuration for all patterns.
+
+```typescript
+interface PatternConfig {
+  patternId?: string
+  commitStrategy?: CommitStrategy
+  trackHistory?: TrackHistory
+  viewConfig?: ViewConfig
+}
+
+type CommitStrategy = 'always' | 'on-success' | 'last' | 'never'
+
+type TrackHistory = boolean | EventType | EventType[]
+
+interface ViewConfig {
+  fromPatterns?: string[]
+  fromLastN?: number
+  fromLast?: boolean          // Default: true
+  eventTypes?: EventType[]
+  limit?: number
+}
+```
+
+### Pattern Defaults
+
+| Pattern | trackHistory | commitStrategy |
+|---------|-------------|----------------|
+| simpleLoop | `'tool_result'` | `'on-success'` |
+| actorCritic | `'tool_result'` | `'on-success'` |
+| synthesizer | `'assistant_message'` | `'always'` |
+| router | `false` | `'always'` |
+| chain | `false` | `'always'` |
+| withApproval | `false` | `'on-success'` |
+
+---
+
+## Context Helpers
+
+```typescript
+// Create new context
+function createContext<T>(input: string, initialData?: T, sessionId?: string): UnifiedContext<T>
+
+// Serialize/deserialize
+function serializeContext<T>(ctx: UnifiedContext<T>): string
+function deserializeContext<T>(json: string): UnifiedContext<T>
+
+// Scope management
+function createScope<T>(patternId: string, data: T): PatternScope<T>
+function createEvent(type: EventType, patternId: string, data: unknown): ContextEvent
+function trackEvent<T>(scope: PatternScope<T>, type: EventType, data: unknown, shouldTrack: boolean): void
+function commitEvents<T>(ctx: UnifiedContext<T>, scope: PatternScope<T>, strategy: CommitStrategy): void
+function enterPattern<T>(ctx: UnifiedContext<T>, patternId: string): void
+function exitPattern<T>(ctx: UnifiedContext<T>, patternId: string, status: CtxStatus): void
+
+// Status setters
+function setError<T>(ctx: UnifiedContext<T>, error: string, patternId: string): void
+function setDone<T>(ctx: UnifiedContext<T>): void
+function setPaused<T>(ctx: UnifiedContext<T>): void
+
+// Utilities
+function generateId(prefix?: string): string
+function resolveConfig(patternName: string, config?: PatternConfig): PatternConfig
+function shouldTrack(type: EventType, trackHistory: TrackHistory): boolean
+```
+
+---
+
+## Constants
+
+```typescript
+const MAX_TOOL_TURNS = 5
+const MAX_RETRIES = 3
+
+const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory>
+const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy>
+```
+
+---
+
+**Last Updated:** 2026-02-05

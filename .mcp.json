@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "kg-gateway": {
-      "type": "sse",
+    "kg-agent-mcp-gateway": {
+      "type": "http",
       "url": "http://localhost:8811/mcp"
     }
   }

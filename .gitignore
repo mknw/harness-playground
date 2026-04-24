@@ -1,3 +1,12 @@
+# macOS
+.DS_Store
+
+# Harness debug logs
+.harness-logs/
+
+# MCP config (contains secrets — use template.mcp-config.yaml as reference)
+configs/mcp-config.yaml
+
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -18,3 +27,13 @@ n8n_data/
 # UI Solid Start Frontend
 **/node_modules
 **/.env
+.claude/
+
+# Nix direnv
+.direnv/
+
+# Docker local config
+.docker/
+
+# Test coverage
+**/coverage/

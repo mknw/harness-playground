@@ -1,0 +1,45 @@
+neo4j-cypher:
+  enabled: true
+  uri: bolt://neo4j:7687
+  username: neo4j
+  password: <NEO4J_PASSWORD>
+  database: neo4j
+  read_only: false
+
+fetch:
+  enabled: true
+
+web_search:
+  enabled: true
+
+context7:
+  enabled: true
+
+rust-mcp-filesystem:
+  enabled: true
+  allow_write: true
+  enable_roots: false
+  allowed_directories:
+    - /workspace
+
+github:
+  enabled: true
+  personal_access_token: <GITHUB_PERSONAL_ACCESS_TOKEN>
+
+memory:
+  enabled: true
+
+redis:
+  enabled: true
+  host: redis
+  port: "6379"
+  username: ""
+  password: <REDIS_PASSWORD>
+  ssl: false
+
+database-server:
+  enabled: true
+  database_url: <DATABASE_URL>
+
+playwright:
+  enabled: true

@@ -223,15 +223,15 @@ import { UserMenu } from "~/components/ark-ui/UserMenu"
 │  Home | About          [Theme] [Avatar Menu]            │
 ├────────────┬──────────────────────────┬─────────────────┤
 │            │                          │                 │
-│  Sidebar   │   Chat Messages          │  Knowledge      │
-│  (64 cols) │   (ScrollArea)           │  Graph Panel    │
+│  Sidebar   │   Chat Messages          │  Support Panel  │
+│  (64 cols) │   (ScrollArea)           │  (tabbed)       │
 │            │                          │                 │
-│  [History] │ ─────────────────────────│  (placeholder)  │
-│  Thread 1  │   Chat Input             │                 │
-│  Thread 2  │   (Field.Textarea)       │                 │
-│  Thread 3  │                          │                 │
+│  [History] │ ─────────────────────────│ Neo4j|Memory|   │
+│  Thread 1  │   Chat Input             │ All|Observabi-  │
+│  Thread 2  │   (Field.Textarea)       │ lity*|Tools     │
+│  Thread 3  │                          │  (* default)    │
 │            │                          │                 │
-│ [+ New]    │                          │  [Reset] [Exp]  │
+│ [+ New]    │                          │  [↓ Save]       │
 └────────────┴──────────────────────────┴─────────────────┘
     ↑              ↑─── Splitter ───↑          ↑
 Collapsible      60% default       40% default
@@ -243,13 +243,23 @@ Collapsible      60% default       40% default
 ```tsx
 <Splitter.Root orientation="horizontal" defaultSize={[60, 40]}>
   <Splitter.Panel id="chat">
-    <ChatInterface />  {/* Sidebar + Messages + Input */}
+    <ChatInterface
+      onGraphUpdate={accumulateGraphElements}
+      onEventsUpdate={accumulateEvents}
+      onContextUpdate={setUnifiedContext}
+    />
   </Splitter.Panel>
 
-  <Splitter.ResizeTrigger id="chat:graph" />
+  <Splitter.ResizeTrigger id="chat:support" />
 
-  <Splitter.Panel id="graph">
-    <KnowledgeGraphPanel />
+  <Splitter.Panel id="support">
+    <SupportPanel
+      graphElements={graphElements()}
+      contextEvents={contextEvents()}
+      unifiedContext={unifiedContext()}
+      onClearGraph={clearGraph}
+      onClearEvents={clearEvents}
+    />
   </Splitter.Panel>
 </Splitter.Root>
 ```
@@ -275,6 +285,7 @@ Main container combining sidebar and chat area:
 - Width: `3rem` (collapsed) → `16rem` (expanded)
 - Smooth inline style transition
 - Thread history with relative timestamps
+- Settings gear icon (opens `SettingsPanel` FloatingPanel) + New Chat button in footer
 - Content hidden when collapsed (toggle button only)
 
 #### 3. ChatMessages.tsx
@@ -287,6 +298,9 @@ Main container combining sidebar and chat area:
   - Empty state with icon
 - **User messages:** Right-aligned, cyber-700 background
 - **AI messages:** Left-aligned, dark-bg-tertiary background
+- **Chat-Graph Entity Linking:** After rendering markdown, `annotateEntities()` post-processes the HTML to wrap known entity and relation names in `<span class="graph-entity" data-entity-name="..." data-entity-ids="...">` elements. Hovering highlights matching graph nodes/edges; clicking toggles a persistent highlight. A module-level `toggledEntities` Set tracks persistent state. Event delegation on the messages container handles all interactions via `handleMouseOver`, `handleMouseOut`, `handleClick`.
+  - **Props:** `graphEntityNames?: Map<string, string[]>` (name → element IDs, built in `index.tsx` from graph elements), `onHighlightEntities?: (ids: string[]) => void`
+  - **CSS:** `.graph-entity` styles in `uno.config.ts` (dashed underline, cyan glow on hover/toggle)
 
 #### 4. ChatInput.tsx
 - **Field.Textarea** with `autoresize` prop
@@ -296,10 +310,71 @@ Main container combining sidebar and chat area:
 - **States:** Disabled during AI processing
 - **Styling:** Neon cyan border on focus
 
-#### 5. KnowledgeGraphPanel.tsx
-- Placeholder for graph visualization
-- Header with title and description
-- Footer with action buttons (Reset View, Export Graph)
+#### 5. AgentSelector.tsx
+**Props:** `selectedAgent: string`, `onAgentChange: (id: string) => void`, `disabled: boolean`
+- Dropdown listing registered agents (default, default-neo4j, web-search, conversational-memory, etc.)
+- Clearing the session on agent switch
+
+#### 6. SupportPanel.tsx
+Tabbed right panel. **Observability is the default tab.** Uses `lazyMount` + `unmountOnExit` so inactive tabs don't hold Cytoscape instances in memory.
+
+| Tab | Content |
+|-----|---------|
+| Neo4j | Graph visualization for Neo4j query results (accumulated, live sync) |
+| Memory | Graph visualization for Memory MCP entities |
+| All (Turn Explorer) | Turn-based graph explorer — select specific turns, color-coded |
+| **Observability** *(default)* | Event timeline + LLM call detail |
+| Data | Data Stash — tool result icons, hide/archive controls |
+| Tools | MCP tool configuration via `ToolsPanel` |
+
+**Conversation Sync toggle:** The Neo4j and Memory graph tabs have a ⏸/▶ "Sync" button (cyan when live, amber when paused). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
+
+**All Tab — Turn Explorer (AllGraphTab.tsx):**
+The All tab does not use the accumulated `graphElements` signal. Instead, it derives graph elements on-demand from `contextEvents`:
+
+1. `splitIntoTurns()` (from `turn-utils.ts`) splits the event stream at `user_message` boundaries
+2. User opens the FloatingPanel ("Turns" button) to see turn columns side-by-side
+3. Each column shows turn number, user message preview, and graph-producing tool results
+4. Clicking a turn header toggles its selection; "All"/"None" buttons for bulk selection
+5. `extractMultiTurnGraphElements()` extracts and merges elements from selected turns, tagging each with `data.turn = N`
+6. Cytoscape renders elements with per-turn colors via `extraStyles` prop (attribute selectors: `node[turn=N]`)
+7. A color legend overlay in the bottom-right corner shows the turn-color mapping
+
+#### 7. GraphVisualization.tsx
+Cytoscape.js graph component with dark futuristic theme.
+
+**Rendering lifecycle:** With `unmountOnExit` on `Tabs.Root`, Cytoscape instances are fully created/destroyed when switching tabs. A `ResizeObserver` on `containerRef` drives a `visible()` signal to defer layout until the container has non-zero dimensions.
+
+**Base styles** are extracted to a module-level `BASE_STYLES` constant. The `extraStyles` prop appends additional stylesheets (e.g. per-turn color rules) — a reactive `createEffect` re-applies `cy.style([...BASE_STYLES, ...extraStyles])` when they change.
+
+**Features:**
+- Incremental graph updates (additive, preserves positions)
+- Collapsible Display Controls panel: node size, edge width, font size, edge labels toggle
+- Node properties panel on click (inline `data` + `properties` merged)
+- Inline property editing (pencil icon → textarea → Cypher persist via `onCypherWrite`)
+- Relation creation mode (purple banner, click source then target)
+- Node creation form ("+ Node" toolbar button — Name, Label, Description)
+- `highlightedIds` prop adds `.highlighted` CSS class to matching elements
+- `extraStyles` prop for dynamic Cytoscape stylesheet injection (used by AllGraphTab for turn colors)
+
+**Props:**
+```typescript
+{
+  elements: ElementDefinition[]
+  highlightedIds?: string[]         // IDs to visually highlight (from chat entity hover/toggle)
+  onNodeClick?: (id, data) => void
+  onEdgeClick?: (id, data) => void
+  onCypherWrite?: (cypher, params?) => Promise<void>  // For write operations
+  extraStyles?: StylesheetJsonBlock[] // Additional Cytoscape styles (e.g. per-turn colors)
+}
+```
+
+#### 8. ObservabilityPanel.tsx
+Displays the full agent event timeline:
+- Events are merged into `TimelineItem[]` via `buildTimelineItems()`: `tool_call` + `tool_result` pairs sharing the same `callId` appear as a single merged row
+- Click any row → detail overlay with args / result / LLM call data
+- **Save button** (floating, bottom-right): calls `showSaveFilePicker()` to save the full `UnifiedContext` as a named JSON file; falls back to `<a download>` on browsers without File System Access API
+- Requires `context?: UnifiedContext` prop threaded down from `index.tsx` → `SupportPanel` → `ObservabilityPanel`
 
 ### Theme System
 
@@ -356,20 +431,45 @@ Main container combining sidebar and chat area:
 ### Component Data Flow
 
 ```
-ChatInterface (state management)
-    ├─ messages: Signal<Message[]>
-    ├─ isProcessing: Signal<boolean>
-    ├─ sidebarCollapsed: Signal<boolean>
-    └─ handleSendMessage()
-         │
-         ├─> ChatMessages (props.messages)
-         │       └─ Auto-scroll on new messages
-         │
-         ├─> ChatInput (props.onSend, props.disabled)
-         │       └─ Triggers handleSendMessage()
-         │
-         └─> ChatSidebar (props.collapsed, props.onToggle)
-                 └─ Dummy thread data (static)
+index.tsx (top-level state)
+    ├─ graphElements: Signal<GraphElement[]>     ← accumulated, deduplicated
+    ├─ contextEvents: Signal<ContextEvent[]>     ← accumulated per turn
+    ├─ unifiedContext: Signal<UnifiedContext?>   ← latest full session context
+    ├─ highlightedIds: Signal<string[]>          ← newly added graph node IDs
+    ├─ graphEntityNames: Memo<Map<string, string[]>>  ← name → element IDs (for chat linking)
+    │
+    ├─> ChatInterface
+    │       ├─ messages: Signal<Message[]>
+    │       ├─ isProcessing: Signal<boolean>
+    │       ├─ selectedAgent: Signal<string>
+    │       │   Props: graphEntityNames, onHighlightEntities
+    │       │
+    │       ├─> AgentSelector (selectedAgent, onAgentChange, disabled)
+    │       ├─> ChatMessages (messages, graphEntityNames, onHighlightEntities, onApproveWrite, onRejectWrite)
+    │       │       └─ annotateEntities() — wraps entity names in interactive spans post-render
+    │       ├─> ChatInput (onSend, disabled)
+    │       └─> ChatSidebar (collapsed, onToggle)
+    │
+    └─> SupportPanel (lazyMount + unmountOnExit)
+            │   Props: graphElements, contextEvents, highlightedIds, onCypherWrite
+            ├─> GraphTabContent (Neo4j/Memory tabs)
+            │       └─> GraphVisualization (elements, highlightedIds, onCypherWrite)
+            │               └─ Inline edit / relation create / node create → onCypherWrite
+            ├─> AllGraphTabWrapper (All tab — turn-based explorer)
+            │       └─> AllGraphTab
+            │               ├─ splitIntoTurns(contextEvents) → TurnData[]
+            │               ├─ FloatingPanel with TurnColumn[] (horizontal layout)
+            │               ├─ extractMultiTurnGraphElements() → tagged elements
+            │               ├─> GraphVisualization (elements, extraStyles=turnStyles)
+            │               └─ Turn color legend overlay
+            ├─> DataStashPanel (events, onStashAction)
+            ├─> SettingsPanel (FloatingPanel in ChatSidebar footer)
+            │       └─ SliderSetting / NumberSetting components
+            │       └─ getSettings() / updateSetting() from settings-store.ts
+            ├─> ObservabilityPanel (events, context, onClear)
+            │       ├─ buildTimelineItems() — merges tool pairs by callId
+            │       └─ Save button → showSaveFilePicker() / <a download>
+            └─> ToolsPanel
 ```
 
 ### Message Type
@@ -379,6 +479,14 @@ interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: Date
+  toolCall?: {                          // Present when status === 'paused' (approval gate)
+    type: string
+    status: 'pending' | 'executed' | 'error'
+    tool: string
+    explanation?: string
+    isReadOnly: boolean
+    error?: string
+  }
 }
 ```
 
@@ -419,9 +527,11 @@ onClick={() => props.onToggle()}
 ## Quick Commands
 
 ```bash
-pnpm dev        # Start dev server
-pnpm build      # Production build
-pnpm eslint     # Run linter
+pnpm dev          # Start dev server (port 3444)
+pnpm dev:exposed  # Bind to 0.0.0.0 (needed for Docker / Playwright MCP)
+pnpm build        # Production build
+pnpm eslint       # Run linter
+pnpm test:run     # Run vitest unit tests
 ```
 
 ---
@@ -432,6 +542,12 @@ pnpm eslint     # Run linter
 ui/
 ├── eslint.config.ts              # ESLint rules
 ├── uno.config.ts                 # UnoCSS config + theme
+├── baml_src/                     # BAML function definitions
+│   ├── clients.baml              # LLM client config
+│   ├── routing.baml              # Message routing
+│   ├── neo4j.baml                # Neo4j planning
+│   ├── code_mode.baml            # Code mode composition
+│   └── response.baml             # Response generation
 ├── src/
 │   ├── shims.d.ts                # TypeScript augmentation
 │   ├── routes/
@@ -446,11 +562,63 @@ ui/
 │   │       ├── ChatSidebar.tsx        # Thread history sidebar
 │   │       ├── ChatMessages.tsx       # Message display area
 │   │       ├── ChatInput.tsx          # Autoresize textarea
-│   │       └── KnowledgeGraphPanel.tsx # Graph visualization panel
-│   └── lib/auth/
-│       ├── client.ts             # StackClientApp
-│       ├── server.ts             # Server auth helpers
-│       └── allowList.ts          # Email access control
+│   │       ├── GraphVisualization.tsx # Cytoscape graph display (+ extraStyles prop)
+│   │       ├── SupportPanel.tsx       # Tabbed right panel (lazyMount + unmountOnExit)
+│   │       ├── AllGraphTab.tsx        # Turn-based graph explorer (FloatingPanel + color-coded)
+│   │       ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
+│   │       ├── ObservabilityPanel.tsx # Event timeline + tool-pair merging + Save button
+│   │       ├── EventDetailOverlay.tsx # Event detail modal
+│   │       ├── ToolsPanel.tsx         # MCP tool configuration UI
+│   │       ├── ToolCallDisplay.tsx    # Tool call status display (approval gate)
+│   │       ├── AgentSelector.tsx      # Agent selection dropdown
+│   │       └── EnvVarManager.tsx      # Environment variable config
+│   └── lib/
+│       ├── auth/                  # Authentication
+│       │   ├── client.ts          # StackClientApp
+│       │   ├── server.ts          # Server auth helpers
+│       │   └── allowList.ts       # Email access control
+│       ├── baml-agent/            # Agent implementation
+│       │   ├── server.ts          # Server functions
+│       │   ├── orchestrator.ts    # Client orchestrator
+│       │   ├── state.ts           # Thread state
+│       │   ├── mcp-client.ts      # MCP SDK client
+│       │   ├── telemetry.ts       # Telemetry types
+│       │   └── tool-config.ts     # Tool configuration
+│       ├── harness-patterns/      # Composable agent pattern framework
+│       │   ├── index.ts           # Public exports
+│       │   ├── types.ts           # UnifiedContext, PatternScope, ContextEvent, callId, etc.
+│       │   ├── context.server.ts  # createContext(), createEvent(), generateId()
+│       │   ├── tools.server.ts    # Tools() — MCP tool grouping by namespace
+│       │   ├── router.server.ts   # router() pattern
+│       │   ├── harness.server.ts  # harness(), resumeHarness(), continueSession()
+│       │   ├── routing.server.ts  # BAML router integration
+│       │   ├── state.server.ts    # Session state (serialize / deserialize)
+│       │   ├── mcp-client.server.ts # callTool(), listTools()
+│       │   ├── assert.server.ts   # Server-only import guards
+│       │   ├── token-budget.server.ts # trimToFit(), getContextWindow(), estimateTokens()
+│       │   ├── summarize.server.ts    # scheduleSummarization() — background result summarization
+│       │   └── patterns/
+│       │       ├── simpleLoop.server.ts   # ReAct loop + callId on tool events
+│       │       ├── actorCritic.server.ts  # Generate-evaluate + callId
+│       │       ├── withApproval.server.ts # Approval gate + pattern_enter/exit
+│       │       ├── parallel.server.ts     # Concurrent branches + pattern_enter/exit
+│       │       ├── guardrail.server.ts    # Rail validation + pattern_enter/exit
+│       │       ├── hook.server.ts         # Lifecycle hook + pattern_enter/exit
+│       │       ├── synthesizer.server.ts  # Final response synthesis
+│       │       ├── chain.server.ts        # Sequential composition
+│       │       └── event-view.server.ts   # EventViewImpl (fluent query API)
+│       ├── settings.ts             # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
+│       ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
+│       ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
+│       ├── turn-utils.ts           # splitIntoTurns(), extractTurnGraphElements()
+│       ├── turn-colors.ts         # TURN_COLORS palette, getTurnColor()
+│       ├── neo4j/
+│       │   ├── queries.ts         # runManualCypher(), getNodeProperties()
+│       │   └── write-action.ts    # executeCypherWrite() — parameterized Cypher writes from graph UI
+│       └── harness-client/        # Pre-built agent server actions
+│           ├── index.ts           # processMessageWithAgent(), extractGraphFromResult()
+│           ├── types.ts           # GraphElement, HarnessData, etc.
+│           └── examples/          # 10 pre-built agent configurations
 ```
 
 ---

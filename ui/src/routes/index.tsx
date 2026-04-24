@@ -1,11 +1,103 @@
 import { Splitter } from '@ark-ui/solid/splitter'
-import { createSignal } from 'solid-js'
+import { createSignal, createMemo, createUniqueId } from 'solid-js'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
-import { SupportPanel } from '~/components/ark-ui/SupportPanel'
-import type { ElementDefinition } from 'cytoscape'
+import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
+import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
+import { executeCypherWrite } from '~/lib/neo4j/write-action'
+import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 
 export default function Home() {
-  const [graphElements, setGraphElements] = createSignal<ElementDefinition[]>([])
+  const sessionId = createUniqueId()
+  const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
+  const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
+  const [contextEvents, setContextEvents] = createSignal<ContextEvent[]>([])
+  const [unifiedContext, setUnifiedContext] = createSignal<UnifiedContext | undefined>(undefined)
+
+  // Accumulate graph elements across calls (deduplicate by ID)
+  const accumulateGraphElements = (newElements: GraphElement[]) => {
+    setGraphElements(prev => {
+      const existingIds = new Set(prev.map(e => e.data?.id))
+      const uniqueNew = newElements.filter(e => !existingIds.has(e.data?.id))
+      return [...prev, ...uniqueNew]
+    })
+    // Track newly added IDs for highlighting
+    const newIds = newElements.map(e => e.data?.id).filter((id): id is string => !!id)
+    setHighlightedIds(newIds)
+  }
+
+  // Accumulate context events
+  const accumulateEvents = (newEvents: ContextEvent[]) => {
+    setContextEvents(prev => [...prev, ...newEvents])
+  }
+
+  // Clear all graph elements
+  const clearGraph = () => {
+    setGraphElements([])
+    setHighlightedIds([])
+  }
+
+  // Clear all events
+  const clearEvents = () => {
+    setContextEvents([])
+    setUnifiedContext(undefined)
+  }
+
+  // Execute Cypher write from graph UI (node edit, relation create)
+  const handleCypherWrite = async (cypher: string, params?: Record<string, unknown>) => {
+    try {
+      await executeCypherWrite(cypher, params)
+    } catch (error) {
+      console.error('Cypher write failed:', error)
+    }
+  }
+
+  // Handle data stash actions (hide/unhide/archive/unarchive)
+  const handleStashAction = async (eventId: string, action: StashAction) => {
+    // Optimistic UI update: mutate local signal immediately
+    setContextEvents(prev => prev.map(e => {
+      if (e.id !== eventId || e.type !== 'tool_result') return e
+      const d = { ...(e.data as ToolResultEventData) }
+      if (action === 'hide') d.hidden = true
+      if (action === 'unhide') d.hidden = false
+      if (action === 'archive') { d.archived = true; d.hidden = false }
+      if (action === 'unarchive') d.archived = false
+      return { ...e, data: d }
+    }))
+
+    // Persist to server
+    await fetch('/api/stash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, eventId, action }),
+    })
+  }
+
+  // Build a set of known entity names/labels from graph elements for chat highlighting
+  const graphEntityNames = createMemo(() => {
+    const names = new Map<string, string[]>() // name → [id1, id2, ...]
+    for (const el of graphElements()) {
+      const d = el.data
+      if (!d?.id) continue
+      const label = d.label as string | undefined
+      if (label && !d.source) { // node, not edge
+        const existing = names.get(label) ?? []
+        existing.push(d.id as string)
+        names.set(label, existing)
+      }
+    }
+    // Also index edge labels → edge IDs
+    for (const el of graphElements()) {
+      const d = el.data
+      if (!d?.id || !d.source) continue // skip nodes
+      const label = d.label as string | undefined
+      if (label) {
+        const existing = names.get(label) ?? []
+        existing.push(d.id as string)
+        names.set(label, existing)
+      }
+    }
+    return names
+  })
 
   return (
     <main h="[calc(100vh-4rem)]">
@@ -20,7 +112,14 @@ export default function Home() {
       >
         {/* Chat Panel */}
         <Splitter.Panel id="chat">
-          <ChatInterface onGraphUpdate={setGraphElements} />
+          <ChatInterface
+            sessionId={sessionId}
+            onGraphUpdate={accumulateGraphElements}
+            onEventsUpdate={accumulateEvents}
+            onContextUpdate={setUnifiedContext}
+            graphEntityNames={graphEntityNames()}
+            onHighlightEntities={setHighlightedIds}
+          />
         </Splitter.Panel>
 
         {/* Resize Trigger */}
@@ -35,7 +134,17 @@ export default function Home() {
 
         {/* Support Panel (Graph, Stats, Actions, Docs, Tools) */}
         <Splitter.Panel id="support">
-          <SupportPanel graphElements={graphElements()} />
+          <SupportPanel
+            graphElements={graphElements()}
+            highlightedIds={highlightedIds()}
+            contextEvents={contextEvents()}
+            unifiedContext={unifiedContext()}
+            onClearGraph={clearGraph}
+            onClearEvents={clearEvents}
+            onCypherWrite={handleCypherWrite}
+            sessionId={sessionId}
+            onStashAction={handleStashAction}
+          />
         </Splitter.Panel>
       </Splitter.Root>
     </main>

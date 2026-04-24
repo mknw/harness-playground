@@ -1,4 +1,5 @@
 import { For } from 'solid-js'
+import { SettingsPanel } from './SettingsPanel'
 
 interface ChatThread {
   id: string
@@ -103,10 +104,11 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
             </div>
           </div>
 
-          {/* New Chat Button */}
-          <div p="4" border="t dark-border-primary">
+          {/* Footer: Settings + New Chat */}
+          <div p="4" border="t dark-border-primary" flex="~" gap="2" items="center">
+            <SettingsPanel />
             <button
-              w="full"
+              flex="1"
               p="2"
               bg="cyber-700 hover:cyber-600"
               text="white sm"

@@ -2,13 +2,18 @@
  * Support Panel Component
  *
  * Tabbed interface for knowledge graph visualization and observability tools
- * Tabs: Graph | Observability | Actions | Documents | Tools
+ * Tabs: Neo4j Graph | Memory Graph | All (Turn Explorer) | Observability | Data | Actions | Documents | Tools
  */
 
 import { Tabs } from '@ark-ui/solid/tabs';
-import { createSignal } from 'solid-js';
+import { Show, createSignal, createMemo } from 'solid-js';
 import { GraphVisualization } from './GraphVisualization';
+import { ObservabilityPanel } from './ObservabilityPanel';
+import { DataStashPanel, type StashAction } from './DataStashPanel';
+import { ToolsPanel } from './ToolsPanel';
+import { AllGraphTabWrapper } from './AllGraphTab';
 import type { ElementDefinition } from 'cytoscape';
+import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns';
 
 // ============================================================================
 // Types
@@ -22,11 +27,26 @@ export interface PromptStat {
   status: 'success' | 'error';
 }
 
+// Re-export GraphElement from shared types
+export type { GraphElement } from '~/lib/harness-client/types'
+import type { GraphElement } from '~/lib/harness-client/types'
+
 export interface SupportPanelProps {
-  graphElements: ElementDefinition[];
+  graphElements: GraphElement[];
+  highlightedIds?: string[];
   promptStats?: PromptStat[];
+  contextEvents?: ContextEvent[];
+  unifiedContext?: UnifiedContext;
   onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void;
   onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
+  onClearGraph?: () => void;
+  onClearEvents?: () => void;
+  /** Callback for Cypher write operations (node edits, relation creation) */
+  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>;
+  /** Session ID for stash API calls */
+  sessionId?: string;
+  /** Callback for data stash actions (hide/unhide/archive/unarchive) */
+  onStashAction?: (eventId: string, action: StashAction) => Promise<void>;
 }
 
 // ============================================================================
@@ -34,13 +54,26 @@ export interface SupportPanelProps {
 // ============================================================================
 
 export const SupportPanel = (props: SupportPanelProps) => {
-  const [selectedTab, setSelectedTab] = createSignal('graph');
+  const [selectedTab, setSelectedTab] = createSignal('stats');
+
+  // Filter graph elements by source
+  const neo4jElements = createMemo(() =>
+    props.graphElements.filter(e =>
+      e.source === 'neo4j' || !e.source // Default to neo4j if source not specified
+    )
+  );
+
+  const memoryElements = createMemo(() =>
+    props.graphElements.filter(e => e.source === 'memory')
+  );
 
   return (
     <div flex="~ col" h="full" bg="dark-bg-primary">
       <Tabs.Root
         value={selectedTab()}
         onValueChange={(details) => setSelectedTab(details.value)}
+        lazyMount
+        unmountOnExit
         flex="~ col"
         h="full"
       >
@@ -48,45 +81,112 @@ export const SupportPanel = (props: SupportPanelProps) => {
         <Tabs.List
           bg="dark-bg-secondary"
           border="b dark-border-primary"
-          flex="~"
+          flex="~ wrap"
           p="x-2"
           gap="1"
         >
           <Tabs.Trigger
-            value="graph"
-            p="x-4 y-2"
+            value="neo4j-graph"
+            p="x-3 y-2"
             text="sm dark-text-primary"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
-            data-state={selectedTab() === 'graph' ? 'active' : 'inactive'}
+            data-state={selectedTab() === 'neo4j-graph' ? 'active' : 'inactive'}
             style={{
-              "border-bottom-color": selectedTab() === 'graph' ? '#00ffff' : 'transparent',
-              "color": selectedTab() === 'graph' ? '#00ffff' : '#a1a1aa'
+              "border-bottom-color": selectedTab() === 'neo4j-graph' ? '#00ffff' : 'transparent',
+              "color": selectedTab() === 'neo4j-graph' ? '#00ffff' : '#a1a1aa'
             }}
           >
-            Graph
+            <span mr="1">🗄️</span>
+            Neo4j
+          </Tabs.Trigger>
+
+          <Tabs.Trigger
+            value="memory-graph"
+            p="x-3 y-2"
+            text="sm dark-text-primary"
+            cursor="pointer"
+            border="b-2 transparent"
+            transition="all"
+            data-state={selectedTab() === 'memory-graph' ? 'active' : 'inactive'}
+            style={{
+              "border-bottom-color": selectedTab() === 'memory-graph' ? '#a855f7' : 'transparent',
+              "color": selectedTab() === 'memory-graph' ? '#a855f7' : '#a1a1aa'
+            }}
+          >
+            <span mr="1">🧠</span>
+            Memory
+          </Tabs.Trigger>
+
+          <Tabs.Trigger
+            value="all-graph"
+            p="x-3 y-2"
+            text="sm dark-text-primary"
+            cursor="pointer"
+            border="b-2 transparent"
+            transition="all"
+            data-state={selectedTab() === 'all-graph' ? 'active' : 'inactive'}
+            style={{
+              "border-bottom-color": selectedTab() === 'all-graph' ? '#22c55e' : 'transparent',
+              "color": selectedTab() === 'all-graph' ? '#22c55e' : '#a1a1aa'
+            }}
+          >
+            <span mr="1">🕸️</span>
+            All
           </Tabs.Trigger>
 
           <Tabs.Trigger
             value="stats"
-            p="x-4 y-2"
+            p="x-3 y-2"
             text="sm dark-text-primary"
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
             data-state={selectedTab() === 'stats' ? 'active' : 'inactive'}
             style={{
-              "border-bottom-color": selectedTab() === 'stats' ? '#00ffff' : 'transparent',
-              "color": selectedTab() === 'stats' ? '#00ffff' : '#a1a1aa'
+              "border-bottom-color": selectedTab() === 'stats' ? '#f59e0b' : 'transparent',
+              "color": selectedTab() === 'stats' ? '#f59e0b' : '#a1a1aa'
             }}
           >
             Observability
           </Tabs.Trigger>
 
           <Tabs.Trigger
+            value="data"
+            p="x-3 y-2"
+            text="sm dark-text-primary"
+            cursor="pointer"
+            border="b-2 transparent"
+            transition="all"
+            data-state={selectedTab() === 'data' ? 'active' : 'inactive'}
+            style={{
+              "border-bottom-color": selectedTab() === 'data' ? '#22d3ee' : 'transparent',
+              "color": selectedTab() === 'data' ? '#22d3ee' : '#a1a1aa'
+            }}
+          >
+            Data
+          </Tabs.Trigger>
+
+          <Tabs.Trigger
+            value="tools"
+            p="x-3 y-2"
+            text="sm dark-text-primary"
+            cursor="pointer"
+            border="b-2 transparent"
+            transition="all"
+            data-state={selectedTab() === 'tools' ? 'active' : 'inactive'}
+            style={{
+              "border-bottom-color": selectedTab() === 'tools' ? '#ff6600' : 'transparent',
+              "color": selectedTab() === 'tools' ? '#ff6600' : '#a1a1aa'
+            }}
+          >
+            Tools
+          </Tabs.Trigger>
+
+          <Tabs.Trigger
             value="actions"
-            p="x-4 y-2"
+            p="x-3 y-2"
             text="sm dark-text-tertiary"
             cursor="not-allowed"
             opacity="50"
@@ -97,7 +197,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
 
           <Tabs.Trigger
             value="docs"
-            p="x-4 y-2"
+            p="x-3 y-2"
             text="sm dark-text-tertiary"
             cursor="not-allowed"
             opacity="50"
@@ -105,60 +205,69 @@ export const SupportPanel = (props: SupportPanelProps) => {
           >
             Documents
           </Tabs.Trigger>
-
-          <Tabs.Trigger
-            value="tools"
-            p="x-4 y-2"
-            text="sm dark-text-tertiary"
-            cursor="not-allowed"
-            opacity="50"
-            disabled
-          >
-            Tools
-          </Tabs.Trigger>
         </Tabs.List>
 
         {/* Tab Content */}
         <div flex="1" overflow="hidden">
-          {/* Graph Tab */}
-          <Tabs.Content value="graph" h="full">
-            <GraphVisualization
-              elements={props.graphElements}
+          {/* Neo4j Graph Tab */}
+          <Tabs.Content value="neo4j-graph" h="full" flex="~ col">
+            <GraphTabContent
+              elements={neo4jElements()}
+              highlightedIds={props.highlightedIds}
               onNodeClick={props.onNodeClick}
               onEdgeClick={props.onEdgeClick}
+              onClearGraph={props.onClearGraph}
+              onCypherWrite={props.onCypherWrite}
+              emptyMessage="No Neo4j graph data yet. Query your knowledge base to see results."
+              emptyIcon="🗄️"
             />
           </Tabs.Content>
 
-          {/* Observability Tab */}
+          {/* Memory Graph Tab */}
+          <Tabs.Content value="memory-graph" h="full" flex="~ col">
+            <GraphTabContent
+              elements={memoryElements()}
+              highlightedIds={props.highlightedIds}
+              onNodeClick={props.onNodeClick}
+              onEdgeClick={props.onEdgeClick}
+              onClearGraph={props.onClearGraph}
+              emptyMessage="No memory graph data yet. Use agents that interact with the Memory MCP to see data."
+              emptyIcon="🧠"
+            />
+          </Tabs.Content>
+
+          {/* All Graphs Tab — Turn-based explorer */}
+          <Tabs.Content value="all-graph" h="full" flex="~ col">
+            <AllGraphTabWrapper
+              contextEvents={props.contextEvents ?? []}
+              highlightedIds={props.highlightedIds}
+              onNodeClick={props.onNodeClick}
+              onEdgeClick={props.onEdgeClick}
+              onCypherWrite={props.onCypherWrite}
+            />
+          </Tabs.Content>
+
+          {/* Observability Tab - ContextEvents based */}
           <Tabs.Content value="stats" h="full">
-            <div flex="~" items="center" justify="center" h="full" bg="dark-bg-primary">
-              <div text="center">
-                <svg
-                  width="64"
-                  height="64"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  style={{"margin":"0 auto", "color":"#4f46e5", "opacity":"0.5"}}
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-                  />
-                </svg>
-                <div text="lg dark-text-secondary" font="medium" m="t-4">
-                  Observability Panel
-                </div>
-                <div text="sm dark-text-tertiary" m="t-2" max-w="sm">
-                  Track BAML function calls, token usage, and latency metrics
-                </div>
-                <div text="xs dark-text-tertiary" m="t-4">
-                  Coming in Phase 5
-                </div>
-              </div>
-            </div>
+            <ObservabilityPanel
+              events={props.contextEvents ?? []}
+              context={props.unifiedContext}
+              onClear={props.onClearEvents}
+            />
+          </Tabs.Content>
+
+          {/* Data Stash Tab */}
+          <Tabs.Content value="data" h="full">
+            <DataStashPanel
+              events={props.contextEvents ?? []}
+              sessionId={props.sessionId ?? ''}
+              onStashAction={props.onStashAction ?? (async () => {})}
+            />
+          </Tabs.Content>
+
+          {/* Tools Tab */}
+          <Tabs.Content value="tools" h="full">
+            <ToolsPanel />
           </Tabs.Content>
 
           {/* Actions Tab (Future) */}
@@ -180,19 +289,111 @@ export const SupportPanel = (props: SupportPanelProps) => {
               phase="Phase 7"
             />
           </Tabs.Content>
-
-          {/* Tools Tab (Future) */}
-          <Tabs.Content value="tools" h="full">
-            <PlaceholderPanel
-              icon="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-              title="Tool Selector"
-              description="UTCP tool discovery, enable/disable tools, and code-mode composition"
-              phase="Phase 8"
-            />
-          </Tabs.Content>
         </div>
       </Tabs.Root>
     </div>
+  );
+};
+
+// ============================================================================
+// Graph Tab Content Component
+// ============================================================================
+
+interface GraphTabContentProps {
+  elements: ElementDefinition[];
+  highlightedIds?: string[];
+  onNodeClick?: (nodeId: string, nodeData: Record<string, unknown>) => void;
+  onEdgeClick?: (edgeId: string, edgeData: Record<string, unknown>) => void;
+  onClearGraph?: () => void;
+  onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>;
+  emptyMessage: string;
+  emptyIcon: string;
+}
+
+const GraphTabContent = (props: GraphTabContentProps) => {
+  const [syncEnabled, setSyncEnabled] = createSignal(true);
+  const [frozenElements, setFrozenElements] = createSignal<ElementDefinition[]>([]);
+
+  const effectiveElements = () => syncEnabled() ? props.elements : frozenElements();
+  const nodeCount = () => effectiveElements().filter(e => !e.data?.source).length;
+  const edgeCount = () => effectiveElements().filter(e => e.data?.source).length;
+
+  const toggleSync = () => {
+    if (syncEnabled()) {
+      // Freezing: snapshot current elements
+      setFrozenElements([...props.elements]);
+    }
+    setSyncEnabled(!syncEnabled());
+  };
+
+  return (
+    <>
+      {/* Graph Controls Bar */}
+      <Show when={effectiveElements().length > 0}>
+        <div
+          flex="~"
+          items="center"
+          justify="between"
+          p="2 3"
+          bg="dark-bg-tertiary"
+          border="b dark-border-primary"
+        >
+          <div text="xs dark-text-secondary">
+            {nodeCount()} nodes, {edgeCount()} edges
+          </div>
+          <div flex="~" items="center" gap="2">
+            <button
+              onClick={toggleSync}
+              p="x-2 y-1"
+              text={syncEnabled() ? "xs cyan-400" : "xs amber-400"}
+              bg={syncEnabled() ? "cyan-600/10 hover:cyan-600/20" : "amber-600/10 hover:amber-600/20"}
+              border={syncEnabled() ? "1 cyan-500/30" : "1 amber-500/30"}
+              rounded="md"
+              cursor="pointer"
+              transition="all"
+              title={syncEnabled() ? "Pause graph sync with conversation" : "Resume graph sync with conversation"}
+            >
+              {syncEnabled() ? '⏸ Sync' : '▶ Sync'}
+            </button>
+            <button
+              onClick={() => props.onClearGraph?.()}
+              p="x-2 y-1"
+              text="xs red-400"
+              bg="red-600/10 hover:red-600/20"
+              border="1 red-500/30"
+              rounded="md"
+              cursor="pointer"
+              transition="all"
+            >
+              Clear Graph
+            </button>
+          </div>
+        </div>
+      </Show>
+
+      {/* Graph or Empty State */}
+      <div flex="1" overflow="hidden">
+        <Show
+          when={effectiveElements().length > 0}
+          fallback={
+            <div flex="~ col" items="center" justify="center" h="full" text="center">
+              <span text="4xl mb-4">{props.emptyIcon}</span>
+              <span text="sm dark-text-secondary" max-w="xs">
+                {props.emptyMessage}
+              </span>
+            </div>
+          }
+        >
+          <GraphVisualization
+            elements={effectiveElements()}
+            highlightedIds={props.highlightedIds}
+            onNodeClick={props.onNodeClick}
+            onEdgeClick={props.onEdgeClick}
+            onCypherWrite={props.onCypherWrite}
+          />
+        </Show>
+      </div>
+    </>
   );
 };
 

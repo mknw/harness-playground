@@ -39,8 +39,10 @@ docker exec ${CONTAINER_NAME} cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD}
     "MATCH (n) DETACH DELETE n;" 2>/dev/null || echo "Database already empty"
 
 # Import the dump
+# Use --format plain to handle :begin/:commit transaction markers from APOC export
+# Filter out comment lines (starting with //) as cypher-shell doesn't handle them
 echo "Importing data..."
-cat "${IMPORT_FILE}" | docker exec -i ${CONTAINER_NAME} cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD} || {
+grep -v '^//' "${IMPORT_FILE}" | docker exec -i ${CONTAINER_NAME} cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD} --format plain || {
     echo "Error: Import failed"
     exit 1
 }

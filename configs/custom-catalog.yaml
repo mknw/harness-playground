@@ -1,0 +1,250 @@
+name: custom-catalog
+displayName: Seederis KG Catalog
+registry:
+  neo4j-cypher:
+    description: Interact with Neo4j using Cypher graph queries (fixed URI mapping)
+    title: Neo4j Cypher
+    type: server
+    image: mcp/neo4j-cypher@sha256:e48235fb00b6b3c5c2e67d4c958786ad4ae8bc0c38cec090979cc3bc4e87f7cb
+    tools:
+      - name: get_neo4j_schema
+      - name: read_neo4j_cypher
+      - name: write_neo4j_cypher
+    secrets:
+      - name: neo4j-cypher.password
+        env: NEO4J_PASSWORD
+        example: password
+    env:
+      - name: NEO4J_URI # FIXED: Was NEO4J_URL
+        value: "{{neo4j-cypher.uri}}" # FIXED: Was {{neo4j-cypher.url}}
+      - name: NEO4J_USERNAME
+        value: "{{neo4j-cypher.username}}"
+      - name: NEO4J_PASSWORD # ADD: Password as env variable
+        value: "{{neo4j-cypher.password}}" # ADD: Instead of as a secret
+      - name: NEO4J_DATABASE
+        value: "{{neo4j-cypher.database}}"
+      - name: NEO4J_READ_ONLY
+        value: "{{neo4j-cypher.read_only}}"
+
+  fetch:
+    description: Fetch and retrieve content from the web
+    title: Fetch
+    type: server
+    image: mcp/fetch@sha256:ef9535a3f07249142f9ca5a6033d7024950afdb6dc05e98292794a23e9f5dfbe
+    tools:
+      - name: fetch
+
+  web_search:
+    description: A Model Context Protocol (MCP) server that provides web search capabilities through DuckDuckGo, with additional features for content fetching and parsing.
+    title: DuckDuckGo
+    type: server
+    image: mcp/duckduckgo@sha256:68eb20db6109f5c312a695fc5ec3386ad15d93ffb765a0b4eb1baf4328dec14f
+    allowHosts:
+      - html.duckduckgo.com:443
+
+  context7:
+    description: Up-to-date code documentation for LLMs and AI code editors
+    title: Context7
+    type: server
+    image: mcp/context7@sha256:1174e6a29634a83b2be93ac1fefabf63265f498c02c72201fe3464e687dd8836
+    tools:
+      - name: resolve-library-id
+      - name: get-library-docs
+    env:
+      - name: MCP_TRANSPORT
+        value: stdio
+
+  rust-mcp-filesystem:
+    description: File system operations - read, write, search, and manage files and directories
+    title: Rust Filesystem
+    type: server
+    image: mcp/rust-mcp-filesystem@sha256:77a7f6f7a477bdec2c58696c76afda8e1f88d189f7c8b935d8dd9a00ee5780c5
+    tools:
+      - name: read_text_file
+      - name: write_file
+      - name: edit_file
+      - name: list_directory
+      - name: directory_tree
+      - name: search_files
+      - name: search_files_content
+      - name: create_directory
+      - name: move_file
+      - name: get_file_info
+      - name: read_file_lines
+      - name: head_file
+      - name: tail_file
+      - name: list_allowed_directories
+    env:
+      - name: ENABLE_ROOTS
+        value: "{{rust-mcp-filesystem.enable_roots}}"
+      - name: ALLOW_WRITE
+        value: "{{rust-mcp-filesystem.allow_write}}"
+    command:
+      - "{{rust-mcp-filesystem.allowed_directories|volume-target|into}}"
+    volumes:
+      - "{{rust-mcp-filesystem.allowed_directories|volume|into}}"
+    disableNetwork: true
+
+  github:
+    description: GitHub API interaction - issues, pull requests, repositories, and code search
+    title: GitHub
+    type: server
+    image: mcp/github@sha256:89fd71b6f2dd098de0d7517c1899b7fe90590d3193e253991d61a800b041bfd4
+    tools:
+      - name: search_repositories
+      - name: search_code
+      - name: search_issues
+      - name: list_issues
+      - name: get_issue
+      - name: create_issue
+      - name: update_issue
+      - name: add_issue_comment
+      - name: list_pull_requests
+      - name: get_pull_request
+      - name: get_file_contents
+      - name: list_commits
+    secrets:
+      - name: github.personal_access_token
+        env: GITHUB_PERSONAL_ACCESS_TOKEN
+        example: <YOUR_TOKEN>
+    env:
+      - name: GITHUB_PERSONAL_ACCESS_TOKEN
+        value: "{{github.personal_access_token}}"
+    config:
+      - name: github
+        description: Configure GitHub authentication
+        type: object
+        properties:
+          personal_access_token:
+            type: string
+            description: GitHub personal access token
+
+  memory:
+    description: Knowledge graph-based persistent memory - entities, relations, and observations
+    title: Memory
+    type: server
+    image: mcp/memory@sha256:db0c2db07a44b6797eba7a832b1bda142ffc899588aae82c92780cbb2252407f
+    tools:
+      - name: create_entities
+      - name: create_relations
+      - name: add_observations
+      - name: delete_entities
+      - name: delete_relations
+      - name: delete_observations
+      - name: read_graph
+      - name: search_nodes
+      - name: open_nodes
+    volumes:
+      - claude-memory:/app/dist
+
+  redis:
+    description: Redis database operations - key/value, hashes, lists, sets, sorted sets, streams, pub/sub, and vector search
+    title: Redis
+    type: server
+    image: mcp/redis@sha256:c9162917b62dda5495feb9a2ca277564269cf2bfbe6d468b851a9dcb6c88d686
+    tools:
+      - name: get
+      - name: set
+      - name: delete
+      - name: expire
+      - name: scan_keys
+      - name: hget
+      - name: hgetall
+      - name: hset
+      - name: hdel
+      - name: lpush
+      - name: rpush
+      - name: lpop
+      - name: rpop
+      - name: lrange
+      - name: llen
+      - name: sadd
+      - name: smembers
+      - name: srem
+      - name: zadd
+      - name: zrange
+      - name: zrem
+      - name: xadd
+      - name: xrange
+      - name: xdel
+      - name: publish
+      - name: subscribe
+      - name: unsubscribe
+      - name: json_get
+      - name: json_set
+      - name: json_del
+      - name: info
+      - name: dbsize
+      - name: type
+      - name: rename
+      - name: scan_all_keys
+      - name: search_redis_documents
+      - name: client_list
+    secrets:
+      - name: redis.password
+        env: REDIS_PWD
+        example: ""
+    env:
+      - name: REDIS_HOST
+        value: "{{redis.host}}"
+      - name: REDIS_PORT
+        value: "{{redis.port}}"
+      - name: REDIS_USERNAME
+        value: "{{redis.username}}"
+      - name: REDIS_PWD
+        value: "{{redis.password}}"
+      - name: REDIS_SSL
+        value: "{{redis.ssl}}"
+
+  database-server:
+    description: Database server supporting PostgreSQL, MySQL, and SQLite with schema introspection and full SQL query capabilities
+    title: MCP Database Server
+    type: server
+    image: souhardyak/mcp-db-server@sha256:512a34783fcd232b70630cc5034595ee0cace39f31e3156f7b0f65b21a7fc308
+    tools:
+      - name: query_database
+      - name: list_tables
+      - name: describe_table
+      - name: connect_to_database
+      - name: get_connection_examples
+      - name: get_current_database_info
+    env:
+      - name: DATABASE_URL
+        value: "{{database-server.database_url}}"
+    config:
+      - name: database-server
+        description: Configure the database connection. Supports SQLite, PostgreSQL, and MySQL.
+        type: object
+        properties:
+          database_url:
+            type: string
+
+  playwright:
+    description: Playwright MCP server.
+    title: Playwright
+    type: server
+    longLived: true
+    image: mcp/playwright@sha256:53da89d1da3dfbb61c10f707c1713cfee1f870f7fba5334e126c6c765e37db56
+    tools:
+      - name: browser_click
+      - name: browser_close
+      - name: browser_console_messages
+      - name: browser_drag
+      - name: browser_evaluate
+      - name: browser_file_upload
+      - name: browser_fill_form
+      - name: browser_handle_dialog
+      - name: browser_hover
+      - name: browser_install
+      - name: browser_navigate
+      - name: browser_navigate_back
+      - name: browser_network_requests
+      - name: browser_press_key
+      - name: browser_resize
+      - name: browser_run_code
+      - name: browser_select_option
+      - name: browser_snapshot
+      - name: browser_tabs
+      - name: browser_take_screenshot
+      - name: browser_type
+      - name: browser_wait_for

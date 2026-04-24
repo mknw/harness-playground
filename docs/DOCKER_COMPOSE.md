@@ -2,9 +2,11 @@
 
 ## Overview
 
-The kg-agent project uses Docker Compose to orchestrate three main services:
+The kg-agent project uses Docker Compose to orchestrate five main services:
 - **n8n**: Workflow automation platform
 - **neo4j**: Graph database (Community Edition v5.26)
+- **postgres**: Relational database (PostgreSQL 16)
+- **redis**: Key-value store and cache (Redis 7)
 - **mcp-gateway**: Docker's Model Context Protocol gateway for AI tool integration
 
 All services communicate via a shared bridge network (`app-network`).
@@ -27,10 +29,27 @@ All services communicate via a shared bridge network (`app-network`).
 - **Data**: Persisted in `./neo4j_data`
 - **Healthcheck**: Validates HTTP endpoint on port 7474
 
+### PostgreSQL
+- **Container**: postgres-seederis
+- **Image**: postgres:16-alpine
+- **Ports**: 5432:5432
+- **Authentication**: postgres/password
+- **Default Database**: kgagent
+- **Data**: Persisted in `postgres_data` named volume
+- **Healthcheck**: `pg_isready -U postgres`
+
+### Redis
+- **Container**: redis-seederis
+- **Image**: redis:7-alpine
+- **Ports**: 6379:6379
+- **Authentication**: None (alpine default)
+- **Data**: Persisted in `redis_data` named volume
+- **Healthcheck**: `redis-cli ping`
+
 ### MCP Gateway
 - **Image**: docker/mcp-gateway
-- **Ports**: 3000:3000
-- **MCP Servers**: neo4j-cypher, fetch
+- **Ports**: 8811:8811
+- **MCP Servers**: neo4j-cypher, fetch, web_search, context7, rust-mcp-filesystem, github, memory, redis, database-server
 - **Transport**: streaming
 - **Dependencies**: Waits for Neo4j healthcheck
 
@@ -65,7 +84,9 @@ env:
 
 ### Configuration Files
 
-1. **mcp-config.yaml**: Contains connection parameters
+All MCP configuration files are located in the `configs/` directory:
+
+1. **configs/mcp-config.yaml**: Contains connection parameters
    ```yaml
    neo4j-cypher:
      uri: bolt://neo4j:7687  # Uses Docker service name
@@ -75,23 +96,37 @@ env:
      read_only: false
    ```
 
-2. **custom-catalog.yaml**: Custom catalog definition with corrected environment variable mappings
-   - Includes **neo4j-cypher** server with fixed NEO4J_URI mapping
-   - Includes **fetch** server for web content retrieval
+2. **configs/custom-catalog.yaml**: Custom catalog definition with corrected environment variable mappings
+   - **neo4j-cypher**: Graph database queries (fixed NEO4J_URI mapping)
+   - **fetch**: Web content retrieval
+   - **web_search**: DuckDuckGo search
+   - **context7**: Library documentation lookup
+   - **rust-mcp-filesystem**: File system operations
+   - **github**: GitHub API (PAT configured via `mcp-config-set`)
+   - **memory**: Knowledge graph memory
+   - **redis**: Redis operations (connects to redis container)
+   - **database-server**: PostgreSQL/MySQL/SQLite queries (connects to postgres container)
    - Uses SHA256 digests for image references (e.g., `mcp/fetch@sha256:...`)
 
-3. **docker-compose.yaml**: Mounts both configuration files read-only
+3. **configs/catalog.yaml**: Full Docker MCP catalog for global mode
+
+4. **docker-compose.yaml**: Mounts all configuration files read-only
    ```yaml
    volumes:
-     - ./mcp-config.yaml:/mcp/config.yaml:ro
-     - ./custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+     - ./configs/mcp-config.yaml:/mcp/config.yaml:ro
+     - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+     - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
    ```
 
 ## Important Notes
 
-### Neo4j Service Networking
-- Use `neo4j:7687` (Docker service name) rather than `host.docker.internal` for inter-container communication
-- The Neo4j service is accessible on the `app-network` bridge network
+### Service Networking
+- Use Docker service names for inter-container communication (not `host.docker.internal`)
+  - Neo4j: `neo4j:7687` (bolt) / `neo4j:7474` (http)
+  - PostgreSQL: `postgres:5432`
+  - Redis: `redis:6379`
+- All services are accessible on the `app-network` bridge network
+- MCP servers spawned by the gateway also join this network to reach backends
 
 ### Neo4j Authentication Reset
 - If authentication rate limiting occurs, you must **completely remove the `neo4j_data` directory**

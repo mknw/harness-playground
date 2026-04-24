@@ -1,22 +1,41 @@
-import { defineConfig, presetAttributify, presetWebFonts , transformerAttributifyJsx  } from 'unocss'
+import {
+  defineConfig,
+  presetAttributify,
+  presetWebFonts,
+  transformerAttributifyJsx,
+  presetIcons,
+} from "unocss";
 // import transformerAttributifyJsx from '@unocss/transformer-attributify-jsx'
-
-import presetWind4 from '@unocss/preset-wind4'
+import type { IconifyJSON } from "@iconify/types";
+import presetWind4 from "@unocss/preset-wind4";
+// import presetIcons from "@unocss/preset-icons";
 
 export default defineConfig({
   presets: [
+    presetIcons({
+      collections: {
+        "material-symbols": () =>
+          import("@iconify-json/material-symbols/icons.json").then(
+            (i) => i.default as IconifyJSON,
+          ),
+        "material-symbols-light": () =>
+          import("@iconify-json/material-symbols-light/icons.json").then(
+            (i) => i.default as IconifyJSON,
+          ),
+      },
+    }),
     presetAttributify(),
     presetWind4(),
     presetWebFonts({
-      provider: 'google',
+      provider: "google",
       fonts: {
-        sans: 'Inter',
-        serif: 'Roboto Slab',
-        mono: 'Fira Code',
-        lexend: 'Lexend Zetta:200',
-        lexend_exa: 'Lexend Exa:200'
-      }
-    })
+        sans: "Inter",
+        serif: "Roboto Slab",
+        mono: "Fira Code",
+        lexend: "Lexend Zetta:200",
+        lexend_exa: "Lexend Exa:200",
+      },
+    }),
   ],
   transformers: [
     transformerAttributifyJsx(), // <--
@@ -24,53 +43,56 @@ export default defineConfig({
   theme: {
     colors: {
       // Futuristic dark theme palette
-      'cyber': {
-        50: '#f0f4ff',
-        100: '#e0e7ff',
-        200: '#c7d7fe',
-        300: '#a5b4fc',
-        400: '#818cf8',
-        500: '#6366f1',
-        600: '#4f46e5',
-        700: '#4338ca',
-        800: '#3730a3',
-        900: '#312e81',
-        950: '#1e1b4b',
+      cyber: {
+        50: "#f0f4ff",
+        100: "#e0e7ff",
+        200: "#c7d7fe",
+        300: "#a5b4fc",
+        400: "#818cf8",
+        500: "#6366f1",
+        600: "#4f46e5",
+        700: "#4338ca",
+        800: "#3730a3",
+        900: "#312e81",
+        950: "#1e1b4b",
       },
-      'neon': {
-        cyan: '#00ffff',
-        magenta: '#ff00ff',
-        green: '#39ff14',
-        orange: '#ff6600',
-        purple: '#9d00ff',
-        blue: '#0080ff',
-        pink: '#ff007f',
+      neon: {
+        cyan: "#00ffff",
+        magenta: "#ff00ff",
+        green: "#39ff14",
+        orange: "#ff6600",
+        purple: "#9d00ff",
+        blue: "#0080ff",
+        pink: "#ff007f",
       },
-      'dark': {
+      dark: {
         bg: {
-          primary: '#0a0a0f',
-          secondary: '#12121a',
-          tertiary: '#1a1a24',
-          hover: '#22222f',
+          primary: "#0a0a0f",
+          secondary: "#12121a",
+          tertiary: "#1a1a24",
+          hover: "#22222f",
         },
         border: {
-          primary: '#2a2a3a',
-          secondary: '#3a3a4a',
-          accent: '#4a4a5a',
+          primary: "#2a2a3a",
+          secondary: "#3a3a4a",
+          accent: "#4a4a5a",
         },
         text: {
-          primary: '#e4e4e7',
-          secondary: '#a1a1aa',
-          tertiary: '#71717a',
-        }
-      }
-    }
+          primary: "#e4e4e7",
+          secondary: "#a1a1aa",
+          tertiary: "#71717a",
+        },
+      },
+    },
   },
   shortcuts: {
     // Futuristic UI shortcuts
-    'glass-panel': 'bg-dark-bg-secondary/50 backdrop-blur-lg border border-dark-border-primary',
-    'neon-border': 'border-2 border-neon-cyan shadow-[0_0_10px_rgba(0,255,255,0.5)]',
-    'cyber-button': 'bg-cyber-700 hover:bg-cyber-600 text-white font-medium px-4 py-2 rounded-md transition-all duration-200 hover:shadow-[0_0_15px_rgba(79,70,229,0.5)]',
+    "glass-panel":
+      "bg-dark-bg-secondary/50 backdrop-blur-lg border border-dark-border-primary",
+    "neon-border":
+      "border-2 border-neon-cyan shadow-[0_0_10px_rgba(0,255,255,0.5)]",
+    "cyber-button":
+      "bg-cyber-700 hover:bg-cyber-600 text-white font-medium px-4 py-2 rounded-md transition-all duration-200 hover:shadow-[0_0_15px_rgba(79,70,229,0.5)]",
   },
   // Custom CSS for markdown rendering
   preflights: [
@@ -140,7 +162,76 @@ export default defineConfig({
         .prose-chat h1 { font-size: 1.25em; }
         .prose-chat h2 { font-size: 1.15em; }
         .prose-chat h3 { font-size: 1.05em; }
-      `
-    }
-  ]
-})
+
+        /* Thinking/reasoning collapsible */
+        .think-root {
+          margin: -12px -12px 8px -12px;
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+          border-radius: 8px 8px 0 0;
+          overflow: hidden;
+        }
+        .think-trigger {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          width: 100%;
+          padding: 4px 8px;
+          background: rgba(255,255,255,0.03);
+          cursor: pointer;
+          font-size: 0.75rem;
+          color: #71717a;
+          border: none;
+          text-align: left;
+          transition: background 0.15s ease;
+        }
+        .think-trigger:hover {
+          background: rgba(255,255,255,0.06);
+        }
+        .think-preview {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .think-content {
+          overflow: hidden;
+          transition: max-height 0.25s ease, opacity 0.2s ease;
+        }
+        .think-content[data-state="open"] {
+          max-height: 50vh;
+          overflow-y: auto;
+          opacity: 1;
+        }
+        .think-content[data-state="closed"] {
+          max-height: 0;
+          opacity: 0;
+        }
+        .think-body {
+          padding: 8px 10px;
+          background: rgba(0,0,0,0.15);
+          border-top: 1px solid rgba(255,255,255,0.05);
+          font-size: 0.8rem;
+          opacity: 0.6;
+        }
+
+        /* Graph entity interactive spans in chat messages */
+        .graph-entity {
+          cursor: pointer;
+          border-bottom: 1px dashed rgba(0,255,255,0.4);
+          transition: all 0.15s ease;
+          border-radius: 2px;
+          padding: 0 2px;
+        }
+        .graph-entity:hover {
+          background: rgba(0,255,255,0.15);
+          border-bottom-color: #00ffff;
+          color: #00ffff;
+        }
+        .graph-entity.toggled {
+          background: rgba(0,255,255,0.2);
+          border-bottom: 1px solid #00ffff;
+          color: #00ffff;
+        }
+      `,
+    },
+  ],
+});

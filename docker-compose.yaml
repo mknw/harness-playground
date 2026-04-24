@@ -25,7 +25,7 @@ services:
       - NEO4J_AUTH=neo4j/password
       - NEO4J_PLUGINS=["apoc", "n10s"]
     volumes:
-      - ./neo4j_data:/data
+      - neo4j_data:/data
     networks:
       - app-network
     healthcheck:
@@ -38,15 +38,18 @@ services:
     image: docker/mcp-gateway
     restart: unless-stopped
     command:
-      - --servers=neo4j-cypher,fetch,web_search
+      - --enable-all-servers
       - --config=/mcp/config.yaml
       - --catalog=/mcp/custom-catalog.yaml
       - --transport=streaming
       - --port=8811
+      - --verbose
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./mcp-config.yaml:/mcp/config.yaml:ro
-      - ./custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+      - ./configs/mcp-config.yaml:/mcp/config.yaml:ro
+      - ./configs/custom-catalog.yaml:/mcp/custom-catalog.yaml:ro
+      - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
+      - ./docker-config.json:/root/.docker/config.json:ro
     ports:
       - "8811:8811"
     networks:
@@ -55,6 +58,47 @@ services:
       neo4j:
         condition: service_healthy
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-seederis
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=kgagent
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-seederis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 networks:
   app-network:
     driver: bridge
+
+volumes:
+  neo4j_data:
+  postgres_data:
+  redis_data:
