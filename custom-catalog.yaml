@@ -1,0 +1,43 @@
+name: custom-catalog
+displayName: Seederis KG Catalog
+registry:
+  neo4j-cypher:
+    description: Interact with Neo4j using Cypher graph queries (fixed URI mapping)
+    title: Neo4j Cypher
+    type: server
+    image: mcp/neo4j-cypher@sha256:e48235fb00b6b3c5c2e67d4c958786ad4ae8bc0c38cec090979cc3bc4e87f7cb
+    tools:
+      - name: get_neo4j_schema
+      - name: read_neo4j_cypher
+      - name: write_neo4j_cypher
+    secrets:
+      - name: neo4j-cypher.password
+        env: NEO4J_PASSWORD
+        example: password
+    env:
+      - name: NEO4J_URI                      # FIXED: Was NEO4J_URL
+        value: '{{neo4j-cypher.uri}}'        # FIXED: Was {{neo4j-cypher.url}}
+      - name: NEO4J_USERNAME
+        value: '{{neo4j-cypher.username}}'
+      - name: NEO4J_PASSWORD                   # ADD: Password as env variable
+        value: '{{neo4j-cypher.password}}'     # ADD: Instead of as a secret
+      - name: NEO4J_DATABASE
+        value: '{{neo4j-cypher.database}}'
+      - name: NEO4J_READ_ONLY
+        value: '{{neo4j-cypher.read_only}}'
+
+  fetch:
+    description: Fetch and retrieve content from the web
+    title: Fetch
+    type: server
+    image: mcp/fetch@sha256:ef9535a3f07249142f9ca5a6033d7024950afdb6dc05e98292794a23e9f5dfbe
+    tools:
+      - name: fetch
+
+  web_search:
+    description: A Model Context Protocol (MCP) server that provides web search capabilities through DuckDuckGo, with additional features for content fetching and parsing.
+    title: DuckDuckGo
+    type: server
+    image: mcp/duckduckgo@sha256:68eb20db6109f5c312a695fc5ec3386ad15d93ffb765a0b4eb1baf4328dec14f
+    allowHosts:
+      - html.duckduckgo.com:443
