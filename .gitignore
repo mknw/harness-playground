@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# Harness debug logs
+.harness-logs/
+
 # Python-generated files
 __pycache__/
 *.py[oc]
