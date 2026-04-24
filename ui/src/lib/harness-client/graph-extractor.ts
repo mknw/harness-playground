@@ -51,7 +51,7 @@ function getSourceFromPattern(patternId: string): GraphElement['source'] {
 // ============================================================================
 
 /** Check if a tool result contains Neo4j graph data */
-function isNeo4jGraphResult(toolName: string, _result: unknown): boolean {
+export function isNeo4jGraphResult(toolName: string, _result: unknown): boolean {
   const neo4jTools = [
     'read_neo4j_cypher',
     'write_neo4j_cypher',
@@ -61,7 +61,7 @@ function isNeo4jGraphResult(toolName: string, _result: unknown): boolean {
 }
 
 /** Check if a tool result contains Memory graph data */
-function isMemoryGraphResult(toolName: string, _result: unknown): boolean {
+export function isMemoryGraphResult(toolName: string, _result: unknown): boolean {
   const memoryTools = [
     'read_graph',
     'search_nodes',

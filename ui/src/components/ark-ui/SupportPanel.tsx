@@ -2,7 +2,7 @@
  * Support Panel Component
  *
  * Tabbed interface for knowledge graph visualization and observability tools
- * Tabs: Neo4j Graph | Memory Graph | Observability | Data | Actions | Documents | Tools
+ * Tabs: Neo4j Graph | Memory Graph | All (Turn Explorer) | Observability | Data | Actions | Documents | Tools
  */
 
 import { Tabs } from '@ark-ui/solid/tabs';
@@ -11,6 +11,7 @@ import { GraphVisualization } from './GraphVisualization';
 import { ObservabilityPanel } from './ObservabilityPanel';
 import { DataStashPanel, type StashAction } from './DataStashPanel';
 import { ToolsPanel } from './ToolsPanel';
+import { AllGraphTabWrapper } from './AllGraphTab';
 import type { ElementDefinition } from 'cytoscape';
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns';
 
@@ -66,14 +67,13 @@ export const SupportPanel = (props: SupportPanelProps) => {
     props.graphElements.filter(e => e.source === 'memory')
   );
 
-  // Combined elements for "All" view
-  const allElements = createMemo(() => props.graphElements);
-
   return (
     <div flex="~ col" h="full" bg="dark-bg-primary">
       <Tabs.Root
         value={selectedTab()}
         onValueChange={(details) => setSelectedTab(details.value)}
+        lazyMount
+        unmountOnExit
         flex="~ col"
         h="full"
       >
@@ -236,17 +236,14 @@ export const SupportPanel = (props: SupportPanelProps) => {
             />
           </Tabs.Content>
 
-          {/* All Graphs Tab */}
+          {/* All Graphs Tab — Turn-based explorer */}
           <Tabs.Content value="all-graph" h="full" flex="~ col">
-            <GraphTabContent
-              elements={allElements()}
+            <AllGraphTabWrapper
+              contextEvents={props.contextEvents ?? []}
               highlightedIds={props.highlightedIds}
               onNodeClick={props.onNodeClick}
               onEdgeClick={props.onEdgeClick}
-              onClearGraph={props.onClearGraph}
               onCypherWrite={props.onCypherWrite}
-              emptyMessage="No graph data yet. Interact with the agent to see results."
-              emptyIcon="🕸️"
             />
           </Tabs.Content>
 

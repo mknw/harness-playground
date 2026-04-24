@@ -20,6 +20,7 @@ import type {
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
+import { trimToFit, getContextWindow } from '../token-budget.server'
 
 assertServerOnImport()
 
@@ -71,10 +72,14 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
     })
   }
 
+  // Trim oldest turns if they would overflow the synthesizer's context window
+  const contextWindow = getContextWindow('SynthesizerFallback')
+  const trimmedTurns = trimToFit(turns, t => JSON.stringify(t), 500, contextWindow)
+
   const variables = {
     userMessage: input.userMessage,
     intent: input.intent,
-    turns,
+    turns: trimmedTurns,
     hasError: input.hasError ?? false,
     errorMessage: input.errorMessage
   }
@@ -84,7 +89,7 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
     ? await b.Synthesize(
         input.userMessage,
         input.intent,
-        turns,
+        trimmedTurns,
         input.hasError ?? false,
         input.errorMessage,
         { collector }
@@ -92,7 +97,7 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
     : await b.Synthesize(
         input.userMessage,
         input.intent,
-        turns,
+        trimmedTurns,
         input.hasError ?? false,
         input.errorMessage
       )

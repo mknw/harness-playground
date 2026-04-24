@@ -1,6 +1,6 @@
 // Learn more about clients at https://docs.boundaryml.com/docs/snippets/clients/overview
 
-// Groq — Fast routing & classification (1000 t/s, cheapest)
+// Groq — Fast routing & classification (1000 t/s, cheapest, 32K ctx)
 client<llm> GroqFast {
   provider openai-generic
   retry_policy Exponential
@@ -8,6 +8,7 @@ client<llm> GroqFast {
     base_url "https://api.groq.com/openai/v1"
     api_key env.GROQ_API_KEY
     model "openai/gpt-oss-20b"
+    max_tokens 2048
   }
 }
 
@@ -19,10 +20,11 @@ client<llm> GroqReasoning {
     base_url "https://api.groq.com/openai/v1"
     api_key env.GROQ_API_KEY
     model "openai/gpt-oss-120b"
+    max_tokens 4096
   }
 }
 
-// Groq — Evaluation & critique (Qwen3 32B, 400 t/s)
+// Groq — Evaluation & critique (Qwen3 32B, 400 t/s, 32K ctx)
 client<llm> GroqEval {
   provider openai-generic
   retry_policy Exponential
@@ -30,6 +32,7 @@ client<llm> GroqEval {
     base_url "https://api.groq.com/openai/v1"
     api_key env.GROQ_API_KEY
     model "qwen/qwen3-32b"
+    max_tokens 2048
   }
 }
 
@@ -39,6 +42,7 @@ client<llm> CustomGPT5 {
   options {
     model "gpt-5"
     api_key env.OPENAI_API_KEY
+    max_tokens 4096
   }
 }
 
@@ -48,6 +52,7 @@ client<llm> CustomGPT5Mini {
   options {
     model "gpt-5-mini"
     api_key env.OPENAI_API_KEY
+    max_tokens 4096
   }
 }
 
@@ -58,6 +63,7 @@ client<llm> CustomGPT5Nano {
   options {
     model "gpt-5-nano"
     api_key env.OPENAI_API_KEY
+    max_tokens 4096
   }
 }
 
@@ -67,6 +73,7 @@ client<llm> CustomGPT5Chat {
   options {
     model "gpt-5"
     api_key env.OPENAI_API_KEY
+    max_tokens 4096
   }
 }
 
@@ -76,6 +83,7 @@ client<llm> CustomOpus4 {
   options {
     model "claude-opus-4-1-20250805"
     api_key env.ANTHROPIC_API_KEY
+    max_tokens 4096
   }
 }
 
@@ -84,6 +92,7 @@ client<llm> CustomSonnet4 {
   options {
     model "claude-sonnet-4-20250514"
     api_key env.ANTHROPIC_API_KEY
+    max_tokens 4096
   }
 }
 
@@ -93,6 +102,7 @@ client<llm> CustomHaiku {
   options {
     model "claude-3-5-haiku-20241022"
     api_key env.ANTHROPIC_API_KEY
+    max_tokens 4096
   }
 }
 
@@ -164,6 +174,7 @@ client<llm> LocalGLM {
     base_url "http://127.0.0.1:8080/v1"
     model "glm-4-flash"
     api_key "local"
+    max_tokens 2048
   }
 }
 

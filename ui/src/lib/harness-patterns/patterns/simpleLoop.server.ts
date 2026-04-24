@@ -22,6 +22,8 @@ import type {
 } from '../types'
 import { MAX_TOOL_TURNS } from '../types'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
+import { getRequestSettings } from '../../settings-context.server'
+import { trimToFit, getContextWindow } from '../token-budget.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
 
 assertServerOnImport()
@@ -86,13 +88,14 @@ export function simpleLoop<T extends SimpleLoopData>(
   tools: string[],
   config?: SimpleLoopConfig
 ): ConfiguredPattern<T> {
-  const maxTurns = config?.maxTurns ?? MAX_TOOL_TURNS
   const resolved = resolveConfig('simpleLoop', config)
 
   const fn = async (
     scope: PatternScope<T>,
     view: EventView
   ): Promise<PatternScope<T>> => {
+    const settings = getRequestSettings()
+    const maxTurns = config?.maxTurns ?? settings.maxToolTurns
     const data = scope.data
     const turns: LoopTurn[] = []
     let hasError = false
@@ -104,7 +107,7 @@ export function simpleLoop<T extends SimpleLoopData>(
     // Summaries (populated async after prior responses) are used when available.
     let priorResults: PriorResult[] | undefined
     if (config?.rememberPriorTurns !== false) {
-      const turnCount = config?.priorTurnCount ?? 3
+      const turnCount = config?.priorTurnCount ?? settings.priorTurnCount
       const priorEvents = view.fromLastNTurns(turnCount).ofType('tool_result').get()
         .filter(e => {
           const d = e.data as ToolResultEventData
@@ -127,8 +130,11 @@ export function simpleLoop<T extends SimpleLoopData>(
 
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
-        // Build previous results as LoopTurn[] JSON for the controller
-        const previousResults = JSON.stringify(turns)
+        // Trim oldest turns if they would overflow the controller's context window
+        const contextWindow = getContextWindow('ControllerFallback')
+        // ~500 chars base prompt overhead (template, schema, intent, etc.)
+        const trimmedTurns = trimToFit(turns, t => JSON.stringify(t), 500, contextWindow)
+        const previousResults = JSON.stringify(trimmedTurns)
 
         // Extract intent from data or use input from view
         // Use ofType('user_message') to get the actual user query, not the router's assistant_message
@@ -230,7 +236,7 @@ export function simpleLoop<T extends SimpleLoopData>(
 
         // Record completed turn for LoopController history.
         // Truncate result to avoid overflowing reasoning models on subsequent turns.
-        const MAX_RESULT_CHARS = 2000
+        const MAX_RESULT_CHARS = settings.maxResultChars
         const resultStr = JSON.stringify(result.data)
         turns.push({
           n: turn,

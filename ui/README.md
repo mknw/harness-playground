@@ -21,8 +21,10 @@ src/
 ├── components/ark-ui/
 │   ├── ChatInterface.tsx      # Sends messages, streams SSE, entity highlighting
 │   ├── ChatMessages.tsx       # Markdown rendering with interactive graph entity spans
-│   ├── GraphVisualization.tsx  # Cytoscape.js graph with controls, editing, relation creation
-│   ├── SupportPanel.tsx       # Tabbed panel: Neo4j, Memory, All, Observability, Tools
+│   ├── GraphVisualization.tsx  # Cytoscape.js graph with controls, editing, extraStyles
+│   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, All, Observability, Tools
+│   ├── AllGraphTab.tsx        # Turn-based graph explorer (FloatingPanel + color-coded Cytoscape)
+│   ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   └── ObservabilityPanel.tsx  # Event timeline + LLM call detail
 ├── lib/
 │   ├── harness-patterns/      # Core agent framework (see harness-patterns/README.md)
@@ -32,6 +34,11 @@ src/
 │   │   ├── registry.server.ts # Registers all agents
 │   │   ├── graph-extractor.ts # ContextEvent → GraphElement[] (MCP + driver formats)
 │   │   └── examples/          # 10 pre-built agent configurations
+│   ├── settings.ts            # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
+│   ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
+│   ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
+│   ├── turn-utils.ts          # splitIntoTurns(), extractTurnGraphElements()
+│   ├── turn-colors.ts         # Per-turn color palette for graph visualization
 │   ├── neo4j/
 │   │   ├── queries.ts         # Schema, manual Cypher, node properties
 │   │   └── write-action.ts    # Parameterized Cypher writes from graph UI
@@ -52,6 +59,11 @@ Agent events stream to the client in real-time via `POST /api/events`. The UI up
 - Entity names in chat messages are interactive: hover highlights graph elements, click toggles persistent highlight
 - Visual controls: node size, edge width, font size, edge labels
 - Node property editing and relation creation directly from the graph
+- **All tab — Turn Explorer**: FloatingPanel with horizontal turn columns, multi-select turns, color-coded per-turn visualization with legend overlay
+- `lazyMount` + `unmountOnExit` on tabs prevents idle Cytoscape instances
+
+### Settings & Token Budget
+Harness parameters (max tool turns, retries, result truncation, etc.) are configurable via the Settings panel in the sidebar. Settings are persisted to localStorage and sent with each request. On the server, `AsyncLocalStorage` makes them available to all patterns without threading through function signatures. A `trimToFit()` utility in `token-budget.server.ts` drops oldest history entries when the prompt would overflow a model's context window.
 
 ### Graph Data Extraction
 `graph-extractor.ts` handles two Neo4j result formats:

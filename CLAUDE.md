@@ -55,7 +55,7 @@ docker compose ps
 
 **UnoCSS attributify:** The `color` HTML attribute conflicts with UnoCSS attributify. Use `text="xs cyan-400"` (combined) instead of separate `color="cyan-400"`.
 
-**Graph data accumulation:** Graph elements accumulate in `index.tsx` regardless of which tab is active. `GraphVisualization` defers layout until its container is visible (ResizeObserver pattern).
+**Graph tabs:** `SupportPanel` uses `lazyMount` + `unmountOnExit` on `Tabs.Root` — Cytoscape instances only exist for the active tab. The Neo4j/Memory tabs consume accumulated `graphElements` from `index.tsx`. The All tab derives elements on-demand from `contextEvents` via `turn-utils.ts` based on user-selected turns, with per-turn color coding via `GraphVisualization`'s `extraStyles` prop.
 
 ---
 

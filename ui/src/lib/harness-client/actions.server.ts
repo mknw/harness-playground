@@ -21,6 +21,8 @@ import {
   type SessionData,
 } from "./session.server";
 import { getAgent, getAgentMetadata } from "./registry.server";
+import type { HarnessSettings } from "../settings";
+import { runWithSettings } from "../settings-context.server";
 
 // ============================================================================
 // Server Actions
@@ -206,6 +208,7 @@ export async function processMessageStreaming(
   message: string,
   agentId: string = "default",
   onEvent: (event: ContextEvent) => void,
+  settings?: HarnessSettings,
 ): Promise<HarnessResultScoped<SessionData>> {
   const session = getOrCreateSession(sessionId);
 
@@ -217,33 +220,35 @@ export async function processMessageStreaming(
     sessionAny.agentId = agentId;
   }
 
-  if (session.patterns.length === 0) {
-    const agent = getAgent(agentId);
-    if (!agent) {
-      throw new Error(`Unknown agent: ${agentId}`);
+  return runWithSettings(settings, async () => {
+    if (session.patterns.length === 0) {
+      const agent = getAgent(agentId);
+      if (!agent) {
+        throw new Error(`Unknown agent: ${agentId}`);
+      }
+      session.patterns = await agent.createPatterns();
+      sessionAny.agentId = agentId;
     }
-    session.patterns = await agent.createPatterns();
-    sessionAny.agentId = agentId;
-  }
 
-  let result: HarnessResultScoped<SessionData>;
+    let result: HarnessResultScoped<SessionData>;
 
-  if (session.serializedContext) {
-    result = await continueSession(
-      session.serializedContext,
-      session.patterns,
-      message,
-      onEvent,
-    );
-  } else {
-    const agent = harness(...session.patterns);
-    result = await agent(message, sessionId, undefined, onEvent);
-  }
+    if (session.serializedContext) {
+      result = await continueSession(
+        session.serializedContext,
+        session.patterns,
+        message,
+        onEvent,
+      );
+    } else {
+      const agent = harness(...session.patterns);
+      result = await agent(message, sessionId, undefined, onEvent);
+    }
 
-  updateSession(sessionId, {
-    lastResult: result,
-    serializedContext: result.serialized,
+    updateSession(sessionId, {
+      lastResult: result,
+      serializedContext: result.serialized,
+    });
+
+    return result;
   });
-
-  return result;
 }

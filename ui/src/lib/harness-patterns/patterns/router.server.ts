@@ -25,6 +25,8 @@ import type {
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
+import { getRequestSettings } from '../../settings-context.server'
+import { trimToFit, getContextWindow } from '../token-budget.server'
 
 assertServerOnImport()
 
@@ -73,7 +75,7 @@ export function router<T extends RouterData>(
   // Caller can override entirely by passing their own viewConfig in config.
   const DEFAULT_ROUTER_VIEW: ViewConfig = {
     fromLast: false,           // no pattern scope filter → see all events across turns
-    fromLastNTurns: 5,         // rolling window of 5 user turns
+    fromLastNTurns: getRequestSettings().routerTurnWindow,
     eventTypes: ['user_message', 'assistant_message']
   }
   const resolved = resolveConfig('router', {
@@ -98,12 +100,15 @@ export function router<T extends RouterData>(
         : ''
 
       // History = all messages except the current user_message, mapped to {role, content}
-      const history = allMessages
+      // Trim oldest if context would overflow the router's model
+      const rawHistory = allMessages
         .filter(e => e !== currentMsg)
         .map(e => ({
           role: e.type === 'user_message' ? 'user' : 'assistant',
           content: (e.data as UserMessageEventData | AssistantMessageEventData).content
         }))
+      const contextWindow = getContextWindow('RouterFallback')
+      const history = trimToFit(rawHistory, h => JSON.stringify(h), 300, contextWindow)
 
       // Convert routes Record<string,string> to Array<{name,description}>
       const routeArray = Object.entries(routeDescriptions).map(([name, description]) => ({

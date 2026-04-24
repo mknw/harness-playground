@@ -881,6 +881,7 @@ harness-patterns/
 ├── mcp-client.server.ts    # callTool(), listTools()
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, describeToolResultOp, etc.
 ├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
+├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas)
 ├── assert.server.ts        # Server-only guards
 └── patterns/

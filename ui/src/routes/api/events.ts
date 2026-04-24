@@ -8,13 +8,15 @@ import type { APIEvent } from "@solidjs/start/server";
 import { processMessageStreaming } from "../../lib/harness-client/actions.server";
 import { updateSession } from "../../lib/harness-client/session.server";
 import { scheduleSummarization, serializeContext } from "../../lib/harness-patterns";
+import type { HarnessSettings } from "../../lib/settings";
 
 export async function POST(event: APIEvent) {
   const body = await event.request.json();
-  const { sessionId, message, agentId } = body as {
+  const { sessionId, message, agentId, settings } = body as {
     sessionId: string;
     message: string;
     agentId?: string;
+    settings?: HarnessSettings;
   };
 
   if (!sessionId || !message) {
@@ -37,6 +39,7 @@ export async function POST(event: APIEvent) {
             const data = JSON.stringify(evt);
             controller.enqueue(encoder.encode(`data: ${data}\n\n`));
           },
+          settings,
         );
 
         // Send final result as a named event

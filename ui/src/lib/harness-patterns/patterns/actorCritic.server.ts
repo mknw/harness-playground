@@ -23,6 +23,7 @@ import type {
 } from '../types'
 import { MAX_RETRIES } from '../types'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
+import { getRequestSettings } from '../../settings-context.server'
 import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
 
 assertServerOnImport()
@@ -62,7 +63,6 @@ export function actorCritic<T extends ActorCriticData>(
   tools: string[],
   config?: ActorCriticConfig
 ): ConfiguredPattern<T> {
-  const maxRetries = config?.maxRetries ?? MAX_RETRIES
   const availableTools = config?.availableTools ?? tools
   const resolved = resolveConfig('actorCritic', config)
 
@@ -70,6 +70,7 @@ export function actorCritic<T extends ActorCriticData>(
     scope: PatternScope<T>,
     view: EventView
   ): Promise<PatternScope<T>> => {
+    const maxRetries = config?.maxRetries ?? getRequestSettings().maxRetries
     const previousAttempts: ScriptExecutionEvent[] = []
     let errorMessage: string | undefined
 

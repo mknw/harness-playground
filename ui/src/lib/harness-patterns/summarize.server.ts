@@ -16,11 +16,9 @@ import type {
   ToolCallEventData,
   ControllerActionEventData
 } from './types'
+import { getRequestSettings } from '../settings-context.server'
 
 assertServerOnImport()
-
-/** Max chars of raw result to send to the summarizer */
-const MAX_RESULT_FOR_SUMMARY = 3000
 
 /**
  * Summarize all tool_result events from the most recent user turn.
@@ -77,9 +75,10 @@ export async function scheduleSummarization(
       : ''
 
     // Truncate raw result to avoid overwhelming the summarizer
+    const maxSummaryChars = getRequestSettings().maxResultForSummary
     const rawResult = typeof d.result === 'string' ? d.result : JSON.stringify(d.result)
-    const resultStr = rawResult.length > MAX_RESULT_FOR_SUMMARY
-      ? rawResult.slice(0, MAX_RESULT_FOR_SUMMARY) + '...[truncated]'
+    const resultStr = rawResult.length > maxSummaryChars
+      ? rawResult.slice(0, maxSummaryChars) + '...[truncated]'
       : rawResult
 
     const summary = await describeToolResultOp(d.tool, toolArgs, reasoning, resultStr)

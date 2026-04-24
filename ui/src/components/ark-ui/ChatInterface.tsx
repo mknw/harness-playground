@@ -21,6 +21,7 @@ import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
 import { AgentSelector } from './AgentSelector'
 import { approveAction, rejectAction, clearSession, extractGraphFromResult, extractGraphElements } from '~/lib/harness-client'
+import { getSettings } from '~/lib/settings-store'
 import type { GraphElement } from './SupportPanel'
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
 
@@ -105,7 +106,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         body: JSON.stringify({
           sessionId,
           message: content,
-          agentId: selectedAgent()
+          agentId: selectedAgent(),
+          settings: getSettings()
         })
       })
 

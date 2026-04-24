@@ -285,6 +285,7 @@ Main container combining sidebar and chat area:
 - Width: `3rem` (collapsed) → `16rem` (expanded)
 - Smooth inline style transition
 - Thread history with relative timestamps
+- Settings gear icon (opens `SettingsPanel` FloatingPanel) + New Chat button in footer
 - Content hidden when collapsed (toggle button only)
 
 #### 3. ChatMessages.tsx
@@ -315,22 +316,36 @@ Main container combining sidebar and chat area:
 - Clearing the session on agent switch
 
 #### 6. SupportPanel.tsx
-Tabbed right panel. **Observability is the default tab.**
+Tabbed right panel. **Observability is the default tab.** Uses `lazyMount` + `unmountOnExit` so inactive tabs don't hold Cytoscape instances in memory.
 
 | Tab | Content |
 |-----|---------|
-| Neo4j | Graph visualization for Neo4j query results |
+| Neo4j | Graph visualization for Neo4j query results (accumulated, live sync) |
 | Memory | Graph visualization for Memory MCP entities |
-| All | Combined graph view |
+| All (Turn Explorer) | Turn-based graph explorer — select specific turns, color-coded |
 | **Observability** *(default)* | Event timeline + LLM call detail |
+| Data | Data Stash — tool result icons, hide/archive controls |
 | Tools | MCP tool configuration via `ToolsPanel` |
 
-**Conversation Sync toggle:** Each graph tab's controls bar has a ⏸/▶ "Sync" button (cyan when live, amber when paused). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed. Enables viewing a graph snapshot while a new query runs in the background.
+**Conversation Sync toggle:** The Neo4j and Memory graph tabs have a ⏸/▶ "Sync" button (cyan when live, amber when paused). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
+
+**All Tab — Turn Explorer (AllGraphTab.tsx):**
+The All tab does not use the accumulated `graphElements` signal. Instead, it derives graph elements on-demand from `contextEvents`:
+
+1. `splitIntoTurns()` (from `turn-utils.ts`) splits the event stream at `user_message` boundaries
+2. User opens the FloatingPanel ("Turns" button) to see turn columns side-by-side
+3. Each column shows turn number, user message preview, and graph-producing tool results
+4. Clicking a turn header toggles its selection; "All"/"None" buttons for bulk selection
+5. `extractMultiTurnGraphElements()` extracts and merges elements from selected turns, tagging each with `data.turn = N`
+6. Cytoscape renders elements with per-turn colors via `extraStyles` prop (attribute selectors: `node[turn=N]`)
+7. A color legend overlay in the bottom-right corner shows the turn-color mapping
 
 #### 7. GraphVisualization.tsx
 Cytoscape.js graph component with dark futuristic theme.
 
-**Deferred Rendering (inactive tab support):** Ark UI sets `hidden` on inactive `Tabs.Content`, giving zero container dimensions. A `ResizeObserver` on `containerRef` drives a `visible()` signal. The element-update `createEffect` reads `visible()` — when the tab becomes active and the container gains non-zero dimensions, the observer fires, `visible` becomes `true`, and the effect re-runs automatically with the already-accumulated `props.elements`. Elements are always collected in `index.tsx` regardless of which tab is active.
+**Rendering lifecycle:** With `unmountOnExit` on `Tabs.Root`, Cytoscape instances are fully created/destroyed when switching tabs. A `ResizeObserver` on `containerRef` drives a `visible()` signal to defer layout until the container has non-zero dimensions.
+
+**Base styles** are extracted to a module-level `BASE_STYLES` constant. The `extraStyles` prop appends additional stylesheets (e.g. per-turn color rules) — a reactive `createEffect` re-applies `cy.style([...BASE_STYLES, ...extraStyles])` when they change.
 
 **Features:**
 - Incremental graph updates (additive, preserves positions)
@@ -340,6 +355,7 @@ Cytoscape.js graph component with dark futuristic theme.
 - Relation creation mode (purple banner, click source then target)
 - Node creation form ("+ Node" toolbar button — Name, Label, Description)
 - `highlightedIds` prop adds `.highlighted` CSS class to matching elements
+- `extraStyles` prop for dynamic Cytoscape stylesheet injection (used by AllGraphTab for turn colors)
 
 **Props:**
 ```typescript
@@ -349,6 +365,7 @@ Cytoscape.js graph component with dark futuristic theme.
   onNodeClick?: (id, data) => void
   onEdgeClick?: (id, data) => void
   onCypherWrite?: (cypher, params?) => Promise<void>  // For write operations
+  extraStyles?: StylesheetJsonBlock[] // Additional Cytoscape styles (e.g. per-turn colors)
 }
 ```
 
@@ -433,11 +450,22 @@ index.tsx (top-level state)
     │       ├─> ChatInput (onSend, disabled)
     │       └─> ChatSidebar (collapsed, onToggle)
     │
-    └─> SupportPanel
-            │   Props: graphElements, highlightedIds, onCypherWrite
-            ├─> GraphVisualization (elements, highlightedIds, onCypherWrite)
-            │       ├─ ResizeObserver → visible() signal (deferred rendering)
-            │       └─ Inline edit / relation create / node create → onCypherWrite
+    └─> SupportPanel (lazyMount + unmountOnExit)
+            │   Props: graphElements, contextEvents, highlightedIds, onCypherWrite
+            ├─> GraphTabContent (Neo4j/Memory tabs)
+            │       └─> GraphVisualization (elements, highlightedIds, onCypherWrite)
+            │               └─ Inline edit / relation create / node create → onCypherWrite
+            ├─> AllGraphTabWrapper (All tab — turn-based explorer)
+            │       └─> AllGraphTab
+            │               ├─ splitIntoTurns(contextEvents) → TurnData[]
+            │               ├─ FloatingPanel with TurnColumn[] (horizontal layout)
+            │               ├─ extractMultiTurnGraphElements() → tagged elements
+            │               ├─> GraphVisualization (elements, extraStyles=turnStyles)
+            │               └─ Turn color legend overlay
+            ├─> DataStashPanel (events, onStashAction)
+            ├─> SettingsPanel (FloatingPanel in ChatSidebar footer)
+            │       └─ SliderSetting / NumberSetting components
+            │       └─ getSettings() / updateSetting() from settings-store.ts
             ├─> ObservabilityPanel (events, context, onClear)
             │       ├─ buildTimelineItems() — merges tool pairs by callId
             │       └─ Save button → showSaveFilePicker() / <a download>
@@ -534,8 +562,10 @@ ui/
 │   │       ├── ChatSidebar.tsx        # Thread history sidebar
 │   │       ├── ChatMessages.tsx       # Message display area
 │   │       ├── ChatInput.tsx          # Autoresize textarea
-│   │       ├── GraphVisualization.tsx # Cytoscape graph display
-│   │       ├── SupportPanel.tsx       # Tabbed right panel (Neo4j/Memory/All/Observability/Tools)
+│   │       ├── GraphVisualization.tsx # Cytoscape graph display (+ extraStyles prop)
+│   │       ├── SupportPanel.tsx       # Tabbed right panel (lazyMount + unmountOnExit)
+│   │       ├── AllGraphTab.tsx        # Turn-based graph explorer (FloatingPanel + color-coded)
+│   │       ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   │       ├── ObservabilityPanel.tsx # Event timeline + tool-pair merging + Save button
 │   │       ├── EventDetailOverlay.tsx # Event detail modal
 │   │       ├── ToolsPanel.tsx         # MCP tool configuration UI
@@ -565,6 +595,8 @@ ui/
 │       │   ├── state.server.ts    # Session state (serialize / deserialize)
 │       │   ├── mcp-client.server.ts # callTool(), listTools()
 │       │   ├── assert.server.ts   # Server-only import guards
+│       │   ├── token-budget.server.ts # trimToFit(), getContextWindow(), estimateTokens()
+│       │   ├── summarize.server.ts    # scheduleSummarization() — background result summarization
 │       │   └── patterns/
 │       │       ├── simpleLoop.server.ts   # ReAct loop + callId on tool events
 │       │       ├── actorCritic.server.ts  # Generate-evaluate + callId
@@ -575,6 +607,11 @@ ui/
 │       │       ├── synthesizer.server.ts  # Final response synthesis
 │       │       ├── chain.server.ts        # Sequential composition
 │       │       └── event-view.server.ts   # EventViewImpl (fluent query API)
+│       ├── settings.ts             # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
+│       ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
+│       ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
+│       ├── turn-utils.ts           # splitIntoTurns(), extractTurnGraphElements()
+│       ├── turn-colors.ts         # TURN_COLORS palette, getTurnColor()
 │       ├── neo4j/
 │       │   ├── queries.ts         # runManualCypher(), getNodeProperties()
 │       │   └── write-action.ts    # executeCypherWrite() — parameterized Cypher writes from graph UI

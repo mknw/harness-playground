@@ -10,7 +10,7 @@
  * - Node/edge click handlers
  */
 
-import cytoscape, { type Core, type ElementDefinition, type LayoutOptions } from 'cytoscape';
+import cytoscape, { type Core, type ElementDefinition, type LayoutOptions, type StylesheetJsonBlock } from 'cytoscape';
 import { createSignal, onMount, onCleanup, createEffect, Show, For } from 'solid-js';
 import { Collapsible } from '@ark-ui/solid/collapsible';
 import { runManualCypher, getNodeProperties } from '~/lib/neo4j/queries';
@@ -28,7 +28,114 @@ export interface GraphVisualizationProps {
   /** Callback for executing Cypher write operations (node edits, relation creation) */
   onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>;
   layout?: 'cose' | 'cola' | 'dagre' | 'circle' | 'grid' | 'breadthfirst';
+  /** Additional Cytoscape stylesheets appended after base styles (e.g. per-turn colors) */
+  extraStyles?: StylesheetJsonBlock[];
 }
+
+// ============================================================================
+// Base Cytoscape Styles (dark futuristic theme)
+// ============================================================================
+
+const BASE_STYLES: StylesheetJsonBlock[] = [
+  // Node styles
+  {
+    selector: 'node',
+    style: {
+      'background-color': '#00ffff',
+      'label': 'data(label)',
+      'color': '#e4e4e7',
+      'text-valign': 'top',
+      'text-halign': 'center',
+      'text-margin-y': -8,
+      'font-size': '12px',
+      'font-family': 'Inter, sans-serif',
+      'border-width': 2,
+      'border-color': '#4f46e5',
+      'width': 50,
+      'height': 50,
+      'text-wrap': 'wrap',
+      'text-max-width': '100px',
+      'text-background-opacity': 1,
+      'text-background-color': '#0a0a0f',
+      'text-background-padding': '4px',
+      'text-background-shape': 'roundrectangle'
+    }
+  },
+  // Edge styles
+  {
+    selector: 'edge',
+    style: {
+      'width': 2,
+      'line-color': '#4f46e5',
+      'target-arrow-color': '#4f46e5',
+      'target-arrow-shape': 'triangle',
+      'curve-style': 'bezier',
+      'label': 'data(label)',
+      'font-size': '10px',
+      'font-family': 'Inter, sans-serif',
+      'color': '#a1a1aa',
+      'text-rotation': 'autorotate',
+      'text-background-opacity': 1,
+      'text-background-color': '#0a0a0f',
+      'text-background-padding': '3px'
+    }
+  },
+  // Selected node
+  {
+    selector: 'node:selected',
+    style: {
+      'background-color': '#ff00ff',
+      'border-color': '#ff00ff',
+      'border-width': 3
+    } as Record<string, string | number>
+  },
+  // Selected edge
+  {
+    selector: 'edge:selected',
+    style: {
+      'line-color': '#ff00ff',
+      'target-arrow-color': '#ff00ff',
+      'width': 3
+    }
+  },
+  // Hover states
+  {
+    selector: 'node:active',
+    style: {
+      'overlay-opacity': 0.2,
+      'overlay-color': '#00ffff'
+    }
+  },
+  {
+    selector: 'edge:active',
+    style: {
+      'overlay-opacity': 0.2,
+      'overlay-color': '#4f46e5'
+    }
+  },
+  // Highlighted nodes (from latest query)
+  {
+    selector: 'node.highlighted',
+    style: {
+      'background-color': '#00ffff',
+      'border-color': '#00ffff',
+      'border-width': 4,
+      'overlay-opacity': 0.3,
+      'overlay-color': '#00ffff'
+    } as Record<string, string | number>
+  },
+  // Highlighted edges (from latest query)
+  {
+    selector: 'edge.highlighted',
+    style: {
+      'line-color': '#00ffff',
+      'target-arrow-color': '#00ffff',
+      'width': 3,
+      'overlay-opacity': 0.2,
+      'overlay-color': '#00ffff'
+    }
+  }
+]
 
 type LayoutName = 'cose' | 'cola' | 'dagre' | 'circle' | 'grid' | 'breadthfirst';
 
@@ -98,114 +205,8 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     cy = cytoscape({
       container: containerRef,
 
-      // Dark futuristic style
-      style: [
-        // Node styles
-        {
-          selector: 'node',
-          style: {
-            'background-color': '#00ffff',
-            'label': 'data(label)',
-            'color': '#e4e4e7',
-            'text-valign': 'top',
-            'text-halign': 'center',
-            'text-margin-y': -8,
-            'font-size': '12px',
-            'font-family': 'Inter, sans-serif',
-            'border-width': 2,
-            'border-color': '#4f46e5',
-            'width': 50,
-            'height': 50,
-            'text-wrap': 'wrap',
-            'text-max-width': '100px',
-            'text-background-opacity': 1,
-            'text-background-color': '#0a0a0f',
-            'text-background-padding': '4px',
-            'text-background-shape': 'roundrectangle'
-          }
-        },
-
-        // Edge styles
-        {
-          selector: 'edge',
-          style: {
-            'width': 2,
-            'line-color': '#4f46e5',
-            'target-arrow-color': '#4f46e5',
-            'target-arrow-shape': 'triangle',
-            'curve-style': 'bezier',
-            'label': 'data(label)',
-            'font-size': '10px',
-            'font-family': 'Inter, sans-serif',
-            'color': '#a1a1aa',
-            'text-rotation': 'autorotate',
-            'text-background-opacity': 1,
-            'text-background-color': '#0a0a0f',
-            'text-background-padding': '3px'
-          }
-        },
-
-        // Selected node
-        {
-          selector: 'node:selected',
-          style: {
-            'background-color': '#ff00ff',
-            'border-color': '#ff00ff',
-            'border-width': 3
-          } as Record<string, string | number>
-        },
-
-        // Selected edge
-        {
-          selector: 'edge:selected',
-          style: {
-            'line-color': '#ff00ff',
-            'target-arrow-color': '#ff00ff',
-            'width': 3
-          }
-        },
-
-        // Hover states
-        {
-          selector: 'node:active',
-          style: {
-            'overlay-opacity': 0.2,
-            'overlay-color': '#00ffff'
-          }
-        },
-
-        {
-          selector: 'edge:active',
-          style: {
-            'overlay-opacity': 0.2,
-            'overlay-color': '#4f46e5'
-          }
-        },
-
-        // Highlighted nodes (from latest query)
-        {
-          selector: 'node.highlighted',
-          style: {
-            'background-color': '#00ffff',
-            'border-color': '#00ffff',
-            'border-width': 4,
-            'overlay-opacity': 0.3,
-            'overlay-color': '#00ffff'
-          } as Record<string, string | number>
-        },
-
-        // Highlighted edges (from latest query)
-        {
-          selector: 'edge.highlighted',
-          style: {
-            'line-color': '#00ffff',
-            'target-arrow-color': '#00ffff',
-            'width': 3,
-            'overlay-opacity': 0.2,
-            'overlay-color': '#00ffff'
-          }
-        }
-      ],
+      // Dark futuristic style (base + optional extras)
+      style: [...BASE_STYLES, ...(props.extraStyles ?? [])] as cytoscape.StylesheetJsonBlock[],
 
       // Initial layout
       layout: getLayoutOptions(selectedLayout())
@@ -307,6 +308,14 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
   // ========================================
   // Reactive Updates
   // ========================================
+
+  // Re-apply styles when extraStyles change (e.g. per-turn color coding)
+  createEffect(() => {
+    if (!cy) return
+    const extra = props.extraStyles ?? []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(cy as any).style([...BASE_STYLES, ...extra])
+  })
 
   // Update graph incrementally when elements change (re-triggers on visibility)
   createEffect(() => {

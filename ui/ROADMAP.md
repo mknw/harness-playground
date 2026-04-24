@@ -77,12 +77,37 @@
 - [x] Data Stash tab in SupportPanel with Current Turn / Previous Turns / Archived sections
 - [x] Hide/unhide/archive/unarchive via `POST /api/stash` with optimistic UI updates
 
+### All Tab — Turn-Based Graph Explorer
+- [x] `lazyMount` + `unmountOnExit` on Tabs.Root (prevents hidden Cytoscape instances)
+- [x] FloatingPanel turn picker with horizontal turn columns
+- [x] Per-turn color-coded Cytoscape visualization
+- [x] Turn color legend overlay (bottom-right corner)
+- [x] `extraStyles` prop on `GraphVisualization` for dynamic style injection
+- [x] `turn-utils.ts` — `splitIntoTurns()`, `extractTurnGraphElements()` utilities
+
+### Settings & Token Budget (Rolling Context Window)
+- [x] `HarnessSettings` type with configurable limits: maxToolTurns, maxRetries, maxResultChars, maxResultForSummary, priorTurnCount, routerTurnWindow
+- [x] `settings-store.ts` — client-side SolidJS store with localStorage persistence
+- [x] `settings-context.server.ts` — request-scoped AsyncLocalStorage; patterns call `getRequestSettings()` at runtime
+- [x] `SettingsPanel.tsx` — FloatingPanel in sidebar with sliders + number inputs, reset to defaults
+- [x] `token-budget.server.ts` — `trimToFit()` drops oldest history entries when prompt exceeds model context window
+- [x] `MODEL_CONTEXT_WINDOWS` map for all BAML clients (GroqFast 32K, GroqReasoning 131K, etc.)
+- [x] `max_tokens` set on all BAML clients to prevent unbounded output
+- [x] Rolling context window applied in router (history), simpleLoop (turns), and synthesizer (turns)
+
 ## Next steps
+
+### Neo4j Tab Real-Time Sync
+- Real-time sync of Neo4j tab graph with ongoing conversation (currently accumulates but doesn't reflect deletes/updates)
 
 ### Data Stash Improvements
 - Improve data result tooltip display in Data Stash (richer formatting, expandable detail)
 - Fix `presetIcons` type mismatch in `uno.config.ts` (version skew between `@unocss/preset-icons@66.6` and `unocss@66.5`)
 - Investigate graph visualizer not updating when data and connections are fetched separately
+
+### Known Bugs
+- Context window overflow: `.harness-logs/context-cl-2-2026-04-23-payload-error.json` — addressed by `max_tokens` on all BAML clients + `trimToFit()` rolling window; monitor for recurrence
+- Duplicate assistant message: chat interface returned the same assistant message twice (graph showed correctly, only redis nodes in Neo4j tab)
 
 ## Future features
 - Show "error, trying again" interesting run within knowledge graph: `.harness-logs/context-cl-3-2026-04-18-consider-error.json`.
