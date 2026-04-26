@@ -141,8 +141,10 @@ export function trackEvent(
 // Commit Strategies
 // ============================================================================
 
-/** Event types that are always committed regardless of strategy */
-const LIFECYCLE_TYPES: Set<EventType> = new Set(['pattern_enter', 'pattern_exit'])
+/** Event types that are always committed regardless of strategy.
+ *  Includes 'error' because errors are informational (not partial results)
+ *  and must be visible to downstream patterns via EventView. */
+const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set(['pattern_enter', 'pattern_exit', 'error'])
 
 /** Commit scope events to context based on strategy.
  *  Preserves original event order — lifecycle events (pattern_enter/exit) are
@@ -163,15 +165,15 @@ export function commitEvents<T>(
         ctx.events.push(...scope.events)
       } else {
         // Only lifecycle events
-        ctx.events.push(...scope.events.filter(e => LIFECYCLE_TYPES.has(e.type)))
+        ctx.events.push(...scope.events.filter(e => ALWAYS_COMMIT_TYPES.has(e.type)))
       }
       break
     case 'last': {
       // Lifecycle events + last content event, preserving order
-      const lastContentIdx = findLastIndex(scope.events, e => !LIFECYCLE_TYPES.has(e.type))
+      const lastContentIdx = findLastIndex(scope.events, e => !ALWAYS_COMMIT_TYPES.has(e.type))
       for (let i = 0; i < scope.events.length; i++) {
         const e = scope.events[i]
-        if (LIFECYCLE_TYPES.has(e.type) || i === lastContentIdx) {
+        if (ALWAYS_COMMIT_TYPES.has(e.type) || i === lastContentIdx) {
           ctx.events.push(e)
         }
       }
@@ -179,7 +181,7 @@ export function commitEvents<T>(
     }
     case 'never':
       // Only lifecycle events
-      ctx.events.push(...scope.events.filter(e => LIFECYCLE_TYPES.has(e.type)))
+      ctx.events.push(...scope.events.filter(e => ALWAYS_COMMIT_TYPES.has(e.type)))
       break
   }
 }
@@ -278,7 +280,7 @@ export function setPaused<T>(ctx: UnifiedContext<T>): void {
 // Default Config Helpers
 // ============================================================================
 
-import { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY } from './types'
+import { DEFAULT_TRACK_HISTORY, DEFAULT_COMMIT_STRATEGY, DEFAULT_ERROR_SEVERITY } from './types'
 
 /** Get default trackHistory for a pattern type */
 export function getDefaultTrackHistory(patternType: string): TrackHistory {
@@ -294,11 +296,12 @@ export function getDefaultCommitStrategy(patternType: string): CommitStrategy {
 export function resolveConfig(
   patternType: string,
   config?: PatternConfig
-): Required<Pick<PatternConfig, 'patternId' | 'commitStrategy' | 'trackHistory'>> & PatternConfig {
+): Required<Pick<PatternConfig, 'patternId' | 'commitStrategy' | 'trackHistory' | 'errorSeverity'>> & PatternConfig {
   return {
     patternId: config?.patternId ?? generateId(patternType),
     commitStrategy: config?.commitStrategy ?? getDefaultCommitStrategy(patternType),
     trackHistory: config?.trackHistory ?? getDefaultTrackHistory(patternType),
+    errorSeverity: config?.errorSeverity ?? (DEFAULT_ERROR_SEVERITY[patternType] ?? 'irrecoverable'),
     viewConfig: config?.viewConfig
   }
 }

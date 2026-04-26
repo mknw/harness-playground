@@ -21,6 +21,8 @@ import type {
   ControllerActionEventData
 } from '../types'
 import { MAX_TOOL_TURNS } from '../types'
+import type { ErrorEventData } from '../types'
+import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
@@ -100,6 +102,7 @@ export function simpleLoop<T extends SimpleLoopData>(
     const turns: LoopTurn[] = []
     let hasError = false
     let errorMessage: string | undefined
+    let errorTurn: number | undefined
 
     // Build structured references to tool results from previous tasks.
     // These are passed as turns_previous_runs (separate from the current task's turns)
@@ -173,6 +176,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           // Exit loop gracefully with partial results instead of losing everything
           hasError = true
           errorMessage = msg
+          errorTurn = turn
           break
         }
 
@@ -190,6 +194,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         if (!tools.includes(action.tool_name)) {
           hasError = true
           errorMessage = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`
+          errorTurn = turn
           break
         }
 
@@ -200,6 +205,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         } catch {
           hasError = true
           errorMessage = `Invalid tool_args JSON: ${action.tool_args}`
+          errorTurn = turn
           break
         }
 
@@ -255,6 +261,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         if (!result.success) {
           hasError = true
           errorMessage = result.error ?? 'Tool call failed'
+          errorTurn = turn
           break
         }
 
@@ -268,13 +275,22 @@ export function simpleLoop<T extends SimpleLoopData>(
 
       if (hasError) {
         // Track error event — downstream patterns read errors via view.errors()
-        trackEvent(scope, 'error', { error: errorMessage }, true)
+        trackEvent(scope, 'error', {
+          error: errorMessage,
+          severity: resolved.errorSeverity,
+          hint: getErrorHint(errorMessage ?? ''),
+          turn: errorTurn,
+        } as ErrorEventData, true)
       }
 
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      trackEvent(scope, 'error', { error: msg }, true)
+      trackEvent(scope, 'error', {
+        error: msg,
+        severity: resolved.errorSeverity,
+        hint: getErrorHint(msg),
+      } as ErrorEventData, true)
       return scope
     }
   }

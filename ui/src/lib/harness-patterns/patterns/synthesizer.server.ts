@@ -18,6 +18,8 @@ import type {
   LLMCallData
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
+import type { ErrorEventData } from '../types'
+import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
 import { trimToFit, getContextWindow } from '../token-budget.server'
@@ -315,7 +317,11 @@ export function synthesizer<T extends SynthesizerData>(
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      trackEvent(scope, 'error', { error: msg }, true)
+      trackEvent(scope, 'error', {
+        error: msg,
+        severity: resolved.errorSeverity,
+        hint: getErrorHint(msg),
+      } as ErrorEventData, true)
       return scope
     }
   }

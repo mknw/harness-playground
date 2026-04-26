@@ -26,6 +26,7 @@ import type {
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
+import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 
 assertServerOnImport()
@@ -76,7 +77,8 @@ export function router<T extends RouterData>(
   const DEFAULT_ROUTER_VIEW: ViewConfig = {
     fromLast: false,           // no pattern scope filter → see all events across turns
     fromLastNTurns: getRequestSettings().routerTurnWindow,
-    eventTypes: ['user_message', 'assistant_message']
+    eventTypes: ['user_message', 'assistant_message'],
+    contentTransforms: [stripThinkBlocks]  // Strip <think> blocks from history — saves tokens, avoids confusing classifier
   }
   const resolved = resolveConfig('router', {
     viewConfig: DEFAULT_ROUTER_VIEW,
