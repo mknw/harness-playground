@@ -106,6 +106,11 @@ export type TrackHistory =
   | EventType[]   // Multiple: ['tool_call', 'tool_result']
 
 /** Configuration for what events a pattern receives */
+/** Read-time event transform — takes a ContextEvent, returns a new one (never mutates).
+ *  Applied by EventView in get()/serialize() as a view-level lens.
+ *  ctx.events and serializeContext() are NEVER transformed. */
+export type ContentTransform = (event: ContextEvent) => ContextEvent
+
 export interface ViewConfig {
   /** Specific pattern IDs to read from */
   fromPatterns?: string[]
@@ -121,6 +126,11 @@ export interface ViewConfig {
    *  A "turn" boundary is defined by a user_message event.
    *  Applied before type/pattern filters so boundaries can be detected. */
   fromLastNTurns?: number
+  /** Read-time content transforms applied in get()/serialize().
+   *  Each transform receives a ContextEvent and returns a new one.
+   *  Compose: [stripThinkBlocks, truncateToolResults(2000)] — each feeds into the next.
+   *  Storage (ctx.events, serializeContext) is never affected. */
+  contentTransforms?: ContentTransform[]
 }
 
 /** Base configuration for all patterns */
@@ -432,6 +442,10 @@ export interface ErrorEventData {
   severity?: 'recoverable' | 'irrecoverable'
   /** User-facing hint for resolving the error */
   hint?: string
+  /** Loop turn number (0-indexed) when the error occurred */
+  turn?: number
+  /** Retry iteration (for actorCritic, 0-indexed) */
+  iteration?: number
 }
 
 // ============================================================================

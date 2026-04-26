@@ -24,6 +24,8 @@ export interface Message {
   hint?: string
   /** Pattern that produced this error/warning */
   patternId?: string
+  /** Turn/iteration context string, e.g. "(turn 3, attempt 2)" */
+  turnInfo?: string
 }
 
 interface ChatMessagesProps {
@@ -297,6 +299,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                             >
                               {message.role === 'error' ? 'Error' : 'Warning'}
                               {message.patternId ? ` in ${message.patternId}` : ''}
+                              {message.turnInfo ? ` ${message.turnInfo}` : ''}
                             </span>
                           </div>
                           <div text="sm" white-space="pre-wrap" break-words>

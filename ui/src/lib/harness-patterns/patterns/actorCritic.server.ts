@@ -215,6 +215,7 @@ export function actorCritic<T extends ActorCriticData>(
         error: errorMessage,
         severity: resolved.errorSeverity,
         hint: getErrorHint(errorMessage),
+        iteration: maxRetries - 1,
       } as ErrorEventData, true)
 
       return scope

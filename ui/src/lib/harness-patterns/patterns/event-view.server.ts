@@ -11,6 +11,7 @@ import type {
   ContextEvent,
   EventType,
   ViewConfig,
+  ContentTransform,
   EventView as IEventView,
   UserMessageEventData,
   AssistantMessageEventData,
@@ -34,6 +35,9 @@ export class EventViewImpl implements IEventView {
   private sinceTs?: number
   /** Rolling turn window — slices events at the Nth-to-last user_message boundary */
   private fromLastNTurnsCount?: number
+  /** Read-time content transforms — applied as final step in get().
+   *  Never mutates stored ctx.events. */
+  private contentTransforms?: ContentTransform[]
 
   constructor(
     private ctx: UnifiedContext,
@@ -100,6 +104,11 @@ export class EventViewImpl implements IEventView {
     if (config.limit !== undefined) {
       this.limitLast = config.limit
     }
+
+    // ── Content transforms ──
+    if (config.contentTransforms && config.contentTransforms.length > 0) {
+      this.contentTransforms = config.contentTransforms
+    }
   }
 
   private addFilter(filter: EventFilter): this {
@@ -107,7 +116,7 @@ export class EventViewImpl implements IEventView {
     return this
   }
 
-  /** Create a shallow copy preserving all filters, limits, and window state */
+  /** Create a shallow copy preserving all filters, limits, window state, and transforms */
   private clone(): EventViewImpl {
     const view = new EventViewImpl(this.ctx, undefined, this.selfPatternId)
     view.filters = [...this.filters]
@@ -115,6 +124,7 @@ export class EventViewImpl implements IEventView {
     view.limitFirst = this.limitFirst
     view.sinceTs = this.sinceTs
     view.fromLastNTurnsCount = this.fromLastNTurnsCount
+    view.contentTransforms = this.contentTransforms
     return view
   }
 
@@ -305,6 +315,13 @@ export class EventViewImpl implements IEventView {
     }
     if (this.limitLast !== undefined) {
       events = events.slice(-this.limitLast)
+    }
+
+    // 5. Content transforms (read-time lens — never mutates ctx.events)
+    if (this.contentTransforms?.length) {
+      events = events.map(e =>
+        this.contentTransforms!.reduce((evt, fn) => fn(evt), e)
+      )
     }
 
     return events

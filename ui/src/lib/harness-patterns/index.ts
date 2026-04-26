@@ -23,6 +23,7 @@ export type {
   // Configuration Types
   PatternConfig,
   ViewConfig,
+  ContentTransform,
   CommitStrategy,
   TrackHistory,
 
@@ -186,6 +187,7 @@ export { assertServer, ServerOnlyError } from './assert.server'
 export { routeMessageOp } from './routing.server'
 export { scheduleSummarization } from './summarize.server'
 export { getErrorHint } from './error-hints'
+export { stripThinkBlocks, truncateToolResults } from './content-transforms'
 
 // BAML Adapters
 export {

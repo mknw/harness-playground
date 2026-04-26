@@ -181,7 +181,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
               // Convert error events to inline chat messages
               if (evt.type === 'error') {
-                const errorData = evt.data as { error: string; severity?: string; hint?: string }
+                const errorData = evt.data as { error: string; severity?: string; hint?: string; turn?: number; iteration?: number }
+                // Build context string (e.g., "(turn 3, attempt 2)")
+                const parts: string[] = []
+                if (errorData.turn !== undefined) parts.push(`turn ${errorData.turn + 1}`)
+                if (errorData.iteration !== undefined) parts.push(`attempt ${errorData.iteration + 1}`)
+                const turnInfo = parts.length > 0 ? `(${parts.join(', ')})` : undefined
                 const errorMsg: Message = {
                   id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
                   role: errorData.severity === 'recoverable' ? 'warning' : 'error',
@@ -189,6 +194,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                   timestamp: new Date(),
                   hint: errorData.hint,
                   patternId: evt.patternId,
+                  turnInfo,
                 }
                 setMessages([...messages(), errorMsg])
               }
