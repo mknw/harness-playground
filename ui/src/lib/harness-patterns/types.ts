@@ -133,6 +133,8 @@ export interface PatternConfig {
   trackHistory?: TrackHistory
   /** Configure EventView input for this pattern */
   viewConfig?: ViewConfig
+  /** Error severity classification for this pattern (default varies by pattern) */
+  errorSeverity?: 'recoverable' | 'irrecoverable'
 }
 
 // ============================================================================
@@ -426,6 +428,10 @@ export interface ApprovalResponseEventData {
 export interface ErrorEventData {
   error: string
   stack?: string
+  /** Whether the error is recoverable or terminal */
+  severity?: 'recoverable' | 'irrecoverable'
+  /** User-facing hint for resolving the error */
+  hint?: string
 }
 
 // ============================================================================
@@ -514,4 +520,17 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   routes: 'always',
   chain: 'always',
   withApproval: 'on-success'
+}
+
+/** Default errorSeverity by pattern type.
+ *  Loops are recoverable (may self-heal on next iteration);
+ *  non-loop patterns are irrecoverable (no retry mechanism). */
+export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverable'> = {
+  simpleLoop: 'recoverable',
+  actorCritic: 'recoverable',
+  synthesizer: 'irrecoverable',
+  router: 'irrecoverable',
+  routes: 'irrecoverable',
+  chain: 'irrecoverable',
+  withApproval: 'recoverable',
 }

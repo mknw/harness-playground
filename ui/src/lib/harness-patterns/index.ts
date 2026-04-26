@@ -84,7 +84,8 @@ export {
   MAX_TOOL_TURNS,
   MAX_RETRIES,
   DEFAULT_TRACK_HISTORY,
-  DEFAULT_COMMIT_STRATEGY
+  DEFAULT_COMMIT_STRATEGY,
+  DEFAULT_ERROR_SEVERITY
 } from './types'
 
 // ============================================================================
@@ -184,6 +185,7 @@ export { callTool, listTools, getMcpClient, closeMcpClient } from './mcp-client.
 export { assertServer, ServerOnlyError } from './assert.server'
 export { routeMessageOp } from './routing.server'
 export { scheduleSummarization } from './summarize.server'
+export { getErrorHint } from './error-hints'
 
 // BAML Adapters
 export {

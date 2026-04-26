@@ -15,7 +15,7 @@
  * - Session ID per component instance
  */
 
-import { createSignal, onMount, onCleanup } from 'solid-js'
+import { createSignal, Show, onMount, onCleanup } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
@@ -51,6 +51,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const [isProcessing, setIsProcessing] = createSignal(false)
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
   const [selectedAgent, setSelectedAgent] = createSignal('default')
+  const [currentStatus, setCurrentStatus] = createSignal<string | null>(null)
   // Cursor into ctx.events — tracks how many events were sent last turn so we
   // emit only the delta (new events) rather than the full accumulated history
   let prevEventCount = 0
@@ -169,6 +170,28 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                   props.onGraphUpdate(graphElements)
                 }
               }
+
+              // Extract status from controller_action events for transient display
+              if (evt.type === 'controller_action') {
+                const actionData = evt.data as { action?: { status?: string } }
+                if (actionData.action?.status) {
+                  setCurrentStatus(actionData.action.status)
+                }
+              }
+
+              // Convert error events to inline chat messages
+              if (evt.type === 'error') {
+                const errorData = evt.data as { error: string; severity?: string; hint?: string }
+                const errorMsg: Message = {
+                  id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                  role: errorData.severity === 'recoverable' ? 'warning' : 'error',
+                  content: errorData.error,
+                  timestamp: new Date(),
+                  hint: errorData.hint,
+                  patternId: evt.patternId,
+                }
+                setMessages([...messages(), errorMsg])
+              }
             }
           } catch (e) {
             if (e instanceof SyntaxError) continue // Skip malformed JSON
@@ -176,6 +199,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           }
         }
       }
+
+      // Clear transient status
+      setCurrentStatus(null)
 
       // Update event count cursor and emit final context
       if (finalResult?.context) {
@@ -185,31 +211,35 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         }
       }
 
-      // Build assistant message from final result
-      const assistantMessage: Message = {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: finalResult?.response ?? '',
-        timestamp: new Date(),
-        toolCall: finalResult?.status === 'paused' && (finalResult.data as Record<string, unknown>).pendingAction ? {
-          type: 'neo4j',
-          status: 'pending',
-          tool: ((finalResult.data as Record<string, unknown>).pendingAction as { action: string }).action,
-          explanation: ((finalResult.data as Record<string, unknown>).pendingAction as { reason: string }).reason,
-          isReadOnly: false
-        } : undefined
+      // Build assistant message from final result — only if there's a real response
+      // (not an error status with empty/stale response)
+      const finalResponse = finalResult?.response ?? ''
+      if (finalResponse && finalResult?.status !== 'error') {
+        const assistantMessage: Message = {
+          id: Date.now().toString(),
+          role: 'assistant',
+          content: finalResponse,
+          timestamp: new Date(),
+          toolCall: finalResult?.status === 'paused' && (finalResult.data as Record<string, unknown>).pendingAction ? {
+            type: 'neo4j',
+            status: 'pending',
+            tool: ((finalResult.data as Record<string, unknown>).pendingAction as { action: string }).action,
+            explanation: ((finalResult.data as Record<string, unknown>).pendingAction as { reason: string }).reason,
+            isReadOnly: false
+          } : undefined
+        }
+        setMessages([...messages(), assistantMessage])
       }
-
-      setMessages([...messages(), assistantMessage])
     } catch (error) {
       console.error('Error processing message:', error)
 
       const errorMessage: Message = {
         id: Date.now().toString(),
-        role: 'assistant',
-        content: `Sorry, I encountered an error:\n\n\`\`\`\n${error instanceof Error ? error.message : 'Unknown error'}\n\`\`\`\n\nPlease try rephrasing your question.`,
+        role: 'error',
+        content: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date()
       }
+      setCurrentStatus(null)
       setMessages([...messages(), errorMessage])
     } finally {
       setIsProcessing(false)
@@ -349,6 +379,27 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           graphEntityNames={props.graphEntityNames}
           onHighlightEntities={props.onHighlightEntities}
         />
+
+        {/* Transient status indicator (from ControllerAction.status) */}
+        <Show when={currentStatus()}>
+          <div
+            flex="~ items-center gap-2"
+            px="4"
+            py="1.5"
+            text="xs dark-text-secondary"
+            bg="dark-bg-tertiary/50"
+            border="t dark-border-primary"
+          >
+            <div
+              w="1.5"
+              h="1.5"
+              rounded="full"
+              bg="neon-cyan"
+              class="animate-pulse"
+            />
+            {currentStatus()}
+          </div>
+        </Show>
 
         {/* Input */}
         <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">

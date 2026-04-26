@@ -340,4 +340,3 @@ function CreateToolResponse(
     Do NOT just dump raw data. Help the user understand what they found.
   "#
 }
-

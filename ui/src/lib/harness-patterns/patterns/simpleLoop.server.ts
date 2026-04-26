@@ -21,6 +21,8 @@ import type {
   ControllerActionEventData
 } from '../types'
 import { MAX_TOOL_TURNS } from '../types'
+import type { ErrorEventData } from '../types'
+import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
@@ -268,13 +270,21 @@ export function simpleLoop<T extends SimpleLoopData>(
 
       if (hasError) {
         // Track error event — downstream patterns read errors via view.errors()
-        trackEvent(scope, 'error', { error: errorMessage }, true)
+        trackEvent(scope, 'error', {
+          error: errorMessage,
+          severity: resolved.errorSeverity,
+          hint: getErrorHint(errorMessage ?? ''),
+        } as ErrorEventData, true)
       }
 
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      trackEvent(scope, 'error', { error: msg }, true)
+      trackEvent(scope, 'error', {
+        error: msg,
+        severity: resolved.errorSeverity,
+        hint: getErrorHint(msg),
+      } as ErrorEventData, true)
       return scope
     }
   }

@@ -22,6 +22,8 @@ import type {
   CriticResultEventData
 } from '../types'
 import { MAX_RETRIES } from '../types'
+import type { ErrorEventData } from '../types'
+import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
@@ -209,12 +211,20 @@ export function actorCritic<T extends ActorCriticData>(
 
       // Exhausted retries
       errorMessage = `Max retries (${maxRetries}) exceeded`
-      trackEvent(scope, 'error', { error: errorMessage }, true)
+      trackEvent(scope, 'error', {
+        error: errorMessage,
+        severity: resolved.errorSeverity,
+        hint: getErrorHint(errorMessage),
+      } as ErrorEventData, true)
 
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
-      trackEvent(scope, 'error', { error: msg }, true)
+      trackEvent(scope, 'error', {
+        error: msg,
+        severity: resolved.errorSeverity,
+        hint: getErrorHint(msg),
+      } as ErrorEventData, true)
       return scope
     }
   }

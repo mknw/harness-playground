@@ -21,6 +21,7 @@ function Router(
     CONVERSATION HISTORY (most recent last):
     {% for m in history %}
     {{ m.role|upper }}: {{ m.content }}
+
     {% endfor %}
     {% endif %}
 
