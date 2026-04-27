@@ -107,7 +107,6 @@
 
 ### Known Bugs
 - Context window overflow: `.harness-logs/context-cl-2-2026-04-23-payload-error.json` — addressed by `max_tokens` on all BAML clients + `trimToFit()` rolling window; monitor for recurrence
-- Duplicate assistant message: chat interface returned the same assistant message twice (graph showed correctly, only redis nodes in Neo4j tab)
 
 ## Future features
 - Show "error, trying again" interesting run within knowledge graph: `.harness-logs/context-cl-3-2026-04-18-consider-error.json`.

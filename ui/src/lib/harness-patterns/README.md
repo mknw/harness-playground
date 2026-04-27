@@ -574,12 +574,13 @@ Controls what events a pattern can "see" via its EventView:
 
 ```typescript
 interface ViewConfig {
-  fromPatterns?: string[]   // Specific pattern IDs to read from
-  fromLastN?: number        // Last N patterns
-  fromLast?: boolean        // Only previous pattern (default: true)
-  eventTypes?: EventType[]  // Filter by event type
-  limit?: number            // Max events to include
-  fromLastNTurns?: number   // Rolling window: last N user turns
+  fromPatterns?: string[]            // Specific pattern IDs to read from
+  fromLastN?: number                 // Last N patterns
+  fromLast?: boolean                 // Only previous pattern (default: true)
+  eventTypes?: EventType[]           // Filter by event type
+  limit?: number                     // Max events to include
+  fromLastNTurns?: number            // Rolling window: last N user turns
+  contentTransforms?: ContentTransform[]  // Read-time transforms applied in get()/serialize()
 }
 ```
 
@@ -591,6 +592,11 @@ interface ViewConfig {
 | `fromLastNTurns: 5` | Rolling window over last 5 user turns | Multi-turn history |
 | `eventTypes: ['tool_result']` | Filter to specific event types | Focus on results |
 | `limit: 10` | Cap number of events returned | Limit context size |
+| `contentTransforms: [fn]` | Read-time event transformations (never mutates `ctx.events`) | Strip think blocks, truncate results |
+
+**ContentTransform** is `(event: ContextEvent) => ContextEvent`. Built-in transforms in `content-transforms.ts`:
+- `stripThinkBlocks` — removes `<think>...</think>` reasoning from assistant messages (router uses this by default)
+- `truncateToolResults(maxChars)` — factory that truncates long tool results to N chars
 
 A "turn" is defined by a `user_message` event. `fromLastNTurns` slices the event stream at the Nth-to-last `user_message` boundary. It is applied *before* type filters so that boundary detection works regardless of which `eventTypes` are selected.
 

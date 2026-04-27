@@ -234,7 +234,7 @@ client<llm> SynthesizerFallback {
   provider fallback
   options {
     // 1. OpenRouterGemma4 — fast prose synthesis; 2. GroqQwen3_32b (Qwen3-32B); 3. OpenAIGPT5Mini
-    strategy [OpenRouterGemma4, GroqQwen3_32b, OpenAIGPT5Mini]
+    strategy [OpenRouterGemma4, GroqQwen3_32b, OpenAIGPT5]
   }
 }
 
