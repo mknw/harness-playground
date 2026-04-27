@@ -52,5 +52,7 @@ Replaced the legacy `baml-agent` system. Functional, composable agent patterns b
 - Graph editing: property editing, relation creation, node creation
 - Deferred rendering via ResizeObserver; Conversation Sync toggle (⏸/▶)
 - SSE event streaming to browser (ObservabilityPanel live updates)
+- Inline error/warning notifications in chat — contextual error banners surfaced from harness events (PR #20, issue #13)
+- `contentTransforms` on EventView — read-time event lens (`stripThinkBlocks`, `truncateToolResults`) without mutating stored state (PR #20, issue #15)
 
 **Docs:** [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md)

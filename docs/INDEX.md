@@ -66,8 +66,10 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 
 | Variable | Purpose |
 |----------|---------|
-| `GROQ_API_KEY` | Groq LLM inference |
-| `OPENAI_API_KEY` | OpenAI fallback |
+| `GROQ_API_KEY` | Groq LLM inference (GroqFast, GroqGPT120B, GroqQwen3_32b) |
+| `OPENROUTER_API_KEY` | OpenRouter models (Nemotron, Gemma4, MiniMax) |
+| `OPENAI_API_KEY` | OpenAI models (GPT-5, GPT-5 Mini, GPT-5 Nano) |
+| `ANTHROPIC_API_KEY` | Anthropic models (Opus 4, Sonnet 4, Haiku) |
 | `VITE_STACK_PROJECT_ID` | Stack Auth project |
 | `VITE_STACK_PUBLISHABLE_CLIENT_KEY` | Stack Auth client key |
 

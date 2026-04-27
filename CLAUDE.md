@@ -98,14 +98,19 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 
 ## BAML Clients
 
-| Client | Role |
-|--------|------|
-| `RouterFallback` | Intent classification |
-| `ControllerFallback` | Tool loop controllers (LocalGLM → GroqReasoning) |
-| `CriticFallback` | Evaluation/critique (LocalGLM → GroqEval) |
-| `SynthesizerFallback` | Response synthesis |
+| Client | Role | Chain |
+|--------|------|-------|
+| `RouterFallback` | Intent classification | OpenRouterGemma4 → GroqFast → GroqGPT120B |
+| `ControllerFallback` | Tool loop controllers | OpenRouterNemotron120B → OpenAIGPT5 → OpenRouterMiniMax2_5 → GroqGPT120B |
+| `CriticFallback` | Evaluation/critique | GroqQwen3_32b → GroqGPT120B → OpenRouterMiniMax2_5 |
+| `SynthesizerFallback` | Response synthesis | OpenRouterGemma4 → GroqQwen3_32b → OpenAIGPT5 |
+| `DescribeFallback` | Lightweight tool result summarization | GroqFast → OpenRouterGemma4 → OpenAIGPT5Mini |
 
-**Known limitation:** Groq `gpt-oss-120b` fails structured output (`BamlValidationError`) on turn 2+ with larger context. Errors are caught per-iteration and tracked as events; synthesizer reads errors via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
+Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `baml_src/local-client.baml` and available for manual wiring but not used in any fallback chain.
+
+Required env vars: `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`.
+
+**Known limitation:** Groq `gpt-oss-120b` fails structured output (`BamlValidationError`) on turn 2+ with larger context. `baml-adapters.server.ts` catches this manually and retries with `GroqGPT120B` then `GroqFast`. Errors are tracked as events; synthesizer reads them via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
 
 ---
 
