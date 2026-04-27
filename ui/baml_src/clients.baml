@@ -13,7 +13,7 @@ client<llm> GroqFast {
 }
 
 // Groq — Strong reasoning for controllers (131K ctx, GPT-OSS 120B)
-client<llm> GroqReasoning {
+client<llm> GroqGPT120B {
   provider openai-generic
   retry_policy Exponential
   options {
@@ -24,8 +24,56 @@ client<llm> GroqReasoning {
   }
 }
 
+// OpenRouter — MiniMax (NVIDIA, strong structured-output reasoning, 131K ctx)
+client<llm> OpenRouterMiniMax2_5 {
+  provider openai-generic
+  retry_policy Exponential
+  options {
+    base_url "https://openrouter.ai/api/v1"
+    api_key env.OPENROUTER_API_KEY
+    model "minimax/minimax-m2.5:free"
+    max_tokens 4096
+  }
+}
+
+// OpenRouter — Nemotron Super (NVIDIA, strong structured-output reasoning, 131K ctx)
+client<llm> OpenRouterNemotron120B {
+  provider openai-generic
+  retry_policy Exponential
+  options {
+    base_url "https://openrouter.ai/api/v1"
+    api_key env.OPENROUTER_API_KEY
+    model "nvidia/nemotron-3-super-120b-a12b:free"
+    max_tokens 4096
+  }
+}
+
+
+client<llm> OpenRouterNemotron3Nano30B {
+  provider openai-generic
+  retry_policy Exponential
+  options {
+    base_url "https://openrouter.ai/api/v1"
+    api_key env.OPENROUTER_API_KEY
+    model "nvidia/nemotron-3-nano-30b-a3b:free"
+    max_tokens 4096
+  }
+}
+
+// OpenRouter — Gemma 4 27B (Google, fast synthesis, 128K ctx)
+client<llm> OpenRouterGemma4 {
+  provider openai-generic
+  retry_policy Exponential
+  options {
+    base_url "https://openrouter.ai/api/v1"
+    api_key env.OPENROUTER_API_KEY
+    model "google/gemma-4-31b-it:free"
+    max_tokens 4096
+  }
+}
+
 // Groq — Evaluation & critique (Qwen3 32B, 400 t/s, 32K ctx)
-client<llm> GroqEval {
+client<llm> GroqQwen3_32b {
   provider openai-generic
   retry_policy Exponential
   options {
@@ -37,7 +85,7 @@ client<llm> GroqEval {
 }
 
 // Using the new OpenAI Responses API for enhanced formatting
-client<llm> CustomGPT5 {
+client<llm> OpenAIGPT5 {
   provider openai-responses
   options {
     model "gpt-5"
@@ -46,7 +94,7 @@ client<llm> CustomGPT5 {
   }
 }
 
-client<llm> CustomGPT5Mini {
+client<llm> OpenAIGPT5Mini {
   provider openai-responses
   retry_policy Exponential
   options {
@@ -57,7 +105,7 @@ client<llm> CustomGPT5Mini {
 }
 
 // Fastest, most cost-efficient OpenAI model
-client<llm> CustomGPT5Nano {
+client<llm> OpenAIGPT5Nano {
   provider openai-responses
   retry_policy Exponential
   options {
@@ -68,7 +116,7 @@ client<llm> CustomGPT5Nano {
 }
 
 // Openai with chat completion
-client<llm> CustomGPT5Chat {
+client<llm> OpenAIGPT5Chat {
   provider openai
   options {
     model "gpt-5"
@@ -146,72 +194,55 @@ client<llm> CustomHaiku {
 //   }
 // }
 
-// Example Ollama client for local models (uncomment to use)
-// client<llm> CustomOllama {
-//   provider openai-generic
-//   options {
-//     base_url "http://localhost:11434/v1"
-//     model "llama4"
-//     default_role "user" // Most local models prefer the user role
-//     // No API key needed for local Ollama
-//   }
-// }
 
 // https://docs.boundaryml.com/docs/snippets/clients/round-robin
 client<llm> CustomFast {
   provider round-robin
   options {
     // This will alternate between the two clients
-    strategy [CustomGPT5Mini, CustomHaiku]
+    strategy [OpenAIGPT5Mini, CustomHaiku]
   }
 }
 
-// Local llama-server — GLM 4.7 Flash (OpenAI-compatible API)
-// Start with: pnpm dev:llama
-client<llm> LocalGLM {
-  provider openai-generic
-  options {
-    base_url "http://127.0.0.1:8080/v1"
-    model "glm-4-flash"
-    api_key "local"
-    max_tokens 2048
-  }
-}
-
-// Per-use-case fallback clients (LocalGLM primary, Groq fallback)
+// Per-use-case fallback clients (Groq-only; LocalGLM available in local-client.baml)
 client<llm> RouterFallback {
   provider fallback
   options {
-    strategy [LocalGLM, GroqFast, GroqReasoning]
+    // Classification only — fast 20B model sufficient, 120B as backstop
+    strategy [OpenRouterGemma4, GroqFast, GroqGPT120B]
   }
 }
 
 client<llm> ControllerFallback {
   provider fallback
   options {
-    strategy [LocalGLM, GroqReasoning, GroqFast]
+    // 1. GroqGPT120B — gpt-oss-120b, fastest; 2. OpenRouterNemotron120B — when Groq fails structured output
+    // on large context; 3. OpenAIGPT5Chat — reliable OpenAI fallback
+    strategy [OpenRouterNemotron120B, OpenAIGPT5, OpenRouterMiniMax2_5, GroqGPT120B]
   }
 }
 
 client<llm> CriticFallback {
   provider fallback
   options {
-    strategy [LocalGLM, GroqEval, GroqReasoning]
+    // Qwen3-32B purpose-built for evaluation; GroqGPT120B as backstop
+    strategy [GroqQwen3_32b, GroqGPT120B, OpenRouterMiniMax2_5]
   }
 }
 
 client<llm> SynthesizerFallback {
   provider fallback
   options {
-    strategy [LocalGLM, GroqReasoning, GroqEval]
+    // 1. OpenRouterGemma4 — fast prose synthesis; 2. GroqQwen3_32b (Qwen3-32B); 3. OpenAIGPT5Mini
+    strategy [OpenRouterGemma4, GroqQwen3_32b, OpenAIGPT5Mini]
   }
 }
 
-// Lightweight summarization — tiny/fast model for tool result descriptions
+// Lightweight summarization — fast 20B model is sufficient alone
 client<llm> DescribeFallback {
   provider fallback
   options {
-    strategy [LocalGLM, GroqFast]
+    strategy [GroqFast, OpenRouterGemma4, OpenAIGPT5Mini]
   }
 }
 
@@ -220,7 +251,7 @@ client<llm> OpenaiFallback {
   provider fallback
   options {
     // This will try the clients in order until one succeeds
-    strategy [CustomGPT5Mini, CustomGPT5]
+    strategy [OpenAIGPT5Mini, OpenAIGPT5]
   }
 }
 
@@ -234,11 +265,11 @@ retry_policy Constant {
 }
 
 retry_policy Exponential {
-  max_retries 3
+  max_retries 2
   strategy {
     type exponential_backoff
     delay_ms 500
-    multiplier 2
+    multiplier 1.5
     max_delay_ms 10000
   }
 }

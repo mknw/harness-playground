@@ -496,11 +496,11 @@ describe('LoopController BamlValidationError fallback', () => {
     vi.clearAllMocks()
   })
 
-  it('should fall back to GroqReasoning on BamlValidationError', async () => {
+  it('should fall back to GroqGPT120B on BamlValidationError', async () => {
     const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
-    // First call (LocalGLM) throws BamlValidationError, second call (GroqReasoning) succeeds
+    // First call throws BamlValidationError, second call (GroqGPT120B) succeeds
     mockLoopController
       .mockRejectedValueOnce(new BamlValidationError('Invalid JSON output', 'raw output'))
       .mockResolvedValueOnce(mockFinalAction('Recovered'))
@@ -511,16 +511,16 @@ describe('LoopController BamlValidationError fallback', () => {
     expect(result.action).toBeDefined()
     expect(result.action.is_final).toBe(true)
     expect(mockLoopController).toHaveBeenCalledTimes(2)
-    // Second call should use GroqReasoning client override
+    // Second call should use GroqGPT120B client override
     const secondCallOptions = mockLoopController.mock.calls[1][7] ?? mockLoopController.mock.calls[1][6]
-    expect(secondCallOptions).toEqual(expect.objectContaining({ client: 'GroqReasoning' }))
+    expect(secondCallOptions).toEqual(expect.objectContaining({ client: 'GroqGPT120B' }))
   })
 
-  it('should fall back to GroqFast when both LocalGLM and GroqReasoning fail', async () => {
+  it('should fall back to GroqFast when both primary and GroqGPT120B fail', async () => {
     const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
-    // All three calls: LocalGLM fails, GroqReasoning fails, GroqFast succeeds
+    // All three calls fail with BamlValidationError until GroqFast succeeds
     mockLoopController
       .mockRejectedValueOnce(new BamlValidationError('Invalid JSON', 'raw1'))
       .mockRejectedValueOnce(new BamlValidationError('Still invalid', 'raw2'))
@@ -548,19 +548,17 @@ describe('LoopController BamlValidationError fallback', () => {
     expect(mockLoopController).toHaveBeenCalledTimes(1)
   })
 
-  it('should propagate non-BamlValidationError from GroqReasoning fallback', async () => {
+  it('should propagate non-BamlValidationError from GroqGPT120B fallback', async () => {
     const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
     const { BamlValidationError } = await import('@boundaryml/baml')
 
-    // LocalGLM: BamlValidationError → retry
-    // GroqReasoning: Network error → should propagate
     mockLoopController
       .mockRejectedValueOnce(new BamlValidationError('Invalid JSON', 'raw'))
-      .mockRejectedValueOnce(new Error('GroqReasoning network error'))
+      .mockRejectedValueOnce(new Error('GroqGPT120B network error'))
 
     const controller = createLoopControllerAdapter(['Return'])
 
-    await expect(controller('user message', 'intent', '[]', 0)).rejects.toThrow('GroqReasoning network error')
+    await expect(controller('user message', 'intent', '[]', 0)).rejects.toThrow('GroqGPT120B network error')
     expect(mockLoopController).toHaveBeenCalledTimes(2)
   })
 })
