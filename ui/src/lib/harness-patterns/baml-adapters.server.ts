@@ -206,10 +206,9 @@ export function createLoopControllerAdapter(
     const variables = { user_message, intent, tools, turns, context, turns_previous_runs: priorResults }
 
     // Call with or without collector.
-    // On BamlValidationError (LocalGLM returns malformed JSON), retry with GroqReasoning —
-    // BAML's built-in fallback only covers network/API errors, not parse failures.
-    // If GroqReasoning also fails (known: gpt-oss-120b fails structured output with larger
-    // context on turn 2+), fall through to GroqFast as a final attempt.
+    // On BamlValidationError, BAML's built-in fallback won't retry (it only covers network/API
+    // errors). Manually escalate: first to GroqGPT120B (fast, reliable structured output at
+    // moderate context), then to GroqFast as a last resort.
     let action: ControllerAction
     try {
       action = collector
@@ -217,12 +216,10 @@ export function createLoopControllerAdapter(
         : await b.LoopController(user_message, intent, tools, turns, context, priorResults)
     } catch (e) {
       if (!(e instanceof BamlValidationError)) throw e
-      // LocalGLM returned unparseable output — retry with GroqReasoning
       try {
-        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, { client: 'GroqReasoning' })
+        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, { client: 'GroqGPT120B' })
       } catch (e2) {
         if (!(e2 instanceof BamlValidationError)) throw e2
-        // GroqReasoning also failed (larger context issue) — final fallback to GroqFast
         action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, { client: 'GroqFast' })
       }
     }

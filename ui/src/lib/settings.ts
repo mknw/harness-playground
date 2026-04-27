@@ -24,16 +24,26 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
 
 /** Context window limits per BAML client (tokens) */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  GroqFast: 32_768,        // openai/gpt-oss-20b
-  GroqReasoning: 131_072,  // openai/gpt-oss-120b
-  GroqEval: 32_768,        // qwen/qwen3-32b
-  LocalGLM: 16_384,        // glm-4-flash
-  CustomGPT5: 1_000_000,
-  CustomGPT5Mini: 1_000_000,
-  CustomGPT5Nano: 1_000_000,
+  // Groq
+  GroqFast: 32_768,              // openai/gpt-oss-20b
+  GroqGPT120B: 131_072,          // openai/gpt-oss-120b
+  GroqQwen3_32b: 32_768,         // qwen/qwen3-32b
+  // OpenRouter
+  OpenRouterNemotron120B: 131_072,  // nvidia/nemotron-3-super-120b-a12b
+  OpenRouterNemotron3Nano30B: 32_768, // nvidia/nemotron-3-nano-30b-a3b
+  OpenRouterGemma4: 131_072,     // google/gemma-4-31b-it
+  OpenRouterMiniMax2_5: 1_000_000, // minimax/minimax-m2.5
+  // OpenAI
+  OpenAIGPT5: 1_000_000,
+  OpenAIGPT5Mini: 1_000_000,
+  OpenAIGPT5Nano: 1_000_000,
+  OpenAIGPT5Chat: 1_000_000,
+  // Anthropic
   CustomHaiku: 200_000,
   CustomOpus4: 200_000,
   CustomSonnet4: 200_000,
+  // Local (local-client.baml, not used in chains)
+  LocalGLM: 16_384,
 }
 
 export const SETTINGS_STORAGE_KEY = 'kg_agent_settings'
