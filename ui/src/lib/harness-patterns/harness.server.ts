@@ -22,6 +22,7 @@ import {
   setError as setCtxError,
   generateId
 } from './context.server'
+import { runWithLiveListener } from './live-event-context.server'
 
 assertServerOnImport()
 
@@ -63,8 +64,10 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
     const ctx = createContext<T>(input, initialData as T, sessionId)
 
     try {
-      // Execute patterns using chain
-      await runChain(ctx, patterns, onEvent)
+      // Execute patterns using chain inside a live-event frame so that any
+      // pattern with `liveEvents: true` streams events to `onEvent` as they
+      // happen, not at commit time.
+      await runWithLiveListener(onEvent, () => runChain(ctx, patterns, onEvent))
 
       // Extract response from final data
       const response = ctx.data.response ?? ''
@@ -142,7 +145,7 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
 
   try {
     // Re-run patterns - withApproval will handle the resume
-    await runChain(ctx, patterns, onEvent)
+    await runWithLiveListener(onEvent, () => runChain(ctx, patterns, onEvent))
 
     const response = ctx.data.response ?? ''
     const finalStatus = ctx.status as CtxStatus // chain may mutate ctx.status
@@ -223,7 +226,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
 
   try {
     // Execute patterns
-    await runChain(ctx, patterns, onEvent)
+    await runWithLiveListener(onEvent, () => runChain(ctx, patterns, onEvent))
 
     const response = ctx.data.response ?? ''
     const finalStatus = ctx.status as CtxStatus // chain may mutate ctx.status

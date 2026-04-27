@@ -15,11 +15,12 @@
  * - Session ID per component instance
  */
 
-import { createSignal, Show, onMount, onCleanup } from 'solid-js'
+import { createSignal, onMount, onCleanup } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
 import { AgentSelector } from './AgentSelector'
+import { LiveProgressBar } from './LiveProgressBar'
 import { approveAction, rejectAction, clearSession, extractGraphFromResult, extractGraphElements } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
 import type { GraphElement } from './SupportPanel'
@@ -52,9 +53,15 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
   const [selectedAgent, setSelectedAgent] = createSignal('default')
   const [currentStatus, setCurrentStatus] = createSignal<string | null>(null)
+  const [progressMaxTurns, setProgressMaxTurns] = createSignal<number>(5)
+  const [progressTurn, setProgressTurn] = createSignal<number>(0)
   // Cursor into ctx.events — tracks how many events were sent last turn so we
   // emit only the delta (new events) rather than the full accumulated history
   let prevEventCount = 0
+
+  const resetProgress = () => {
+    setProgressTurn(0)
+  }
 
   onCleanup(() => {
     // Clean up session when component unmounts
@@ -171,12 +178,24 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                 }
               }
 
-              // Extract status from controller_action events for transient display
+              // Reset progress bar at the start of each pattern; pick up
+              // maxTurns when surfaced (simpleLoop / actorCritic patterns).
+              if (evt.type === 'pattern_enter') {
+                const meta = evt.data as { maxTurns?: number }
+                if (typeof meta.maxTurns === 'number' && meta.maxTurns > 0) {
+                  setProgressMaxTurns(meta.maxTurns)
+                }
+                resetProgress()
+              }
+
+              // Each controller_action advances the bar by one turn and
+              // surfaces its status string for the live indicator.
               if (evt.type === 'controller_action') {
                 const actionData = evt.data as { action?: { status?: string } }
                 if (actionData.action?.status) {
                   setCurrentStatus(actionData.action.status)
                 }
+                setProgressTurn((n) => Math.min(n + 1, progressMaxTurns()))
               }
 
               // Convert error events to inline chat messages
@@ -208,6 +227,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
       // Clear transient status
       setCurrentStatus(null)
+      resetProgress()
 
       // Update event count cursor and emit final context
       if (finalResult?.context) {
@@ -386,26 +406,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           onHighlightEntities={props.onHighlightEntities}
         />
 
-        {/* Transient status indicator (from ControllerAction.status) */}
-        <Show when={currentStatus()}>
-          <div
-            flex="~ items-center gap-2"
-            px="4"
-            py="1.5"
-            text="xs dark-text-secondary"
-            bg="dark-bg-tertiary/50"
-            border="t dark-border-primary"
-          >
-            <div
-              w="1.5"
-              h="1.5"
-              rounded="full"
-              bg="neon-cyan"
-              class="animate-pulse"
-            />
-            {currentStatus()}
-          </div>
-        </Show>
+        {/* Live progress: status text crossfades, bar fills 1/maxTurns per turn,
+            then animates out before the assistant message lands. */}
+        <LiveProgressBar
+          status={currentStatus()}
+          progress={progressTurn() / progressMaxTurns()}
+          visible={isProcessing() && currentStatus() !== null}
+        />
 
         {/* Input */}
         <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">

@@ -145,6 +145,9 @@ export interface PatternConfig {
   viewConfig?: ViewConfig
   /** Error severity classification for this pattern (default varies by pattern) */
   errorSeverity?: 'recoverable' | 'irrecoverable'
+  /** Stream this pattern's events to the harness `onEvent` listener as they're
+   *  tracked, instead of buffering until commit. Default: false. */
+  liveEvents?: boolean
 }
 
 // ============================================================================
@@ -415,6 +418,9 @@ export interface CriticResultEventData {
 /** Data payload for pattern_enter event */
 export interface PatternEnterEventData {
   pattern: string
+  /** Pattern's configured maxTurns (simpleLoop/actorCritic) — used by the UI
+   *  progress bar to compute fill ratio per controller_action. */
+  maxTurns?: number
 }
 
 /** Data payload for pattern_exit event */
