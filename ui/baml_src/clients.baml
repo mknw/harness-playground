@@ -72,6 +72,42 @@ client<llm> OpenRouterGemma4 {
   }
 }
 
+// Cerebras — wafer-scale inference, separate quota pool from Groq/OpenRouter.
+// OpenAI-compatible API. Used as the *final* safety net in fallback chains so
+// 429s on the primary cloud providers don't surface to the user.
+client<llm> CerebrasGPT120B {
+  provider openai-generic
+  retry_policy Exponential
+  options {
+    base_url "https://api.cerebras.ai/v1"
+    api_key env.CEREBRAS_API_KEY
+    model "gpt-oss-120b"
+    max_tokens 4096
+  }
+}
+
+client<llm> CerebrasZaiGLM4_7 {
+  provider openai-generic
+  retry_policy Exponential
+  options {
+    base_url "https://api.cerebras.ai/v1"
+    api_key env.CEREBRAS_API_KEY
+    model "zai-glm-4.7"
+    max_tokens 4096
+  }
+}
+
+client<llm> CerebrasQwen3_235B {
+  provider openai-generic
+  retry_policy Exponential
+  options {
+    base_url "https://api.cerebras.ai/v1"
+    api_key env.CEREBRAS_API_KEY
+    model "qwen-3-235b-a22b-instruct-2507"
+    max_tokens 4096
+  }
+}
+
 // Groq — Evaluation & critique (Qwen3 32B, 400 t/s, 32K ctx)
 client<llm> GroqQwen3_32b {
   provider openai-generic
@@ -204,45 +240,49 @@ client<llm> CustomFast {
   }
 }
 
-// Per-use-case fallback clients (Groq-only; LocalGLM available in local-client.baml)
+// Per-use-case fallback clients. Cerebras sits at the end of every chain as
+// a separate-quota safety net, so a 429 on Groq/OpenRouter/OpenAI no longer
+// surfaces to the user.
 client<llm> RouterFallback {
   provider fallback
   options {
-    // Classification only — fast 20B model sufficient, 120B as backstop
-    strategy [OpenRouterGemma4, GroqFast, GroqGPT120B]
+    // Classification only — fast 20B model sufficient, larger models as backstops
+    strategy [OpenRouterGemma4, GroqFast, GroqGPT120B, CerebrasGPT120B]
   }
 }
 
 client<llm> ControllerFallback {
   provider fallback
   options {
-    // 1. GroqGPT120B — gpt-oss-120b, fastest; 2. OpenRouterNemotron120B — when Groq fails structured output
-    // on large context; 3. OpenAIGPT5Chat — reliable OpenAI fallback
-    strategy [OpenRouterNemotron120B, OpenAIGPT5, OpenRouterMiniMax2_5, GroqGPT120B]
+    // Tool-loop reasoning + structured output. Cerebras GPT-OSS-120B mirrors
+    // Groq's model class with independent rate limits.
+    strategy [OpenRouterNemotron120B, OpenAIGPT5, OpenRouterMiniMax2_5, GroqGPT120B, CerebrasGPT120B]
   }
 }
 
 client<llm> CriticFallback {
   provider fallback
   options {
-    // Qwen3-32B purpose-built for evaluation; GroqGPT120B as backstop
-    strategy [GroqQwen3_32b, GroqGPT120B, OpenRouterMiniMax2_5]
+    // Qwen-family evaluators preferred; CerebrasQwen3_235B as final backstop.
+    strategy [GroqQwen3_32b, GroqGPT120B, OpenRouterMiniMax2_5, CerebrasQwen3_235B]
   }
 }
 
 client<llm> SynthesizerFallback {
   provider fallback
   options {
-    // 1. OpenRouterGemma4 — fast prose synthesis; 2. GroqQwen3_32b (Qwen3-32B); 3. OpenAIGPT5Mini
-    strategy [OpenRouterGemma4, GroqQwen3_32b, OpenAIGPT5]
+    // Prose synthesis. CerebrasZaiGLM4_7 (GLM-4.7) handles natural-language
+    // formatting well as the final safety net.
+    strategy [OpenRouterGemma4, GroqQwen3_32b, OpenAIGPT5, CerebrasZaiGLM4_7]
   }
 }
 
-// Lightweight summarization — fast 20B model is sufficient alone
+// Lightweight summarization — fast 20B model is sufficient alone.
+// CerebrasZaiGLM4_7 closes the chain as the cross-provider safety net.
 client<llm> DescribeFallback {
   provider fallback
   options {
-    strategy [GroqFast, OpenRouterGemma4, OpenAIGPT5Mini]
+    strategy [GroqFast, OpenRouterGemma4, OpenAIGPT5, CerebrasZaiGLM4_7]
   }
 }
 
