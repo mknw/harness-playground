@@ -127,6 +127,48 @@ describe('createChainProgress', () => {
     })
   })
 
+  it('upgrades a loop contribution via controller_action.maxTurns when pattern_enter lacked it', () => {
+    // Reflects the production case: simpleLoop reads its effective maxTurns
+    // from settings at runtime, so pattern_enter doesn't carry it. The first
+    // controller_action does — and that's what should set the denominator.
+    createRoot(() => {
+      const p = createChainProgress()
+
+      p.ingest(ev('pattern_enter', 'router', { pattern: 'router' }))
+      p.ingest(ev('assistant_message', 'router', { content: 'Routing…' }))
+      // 1/1 after router
+
+      p.ingest(ev('pattern_enter', 'routes', { pattern: 'routes(...)' }))
+      p.ingest(ev('pattern_enter', 'neo4j-query', { pattern: 'simpleLoop' })) // no maxTurns on enter
+
+      // First controller_action carries the runtime maxTurns
+      p.ingest(
+        ev('controller_action', 'neo4j-query', {
+          action: { status: 'Querying schema' },
+          turn: 0,
+          maxTurns: 5,
+        })
+      )
+
+      // Routes' contribution discarded; neo4j-query upgraded from 1 to 5.
+      // Total = 1 (router) + 5 (loop). Current = 2 (router + first action).
+      expect(p.snapshot().totalTurns).toBe(6)
+      expect(p.snapshot().currentTurn).toBe(2)
+      expect(p.snapshot().status).toBe('Querying schema')
+
+      // Subsequent controller_actions don't double-upgrade
+      p.ingest(
+        ev('controller_action', 'neo4j-query', {
+          action: { status: 'Step 2' },
+          turn: 1,
+          maxTurns: 5,
+        })
+      )
+      expect(p.snapshot().totalTurns).toBe(6)
+      expect(p.snapshot().currentTurn).toBe(3)
+    })
+  })
+
   it('reset clears all state', () => {
     createRoot(() => {
       const p = createChainProgress()

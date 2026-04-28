@@ -408,6 +408,13 @@ export interface ToolResultEventData {
 /** Data payload for controller_action event */
 export interface ControllerActionEventData {
   action: import('../../../baml_client/types').ControllerAction
+  /** 0-indexed turn within this loop pass — set by simpleLoop / actorCritic. */
+  turn?: number
+  /** Effective max turns for this loop instance (post-settings resolution).
+   *  Loop patterns include this so consumers (e.g. progress UI) can size
+   *  themselves without having to read the pattern config — which doesn't
+   *  reflect runtime overrides like `settings.maxToolTurns`. */
+  maxTurns?: number
 }
 
 /** Data payload for critic_result event */

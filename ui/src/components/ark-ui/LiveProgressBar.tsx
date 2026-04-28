@@ -96,94 +96,108 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
 
   return (
     <Show when={mounted()}>
+      {/* In-progress placeholder — mirrors the assistant message layout
+          (avatar + bubble) so it looks like the next reply landing in. */}
       <div
-        flex="~ col gap-1.5"
-        px="4"
-        py="2.5"
-        border="t dark-border-primary"
-        bg="dark-bg-tertiary/50"
+        flex="~"
+        gap="3"
+        data-role="assistant"
+        data-progress=""
         style={{
           opacity: entering() ? 1 : 0,
           transform: entering() ? 'translateY(0)' : 'translateY(4px)',
           transition: `opacity ${EXIT_FADE_MS}ms ease, transform ${EXIT_FADE_MS}ms ease`,
         }}
       >
-        <Progress.Root
-          value={value()}
-          min={0}
-          max={total()}
-          flex="~ col gap-1.5"
+        {/* Avatar — matches ChatMessages assistant avatar styling */}
+        <div
+          flex="~ shrink-0"
+          w="8"
+          h="8"
+          rounded="full"
+          items="center"
+          justify="center"
+          text="white xs"
+          font="medium"
+          bg="cyber-800"
+          border="~ neon-cyan/30"
         >
-          {/* Header row: pulse + status + counter */}
-          <div flex="~ items-center gap-2" h="4" style={{ position: 'relative' }}>
-            <div
-              w="1.5"
-              h="1.5"
-              rounded="full"
-              bg="neon-cyan"
-              class="animate-pulse"
-              style={{ 'flex-shrink': 0 }}
-            />
+          AI
+        </div>
 
-            {/* Status slot — two children overlap during crossfade */}
-            <div flex="~ 1" style={{ position: 'relative', 'min-width': 0 }}>
-              <Show when={previousStatus()}>
+        <div flex="~ col 1" style={{ 'min-width': 0 }}>
+          <Progress.Root value={value()} min={0} max={total()} flex="~ col gap-1.5">
+            {/* Header row: pulse + status + counter */}
+            <div flex="~ items-center gap-2" h="4" style={{ position: 'relative' }}>
+              <div
+                w="1.5"
+                h="1.5"
+                rounded="full"
+                bg="neon-cyan"
+                class="animate-pulse"
+                style={{ 'flex-shrink': 0 }}
+              />
+
+              {/* Status slot — two children overlap during crossfade */}
+              <div flex="~ 1" style={{ position: 'relative', 'min-width': 0 }}>
+                <Show when={previousStatus()}>
+                  <Progress.Label
+                    text="xs dark-text-tertiary"
+                    truncate=""
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      opacity: 0,
+                      transition: `opacity ${STATUS_FADE_MS}ms ease`,
+                      'pointer-events': 'none',
+                    }}
+                  >
+                    {previousStatus()}
+                  </Progress.Label>
+                </Show>
                 <Progress.Label
-                  text="xs dark-text-tertiary"
+                  text="xs dark-text-secondary"
                   truncate=""
                   style={{
-                    position: 'absolute',
-                    inset: 0,
-                    opacity: 0,
+                    display: 'block',
+                    opacity: shownStatus() ? 1 : 0,
                     transition: `opacity ${STATUS_FADE_MS}ms ease`,
-                    'pointer-events': 'none',
                   }}
                 >
-                  {previousStatus()}
+                  {shownStatus() ?? '\u00a0'}
                 </Progress.Label>
-              </Show>
-              <Progress.Label
-                text="xs dark-text-secondary"
-                truncate=""
-                style={{
-                  display: 'block',
-                  opacity: shownStatus() ? 1 : 0,
-                  transition: `opacity ${STATUS_FADE_MS}ms ease`,
-                }}
+              </div>
+
+              <Progress.ValueText
+                text="xs dark-text-tertiary tabular-nums"
+                style={{ 'flex-shrink': 0, 'font-variant-numeric': 'tabular-nums' }}
               >
-                {shownStatus() ?? '\u00a0'}
-              </Progress.Label>
+                {valueText()}
+              </Progress.ValueText>
             </div>
 
-            <Progress.ValueText
-              text="xs dark-text-tertiary tabular-nums"
-              style={{ 'flex-shrink': 0, 'font-variant-numeric': 'tabular-nums' }}
-            >
-              {valueText()}
-            </Progress.ValueText>
-          </div>
-
-          {/* Linear bar */}
-          <Progress.Track
-            style={{
-              height: '3px',
-              'background-color': 'rgb(58, 58, 74)',
-              'border-radius': '9999px',
-              overflow: 'hidden',
-            }}
-          >
-            <Progress.Range
+            {/* Linear bar */}
+            <Progress.Track
               style={{
-                height: '100%',
-                width: `${percent()}%`,
-                'background-image':
-                  'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))',
-                'box-shadow': '0 0 8px rgba(0,255,255,0.45)',
-                transition: 'width 240ms cubic-bezier(0.4, 0, 0.2, 1)',
+                height: '3px',
+                'background-color': 'rgb(58, 58, 74)',
+                'border-radius': '9999px',
+                overflow: 'hidden',
               }}
-            />
-          </Progress.Track>
-        </Progress.Root>
+            >
+              <Progress.Range
+                style={{
+                  height: '100%',
+                  width: `${percent()}%`,
+                  'background-image':
+                    'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))',
+                  'box-shadow': '0 0 8px rgba(0,255,255,0.45)',
+                  transition: 'width 240ms cubic-bezier(0.4, 0, 0.2, 1)',
+                }}
+              />
+            </Progress.Track>
+          </Progress.Root>
+        </div>
       </div>
     </Show>
   )

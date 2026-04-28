@@ -89,11 +89,13 @@ export function actorCritic<T extends ActorCriticData>(
         const actorCollector = new Collector('actor')
         const { action, llmCall: actorLlmCall } = await actor(userContent, intent, availableTools, previousAttempts, actorCollector)
 
-        // Track controller action with LLM call data
+        // Track controller action with LLM call data. `turn` and `maxTurns`
+        // (mapped from attempt / maxRetries) are exposed so live progress
+        // consumers can size their indicators against the runtime values.
         trackEvent(
           scope,
           'controller_action',
-          { action } as ControllerActionEventData,
+          { action, turn: attempt, maxTurns: maxRetries } as ControllerActionEventData,
           resolved.trackHistory,
           actorLlmCall
         )

@@ -58,6 +58,9 @@ export function createChainProgress(): ChainProgressController {
   // another pattern_enter (wrapper — discard) or content (commit).
   let pendingEnter: { contribution: number; patternId: string } | null = null
   let advancedForPattern: string | null = null
+  // Loop patterns whose contribution we've already upgraded from 1 to
+  // their effective `maxTurns` based on a controller_action arriving.
+  const upgradedLoops = new Set<string>()
 
   const flushPendingEnter = () => {
     if (!pendingEnter) return
@@ -84,6 +87,7 @@ export function createChainProgress(): ChainProgressController {
     reset() {
       pendingEnter = null
       advancedForPattern = null
+      upgradedLoops.clear()
       setSnapshot(empty())
     },
 
@@ -105,8 +109,23 @@ export function createChainProgress(): ChainProgressController {
 
         case 'controller_action': {
           flushPendingEnter()
-          const action = (event.data as { action?: { status?: string } }).action
-          const status = action?.status ? truncate(action.status) : null
+          const data = event.data as {
+            action?: { status?: string }
+            maxTurns?: number
+          }
+          // Loops emit `maxTurns` on every controller_action. The first time
+          // we see it for a given patternId, upgrade that pattern's
+          // contribution from the default 1 to its effective maxTurns.
+          if (
+            typeof data.maxTurns === 'number' &&
+            data.maxTurns > 1 &&
+            !upgradedLoops.has(event.patternId)
+          ) {
+            upgradedLoops.add(event.patternId)
+            const upgrade = data.maxTurns - 1
+            setSnapshot((prev) => ({ ...prev, totalTurns: prev.totalTurns + upgrade }))
+          }
+          const status = data.action?.status ? truncate(data.action.status) : null
           advanceCurrent(status)
           advancedForPattern = event.patternId
           break

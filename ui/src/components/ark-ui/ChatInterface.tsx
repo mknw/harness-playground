@@ -376,27 +376,27 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           </div>
         </div>
 
-        {/* Messages */}
+        {/* Messages — the live progress bar rides as a trailing slot so it
+            appears where the next assistant bubble will land, then animates
+            out as that bubble takes its place. */}
         <ChatMessages
           messages={messages()}
           onApproveWrite={handleApproveWrite}
           onRejectWrite={handleRejectWrite}
           graphEntityNames={props.graphEntityNames}
           onHighlightEntities={props.onHighlightEntities}
-        />
-
-        {/* Live progress: status text crossfades, bar fills cumulatively across
-            the chain (router + loop turns + synthesizer), then animates out
-            before the assistant message lands. */}
-        <LiveProgressBar
-          status={progress.snapshot().status}
-          current={progress.snapshot().currentTurn}
-          total={progress.snapshot().totalTurns}
-          visible={
-            isProcessing() &&
-            !progress.snapshot().done &&
-            progress.snapshot().totalTurns > 0
-          }
+          trailing={() => (
+            <LiveProgressBar
+              status={progress.snapshot().status}
+              current={progress.snapshot().currentTurn}
+              total={progress.snapshot().totalTurns}
+              visible={
+                isProcessing() &&
+                !progress.snapshot().done &&
+                progress.snapshot().totalTurns > 0
+              }
+            />
+          )}
         />
 
         {/* Input */}
