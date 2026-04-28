@@ -184,7 +184,8 @@ export function router<T extends RouterData>(
   return {
     name: 'router',
     fn,
-    config: resolved
+    config: resolved,
+    estimateTurns: () => 1
   }
 }
 
@@ -261,6 +262,11 @@ export function routes<T extends RouterData & Record<string, unknown>>(
 
       return scope
     },
-    config: resolved
+    config: resolved,
+    // Worst-case projection: route is picked at runtime, so the longest branch
+    // drives perceived progress duration. UI can refine downward once the
+    // dispatched branch's `pattern_enter` arrives.
+    estimateTurns: (s) =>
+      Math.max(...Object.values(patternMap).map((p) => p.estimateTurns?.(s) ?? 1))
   }
 }

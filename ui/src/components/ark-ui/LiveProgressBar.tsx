@@ -1,36 +1,49 @@
 /**
  * LiveProgressBar
  *
- * Inline status bar surfaced while a harness chain is in flight.
+ * Inline status bar surfaced while a harness chain is in flight. Lives as a
+ * trailing slot in `ChatMessages` so it appears where the next assistant
+ * bubble will land.
  *
- * Layout (top → bottom):
- *   [pulse dot]  status text          current/total
- *   [───────────────────────────────────────────────] linear progress
+ * Layout:
+ *   [pulse dot]  <status text crossfade>
+ *   [─────────────────────────────────] linear progress (no fraction text)
  *
- * The status string crossfades when it changes; `current/total` updates via
- * the `Progress.ValueText` slot. When `visible` flips false the bar fills to
- * 100%, fades out, and unmounts so the assistant message can take its place.
+ * Bar resolution
+ * --------------
+ * `max` is fixed for the chain (worst-case projection from the harness).
+ * `value` is `currentTurn` mapped through `(currentTurn * max / pathProjection)`
+ * so the fill rate adapts to the chosen route while the denominator stays
+ * stable — supplied by the consumer.
  *
- * Built from Ark UI's `Progress` primitives (Root/Track/Range/Label/ValueText)
- * with UnoCSS attributify for layout. Runtime visual state (gradient fill,
- * crossfade, exit) lives in inline styles because UnoCSS attributify doesn't
- * support per-frame transitions.
+ * Visibility
+ * ----------
+ * A short mount delay (`MOUNT_DELAY_MS`) means direct router responses
+ * (typically <1s) finish before the bar would have appeared, so the bar
+ * never enters for conversational replies.
  */
 import { Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
 import { Progress } from '@ark-ui/solid/progress'
 
 export interface LiveProgressBarProps {
   status: string | null
-  /** Cumulative turn position (1-based when active, 0 before first event). */
+  /** Cumulative steps completed (1-based when active, 0 before first event). */
   current: number
-  /** Best-effort chain total. May grow as pattern_enter events arrive. */
-  total: number
-  /** Whether the bar should be shown. Flipping to false plays the exit animation. */
+  /** Refined projection of the chosen path. May shrink as routes resolve. */
+  pathProjection: number
+  /** Stable bar-resolution: maximum across all branches. */
+  maxProjection: number
+  /** Whether the bar should be shown. Flipping to true after MOUNT_DELAY_MS
+   *  schedules the entry animation; flipping to false plays the exit. */
   visible: boolean
 }
 
 const STATUS_FADE_MS = 220
 const EXIT_FADE_MS = 360
+const FILL_TRANSITION_MS = 420
+/** Don't show the bar until the chain has been running this long — direct
+ *  router responses complete in <1s and don't deserve a flash of progress UI. */
+const MOUNT_DELAY_MS = 350
 
 export const LiveProgressBar = (props: LiveProgressBarProps) => {
   const [shownStatus, setShownStatus] = createSignal<string | null>(null)
@@ -39,10 +52,12 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
   const [entering, setEntering] = createSignal(false)
 
   let exitTimer: number | undefined
+  let mountTimer: number | undefined
   let statusTimer: number | undefined
 
   onCleanup(() => {
     if (exitTimer !== undefined) clearTimeout(exitTimer)
+    if (mountTimer !== undefined) clearTimeout(mountTimer)
     if (statusTimer !== undefined) clearTimeout(statusTimer)
   })
 
@@ -63,19 +78,30 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
     )
   )
 
-  // Mount/unmount with a delayed unmount so the CSS exit animation completes.
+  // Mount/unmount with delays:
+  //  - On `visible: true`, wait MOUNT_DELAY_MS before mounting (skips short
+  //    direct-response chains entirely).
+  //  - On `visible: false`, run the exit transition then unmount.
   createEffect(
     on(
       () => props.visible,
       (next) => {
+        if (mountTimer !== undefined) {
+          clearTimeout(mountTimer)
+          mountTimer = undefined
+        }
         if (exitTimer !== undefined) {
           clearTimeout(exitTimer)
           exitTimer = undefined
         }
         if (next) {
-          setMounted(true)
-          requestAnimationFrame(() => setEntering(true))
+          mountTimer = window.setTimeout(() => {
+            mountTimer = undefined
+            setMounted(true)
+            requestAnimationFrame(() => setEntering(true))
+          }, MOUNT_DELAY_MS)
         } else {
+          if (!mounted()) return
           setEntering(false)
           exitTimer = window.setTimeout(() => {
             setMounted(false)
@@ -86,18 +112,19 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
     )
   )
 
-  const total = createMemo(() => Math.max(1, props.total))
+  const max = createMemo(() => Math.max(1, props.maxProjection))
   const value = createMemo(() => {
-    if (!props.visible) return total()
-    return Math.max(0, Math.min(props.current, total()))
+    if (!props.visible) return max()
+    const path = Math.max(1, props.pathProjection || max())
+    const scaled = (props.current * max()) / path
+    return Math.max(0, Math.min(max(), Math.round(scaled)))
   })
-  const percent = createMemo(() => Math.round((value() / total()) * 100))
-  const valueText = createMemo(() => `${value()}/${total()}`)
+  const percent = createMemo(() =>
+    Math.max(0, Math.min(100, (value() / max()) * 100))
+  )
 
   return (
     <Show when={mounted()}>
-      {/* In-progress placeholder — mirrors the assistant message layout
-          (avatar + bubble) so it looks like the next reply landing in. */}
       <div
         flex="~"
         gap="3"
@@ -106,10 +133,10 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
         style={{
           opacity: entering() ? 1 : 0,
           transform: entering() ? 'translateY(0)' : 'translateY(4px)',
-          transition: `opacity ${EXIT_FADE_MS}ms ease, transform ${EXIT_FADE_MS}ms ease`,
+          transition: `opacity ${EXIT_FADE_MS}ms cubic-bezier(0.22, 1, 0.36, 1), transform ${EXIT_FADE_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
         }}
       >
-        {/* Avatar — matches ChatMessages assistant avatar styling */}
+        {/* Avatar — matches assistant message layout */}
         <div
           flex="~ shrink-0"
           w="8"
@@ -126,8 +153,8 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
         </div>
 
         <div flex="~ col 1" style={{ 'min-width': 0 }}>
-          <Progress.Root value={value()} min={0} max={total()} flex="~ col gap-1.5">
-            {/* Header row: pulse + status + counter */}
+          <Progress.Root value={value()} min={0} max={max()} flex="~ col gap-1.5">
+            {/* Status row: pulse + crossfading status text */}
             <div flex="~ items-center gap-2" h="4" style={{ position: 'relative' }}>
               <div
                 w="1.5"
@@ -137,8 +164,6 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
                 class="animate-pulse"
                 style={{ 'flex-shrink': 0 }}
               />
-
-              {/* Status slot — two children overlap during crossfade */}
               <div flex="~ 1" style={{ position: 'relative', 'min-width': 0 }}>
                 <Show when={previousStatus()}>
                   <Progress.Label
@@ -167,16 +192,9 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
                   {shownStatus() ?? '\u00a0'}
                 </Progress.Label>
               </div>
-
-              <Progress.ValueText
-                text="xs dark-text-tertiary tabular-nums"
-                style={{ 'flex-shrink': 0, 'font-variant-numeric': 'tabular-nums' }}
-              >
-                {valueText()}
-              </Progress.ValueText>
             </div>
 
-            {/* Linear bar */}
+            {/* Linear bar — no fraction text shown alongside */}
             <Progress.Track
               style={{
                 height: '3px',
@@ -192,7 +210,7 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
                   'background-image':
                     'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))',
                   'box-shadow': '0 0 8px rgba(0,255,255,0.45)',
-                  transition: 'width 240ms cubic-bezier(0.4, 0, 0.2, 1)',
+                  transition: `width ${FILL_TRANSITION_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
                 }}
               />
             </Progress.Track>

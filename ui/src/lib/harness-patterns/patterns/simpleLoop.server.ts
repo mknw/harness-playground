@@ -301,6 +301,7 @@ export function simpleLoop<T extends SimpleLoopData>(
   return {
     name: 'simpleLoop',
     fn,
-    config: resolved
+    config: resolved,
+    estimateTurns: (s) => config?.maxTurns ?? s.maxToolTurns
   }
 }

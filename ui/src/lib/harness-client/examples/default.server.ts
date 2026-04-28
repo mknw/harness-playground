@@ -41,11 +41,13 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     patternId: "neo4j-query",
     schema,
     liveEvents: true,
+    rememberPriorTurns: false,
   });
 
   const webPattern = simpleLoop<SessionData>(webController, webTools, {
     patternId: "web-search",
     liveEvents: true,
+    rememberPriorTurns: false,
   });
 
   const codePattern = actorCritic<SessionData>(

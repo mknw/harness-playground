@@ -235,6 +235,7 @@ export function actorCritic<T extends ActorCriticData>(
   return {
     name: 'actorCritic',
     fn,
-    config: resolved
+    config: resolved,
+    estimateTurns: (s) => config?.maxRetries ?? s.maxRetries
   }
 }

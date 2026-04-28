@@ -82,6 +82,9 @@ export function parallel<T extends Record<string, unknown>>(
         return scope
       }
     },
-    config: resolved
+    config: resolved,
+    // Branches run concurrently; user-perceived duration tracks the longest one.
+    estimateTurns: (s) =>
+      Math.max(...patterns.map((p) => p.estimateTurns?.(s) ?? 1))
   }
 }

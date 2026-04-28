@@ -90,6 +90,9 @@ export function hook<T extends Record<string, unknown>>(
         return scope
       }
     },
-    config: resolved
+    config: resolved,
+    // Background hooks don't add perceived turns; sync hooks delegate to child.
+    estimateTurns: (s) =>
+      config.background ? 0 : pattern.estimateTurns?.(s) ?? 1
   }
 }

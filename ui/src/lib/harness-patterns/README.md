@@ -2,6 +2,23 @@
 
 Functional, composable framework for agentic tool execution.
 
+> **Status:** this directory is the **testbed** for the harness-patterns
+> library. The kg-agent repo serves as both consumer and proving ground —
+> the library is intended to be extracted as a standalone npm package once
+> the core API has been validated across enough use cases (the agents under
+> `harness-client/examples/`).
+>
+> Library boundary rules — keep them strict so extraction stays cheap:
+> 1. `harness-patterns/` MUST NOT import from `harness-client/`, `components/`,
+>    or any other consumer.
+> 2. Pattern primitives are framework-neutral — no SolidJS, no UI types.
+> 3. Anything that depends on runtime settings goes through
+>    `settings-context.server.ts` (AsyncLocalStorage), not function
+>    parameters.
+> 4. UI display logic (e.g. `useChainProgress`) lives in the consumer, not
+>    here. The library exposes neutral primitives like
+>    `ConfiguredPattern.estimateTurns` that consumers can build on.
+
 ## Table of Contents
 
 - [Architecture Overview](#architecture-overview)

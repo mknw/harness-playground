@@ -1,32 +1,52 @@
 /**
- * useChainProgress — derives a "current/total" progress view from a stream of
- * harness `ContextEvent`s arriving over SSE.
+ * useChainProgress — derives a progress view from a stream of harness
+ * `ContextEvent`s arriving over SSE.
  *
- * Total grows monotonically as `pattern_enter` events arrive; if a pattern
- * exposes `maxTurns` (simpleLoop / actorCritic) it contributes `maxTurns`,
- * otherwise it contributes 1. Wrapper patterns (routes, withApproval, …) are
- * skipped — when a pattern_enter is immediately followed by another
- * pattern_enter without intermediate work, the first is treated as a wrapper.
+ * Model
+ * -----
+ * The harness stamps an upfront `chainTurnEstimate` on the initial
+ * `user_message` event (a worst-case projection summed across the chain's
+ * top-level patterns — `routes` / `parallel` use the longest branch). This
+ * hook reads that as the bar's stable denominator for the whole turn — it
+ * is never grown by subsequent events.
  *
- * Current advances on `controller_action` (per-turn for loops) and on
- * non-loop content events (router/synthesizer assistant_message, etc.).
+ * `currentTurn` advances on:
+ *   - `controller_action` (per-turn for loops)
+ *   - `assistant_message` from a non-final pattern (router, synthesizer)
+ *   - leaf `pattern_exit` (no-op leaf advances)
  *
- * The hook is purely UI display logic — kept out of `harness-patterns/` so
- * the library can stay a neutral primitives package.
+ * Status text is whatever the latest `controller_action.action.status` /
+ * `assistant_message` preview / `tool_call` name reports — `LiveProgressBar`
+ * crossfades between consecutive values.
+ *
+ * On `finish()`, `currentTurn` snaps to `maxProjection` so the bar smoothly
+ * fills to 100% even if the chosen route was shorter than the worst case.
+ *
+ * Fallback path: if `chainTurnEstimate` is missing (older sessions or a
+ * pattern without `estimateTurns`), the hook grows `pathProjection` from
+ * arriving `pattern_enter` events as it did before.
+ *
+ * Library boundary: pure UI logic — kept out of `harness-patterns/` so the
+ * library can be extracted as a standalone npm package without UI deps.
  */
 import { createSignal } from 'solid-js'
 import type { ContextEvent } from '~/lib/harness-patterns'
 
 export interface ChainProgressSnapshot {
   currentTurn: number
-  totalTurns: number
+  /** Bar's stable denominator — set once from `chainTurnEstimate`. */
+  maxProjection: number
+  /** Same as `maxProjection` once the seed arrives; used as the bar value
+   *  scale so the fill rate matches the upfront projection. */
+  pathProjection: number
   status: string | null
   done: boolean
 }
 
 const empty = (): ChainProgressSnapshot => ({
   currentTurn: 0,
-  totalTurns: 0,
+  maxProjection: 0,
+  pathProjection: 0,
   status: null,
   done: false,
 })
@@ -43,138 +63,166 @@ const firstLine = (s: string): string => {
 
 export interface ChainProgressController {
   snapshot: () => ChainProgressSnapshot
-  /** Apply one new event from the SSE stream. */
   ingest: (event: ContextEvent) => void
-  /** Mark the chain finished — bar can fade out. */
   finish: () => void
-  /** Reset for a new turn. */
   reset: () => void
 }
 
 export function createChainProgress(): ChainProgressController {
   const [snapshot, setSnapshot] = createSignal<ChainProgressSnapshot>(empty())
 
-  // A pending pattern_enter is held until we see whether the next event is
-  // another pattern_enter (wrapper — discard) or content (commit).
-  let pendingEnter: { contribution: number; patternId: string } | null = null
+  // Track which patterns we've already advanced for so a stream of
+  // assistant_messages from the same pattern doesn't double-count.
   let advancedForPattern: string | null = null
-  // Loop patterns whose contribution we've already upgraded from 1 to
-  // their effective `maxTurns` based on a controller_action arriving.
-  const upgradedLoops = new Set<string>()
+  // Fallback (no seed): a pending pattern_enter is held until the next event
+  // tells us whether it was a wrapper (discard) or leaf (commit).
+  let pendingEnter: { contribution: number; patternId: string } | null = null
+  let seeded = false
 
-  const flushPendingEnter = () => {
-    if (!pendingEnter) return
+  /** Single-shot snapshot mutator — every ingest path applies one update so
+   *  Solid only schedules one downstream re-run per event. */
+  const update = (
+    fn: (prev: ChainProgressSnapshot) => Partial<ChainProgressSnapshot>
+  ) => setSnapshot((prev) => ({ ...prev, ...fn(prev) }))
+
+  /** Compute pathProjection delta from a flushed pending enter (fallback path). */
+  const flushPending = (
+    prev: ChainProgressSnapshot
+  ): { pathProjection: number } | null => {
+    if (seeded || !pendingEnter) {
+      pendingEnter = null
+      return null
+    }
     const contrib = pendingEnter.contribution
     pendingEnter = null
-    setSnapshot((prev) => ({ ...prev, totalTurns: prev.totalTurns + contrib }))
-  }
-
-  const advanceCurrent = (status: string | null) => {
-    setSnapshot((prev) => ({
-      ...prev,
-      currentTurn: Math.min(prev.currentTurn + 1, prev.totalTurns),
-      status: status ?? prev.status,
-    }))
-  }
-
-  const setStatus = (status: string) => {
-    setSnapshot((prev) => ({ ...prev, status }))
+    return { pathProjection: prev.pathProjection + contrib }
   }
 
   return {
     snapshot,
 
     reset() {
-      pendingEnter = null
       advancedForPattern = null
-      upgradedLoops.clear()
+      pendingEnter = null
+      seeded = false
       setSnapshot(empty())
     },
 
     finish() {
-      flushPendingEnter()
-      setSnapshot((prev) => ({ ...prev, done: true }))
+      update((prev) => {
+        const flushed = flushPending(prev)
+        return {
+          ...(flushed ?? {}),
+          // Snap current to maxProjection so the bar fills to 100% smoothly.
+          currentTurn: prev.maxProjection || (flushed?.pathProjection ?? prev.pathProjection),
+          done: true,
+        }
+      })
     },
 
     ingest(event) {
       switch (event.type) {
+        case 'user_message': {
+          const data = event.data as { chainTurnEstimate?: number }
+          const est = data.chainTurnEstimate
+          if (typeof est === 'number' && est > 0) {
+            seeded = true
+            update(() => ({ maxProjection: est, pathProjection: est }))
+          }
+          break
+        }
+
         case 'pattern_enter': {
-          // A new pattern_enter discards a previously-pending one (wrapper case).
+          if (seeded) break
           const data = event.data as { pattern?: string; maxTurns?: number }
-          const contribution = typeof data.maxTurns === 'number' && data.maxTurns > 0 ? data.maxTurns : 1
+          const contribution =
+            typeof data.maxTurns === 'number' && data.maxTurns > 0 ? data.maxTurns : 1
+          // Fallback path: replace any pending enter — wrappers
+          // (routes, withApproval) emit an enter immediately followed by
+          // their child's, and the child's contribution should win.
           pendingEnter = { contribution, patternId: event.patternId }
           advancedForPattern = null
           break
         }
 
         case 'controller_action': {
-          flushPendingEnter()
           const data = event.data as {
             action?: { status?: string }
             maxTurns?: number
           }
-          // Loops emit `maxTurns` on every controller_action. The first time
-          // we see it for a given patternId, upgrade that pattern's
-          // contribution from the default 1 to its effective maxTurns.
-          if (
-            typeof data.maxTurns === 'number' &&
-            data.maxTurns > 1 &&
-            !upgradedLoops.has(event.patternId)
-          ) {
-            upgradedLoops.add(event.patternId)
-            const upgrade = data.maxTurns - 1
-            setSnapshot((prev) => ({ ...prev, totalTurns: prev.totalTurns + upgrade }))
-          }
           const status = data.action?.status ? truncate(data.action.status) : null
-          advanceCurrent(status)
+          update((prev) => {
+            const flushed = flushPending(prev)
+            const path = flushed?.pathProjection ?? prev.pathProjection
+            return {
+              currentTurn: Math.min(prev.currentTurn + 1, prev.maxProjection || path),
+              pathProjection: path,
+              status: status ?? prev.status,
+            }
+          })
           advancedForPattern = event.patternId
           break
         }
 
         case 'assistant_message': {
-          // Mid-chain assistant message (router decision, synthesizer output).
-          flushPendingEnter()
           const content = (event.data as { content?: string }).content ?? ''
           const preview = truncate(firstLine(content.trim()))
-          // Only advance once per pattern so a streamed/partial assistant message
-          // doesn't double-count.
           if (advancedForPattern !== event.patternId) {
-            advanceCurrent(preview || null)
+            update((prev) => {
+              const flushed = flushPending(prev)
+              const path = flushed?.pathProjection ?? prev.pathProjection
+              return {
+                currentTurn: Math.min(prev.currentTurn + 1, prev.maxProjection || path),
+                pathProjection: path,
+                status: preview || prev.status,
+              }
+            })
             advancedForPattern = event.patternId
           } else if (preview) {
-            setStatus(preview)
+            update(() => ({ status: preview }))
           }
           break
         }
 
         case 'tool_call': {
-          // Tool calls don't advance the bar (controller_action already did)
-          // but we surface a friendly status while the call is in flight.
-          flushPendingEnter()
           const tool = (event.data as { tool?: string }).tool ?? 'tool'
-          setStatus(`Calling ${tool}…`)
+          update((prev) => {
+            const flushed = flushPending(prev)
+            return {
+              ...(flushed ?? {}),
+              status: `Calling ${tool}…`,
+            }
+          })
           break
         }
 
         case 'pattern_exit': {
-          // Exit without intermediate content (e.g., a no-op pattern) — count
-          // the pending enter so the bar still advances.
-          if (pendingEnter && pendingEnter.patternId === event.patternId) {
-            flushPendingEnter()
-            advanceCurrent(null)
+          if (!seeded && pendingEnter && pendingEnter.patternId === event.patternId) {
+            update((prev) => {
+              const flushed = flushPending(prev)
+              const path = flushed?.pathProjection ?? prev.pathProjection
+              return {
+                currentTurn: Math.min(prev.currentTurn + 1, prev.maxProjection || path),
+                pathProjection: path,
+              }
+            })
           }
           break
         }
 
         case 'error': {
-          flushPendingEnter()
           const err = (event.data as { error?: string }).error ?? 'error'
-          setStatus(truncate(err))
+          update((prev) => {
+            const flushed = flushPending(prev)
+            return {
+              ...(flushed ?? {}),
+              status: truncate(err),
+            }
+          })
           break
         }
 
         default:
-          // Ignore other event types (user_message, tool_result, etc.).
           break
       }
     },

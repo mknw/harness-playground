@@ -389,11 +389,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             <LiveProgressBar
               status={progress.snapshot().status}
               current={progress.snapshot().currentTurn}
-              total={progress.snapshot().totalTurns}
+              pathProjection={progress.snapshot().pathProjection}
+              maxProjection={progress.snapshot().maxProjection}
               visible={
                 isProcessing() &&
                 !progress.snapshot().done &&
-                progress.snapshot().totalTurns > 0
+                progress.snapshot().maxProjection > 0
               }
             />
           )}

@@ -13,7 +13,9 @@ import type {
   HarnessResult,
   UnifiedContext,
   ConfiguredPattern,
-  AssistantMessageEventData
+  AssistantMessageEventData,
+  UserMessageEventData,
+  TurnEstimateSettings
 } from './types'
 import {
   createContext,
@@ -23,8 +25,46 @@ import {
   generateId
 } from './context.server'
 import { runWithLiveListener } from './live-event-context.server'
+import { getRequestSettings } from '../settings-context.server'
 
 assertServerOnImport()
+
+/**
+ * Sum each top-level pattern's `estimateTurns` projection. Patterns that
+ * don't implement `estimateTurns` contribute 1. Used to seed UI progress
+ * indicators with an upfront chain-wide projection.
+ */
+function estimateChainTurns<T>(
+  patterns: ConfiguredPattern<T>[],
+  settings: TurnEstimateSettings
+): number {
+  return patterns.reduce(
+    (sum, p) => sum + (p.estimateTurns?.(settings) ?? 1),
+    0
+  )
+}
+
+function turnEstimateSettings(): TurnEstimateSettings {
+  const s = getRequestSettings()
+  return { maxToolTurns: s.maxToolTurns, maxRetries: s.maxRetries }
+}
+
+/** Stamp `chainTurnEstimate` on the most recent user_message event in-place. */
+function stampChainEstimate<T>(
+  ctx: UnifiedContext<T>,
+  patterns: ConfiguredPattern<T>[]
+): void {
+  let userMsg: ContextEvent | undefined
+  for (let i = ctx.events.length - 1; i >= 0; i--) {
+    if (ctx.events[i].type === 'user_message') {
+      userMsg = ctx.events[i]
+      break
+    }
+  }
+  if (!userMsg) return
+  const data = userMsg.data as UserMessageEventData
+  data.chainTurnEstimate = estimateChainTurns(patterns, turnEstimateSettings())
+}
 
 export interface HarnessData {
   response?: string
@@ -62,6 +102,15 @@ export function harness<T extends HarnessData & Record<string, unknown>>(
 
     // Create UnifiedContext
     const ctx = createContext<T>(input, initialData as T, sessionId)
+
+    // Project total chain turns upfront so progress UIs can seed themselves
+    // before the first pattern_enter arrives.
+    stampChainEstimate(ctx, patterns)
+
+    // Emit the initial user_message live so consumers (e.g. SSE listeners)
+    // see `chainTurnEstimate` before any pattern runs.
+    const initial = ctx.events[ctx.events.length - 1]
+    if (initial?.type === 'user_message' && onEvent) onEvent(initial)
 
     try {
       // Execute patterns using chain inside a live-event frame so that any
@@ -223,6 +272,14 @@ export async function continueSession<T extends HarnessData & Record<string, unk
     patternId: 'harness',
     data: { content: newInput }
   })
+
+  // Re-project chain turns for this turn — settings or pattern selection may
+  // have changed between turns.
+  stampChainEstimate(ctx, patterns)
+
+  // Emit the new user_message live so consumers see the fresh estimate.
+  const continuedMsg = ctx.events[ctx.events.length - 1]
+  if (continuedMsg?.type === 'user_message' && onEvent) onEvent(continuedMsg)
 
   try {
     // Execute patterns

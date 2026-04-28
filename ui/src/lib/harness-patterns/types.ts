@@ -251,11 +251,24 @@ export type ScopedPattern<T> = (
   view: EventView
 ) => Promise<PatternScope<T>>
 
+/** Settings consulted by `estimateTurns` — patterns whose effective `maxTurns`
+ *  / `maxRetries` come from runtime settings need these to project a cost. */
+export interface TurnEstimateSettings {
+  maxToolTurns: number
+  maxRetries: number
+}
+
 /** Configured pattern with metadata for chain/harness */
 export interface ConfiguredPattern<T> {
   name: string
   fn: ScopedPattern<T>
   config: PatternConfig
+  /** Optional projection of how many "turns" this pattern will produce.
+   *  Used by `harness()` to stamp `chainTurnEstimate` on the initial
+   *  `user_message` event so progress consumers can size themselves up front.
+   *  Wrapper patterns delegate to their child(ren). Returning `undefined` is
+   *  equivalent to a contribution of 1. */
+  estimateTurns?: (settings: TurnEstimateSettings) => number
 }
 
 // ============================================================================
@@ -374,6 +387,10 @@ export interface SynthesizerData {
 /** Data payload for user_message event */
 export interface UserMessageEventData {
   content: string
+  /** Best-effort estimate of total chain turns, set by `harness()` from the
+   *  composed patterns' `estimateTurns` projections. UI progress bars use
+   *  this as the initial denominator before any pattern_enter arrives. */
+  chainTurnEstimate?: number
 }
 
 /** Data payload for assistant_message event */
