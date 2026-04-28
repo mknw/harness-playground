@@ -225,6 +225,54 @@ describe('runChain dedup', () => {
     expect(seen).toContain('pattern_exit')
   })
 
+  it('routes emits child pattern_enter/exit live when liveEvents is on', async () => {
+    const { runWithLiveListener } = await import(
+      '../../../lib/harness-patterns/live-event-context.server'
+    )
+    const { runChain } = await import('../../../lib/harness-patterns/patterns/chain.server')
+    const { routes } = await import('../../../lib/harness-patterns/patterns/router.server')
+    const { createContext, trackEvent } = await import(
+      '../../../lib/harness-patterns/context.server'
+    )
+
+    // Inner pattern has maxTurns set so its pattern_enter carries a payload
+    const inner = {
+      name: 'inner-loop',
+      fn: async (scope: import('../../../lib/harness-patterns/types').PatternScope<Record<string, unknown>>) => {
+        trackEvent(scope, 'tool_result', { tool: 'x', result: 1, success: true }, true)
+        return scope
+      },
+      config: {
+        patternId: 'inner-loop',
+        commitStrategy: 'always' as const,
+        trackHistory: true as const,
+        maxTurns: 5
+      }
+    }
+
+    const routesPattern = routes({ inner }, { liveEvents: true })
+
+    const ctx = createContext('hi', { route: 'inner' } as Record<string, unknown>)
+
+    const events: import('../../../lib/harness-patterns/types').ContextEvent[] = []
+    await runWithLiveListener(
+      (e) => events.push(e),
+      () => runChain(ctx, [routesPattern])
+    )
+
+    // Find the live-emitted child pattern_enter — it must carry maxTurns
+    const childEnter = events.find(
+      (e) => e.type === 'pattern_enter' && (e.data as { pattern?: string }).pattern === 'inner-loop'
+    )
+    expect(childEnter).toBeDefined()
+    expect((childEnter!.data as { maxTurns?: number }).maxTurns).toBe(5)
+
+    const childExit = events.find(
+      (e) => e.type === 'pattern_exit' && e.patternId === 'inner-loop'
+    )
+    expect(childExit).toBeDefined()
+  })
+
   it('emits in-flight events before the pattern finishes', async () => {
     const { runWithLiveListener } = await import(
       '../../../lib/harness-patterns/live-event-context.server'

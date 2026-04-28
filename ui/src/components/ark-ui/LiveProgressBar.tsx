@@ -1,26 +1,30 @@
 /**
  * LiveProgressBar
  *
- * Transient progress indicator surfaced while a harness pattern is in flight.
- * Driven by live `controller_action` and `pattern_enter` events streamed from
- * the harness via the SSE endpoint.
+ * Inline status bar surfaced while a harness chain is in flight.
  *
- * Behavior:
- *  - `pattern_enter` resets the bar; `data.maxTurns` (when present) sets the
- *    denominator. Defaults to a 5-step bar.
- *  - Each `controller_action` advances the bar by 1/maxTurns and crossfades
- *    the new `action.status` over the previous one.
- *  - When `visible` flips to false, the bar fills to 100%, fades out, and
- *    unmounts so the assistant message can take its place.
+ * Layout (top → bottom):
+ *   [pulse dot]  status text          current/total
+ *   [───────────────────────────────────────────────] linear progress
+ *
+ * The status string crossfades when it changes; `current/total` updates via
+ * the `Progress.ValueText` slot. When `visible` flips false the bar fills to
+ * 100%, fades out, and unmounts so the assistant message can take its place.
+ *
+ * Built from Ark UI's `Progress` primitives (Root/Track/Range/Label/ValueText)
+ * with UnoCSS attributify for layout. Runtime visual state (gradient fill,
+ * crossfade, exit) lives in inline styles because UnoCSS attributify doesn't
+ * support per-frame transitions.
  */
 import { Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
 import { Progress } from '@ark-ui/solid/progress'
 
 export interface LiveProgressBarProps {
-  /** Most recent status string from a controller (already extracted upstream). */
   status: string | null
-  /** 0..1 progress fraction. */
-  progress: number
+  /** Cumulative turn position (1-based when active, 0 before first event). */
+  current: number
+  /** Best-effort chain total. May grow as pattern_enter events arrive. */
+  total: number
   /** Whether the bar should be shown. Flipping to false plays the exit animation. */
   visible: boolean
 }
@@ -29,12 +33,8 @@ const STATUS_FADE_MS = 220
 const EXIT_FADE_MS = 360
 
 export const LiveProgressBar = (props: LiveProgressBarProps) => {
-  // Two slots so the previous status crossfades out as the new one fades in.
   const [shownStatus, setShownStatus] = createSignal<string | null>(null)
   const [previousStatus, setPreviousStatus] = createSignal<string | null>(null)
-
-  // Animated mount/unmount state — `mounted` controls render, `entering` toggles
-  // the CSS transitions for both enter and exit.
   const [mounted, setMounted] = createSignal(false)
   const [entering, setEntering] = createSignal(false)
 
@@ -46,7 +46,7 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
     if (statusTimer !== undefined) clearTimeout(statusTimer)
   })
 
-  // Crossfade when the status string changes (also covers the initial value).
+  // Crossfade when the status string changes.
   createEffect(
     on(
       () => props.status,
@@ -64,7 +64,6 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
   )
 
   // Mount/unmount with a delayed unmount so the CSS exit animation completes.
-  // (Picks up the initial `visible` value too — no `defer: true`.)
   createEffect(
     on(
       () => props.visible,
@@ -75,7 +74,6 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
         }
         if (next) {
           setMounted(true)
-          // Allow the next paint before flipping `entering` so the transition runs.
           requestAnimationFrame(() => setEntering(true))
         } else {
           setEntering(false)
@@ -88,18 +86,20 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
     )
   )
 
-  // Bar value: 0–100. When exiting, animate to 100 to give a "completed" feel.
+  const total = createMemo(() => Math.max(1, props.total))
   const value = createMemo(() => {
-    if (!props.visible) return 100
-    return Math.max(0, Math.min(100, Math.round(props.progress * 100)))
+    if (!props.visible) return total()
+    return Math.max(0, Math.min(props.current, total()))
   })
+  const percent = createMemo(() => Math.round((value() / total()) * 100))
+  const valueText = createMemo(() => `${value()}/${total()}`)
 
   return (
     <Show when={mounted()}>
       <div
-        flex="~ col gap-1"
+        flex="~ col gap-1.5"
         px="4"
-        py="2"
+        py="2.5"
         border="t dark-border-primary"
         bg="dark-bg-tertiary/50"
         style={{
@@ -108,47 +108,62 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
           transition: `opacity ${EXIT_FADE_MS}ms ease, transform ${EXIT_FADE_MS}ms ease`,
         }}
       >
-        {/* Status line — two slots overlap during the crossfade */}
-        <div
-          flex="~ items-center gap-2"
-          h="4"
-          style={{ position: 'relative' }}
+        <Progress.Root
+          value={value()}
+          min={0}
+          max={total()}
+          flex="~ col gap-1.5"
         >
-          <div
-            w="1.5"
-            h="1.5"
-            rounded="full"
-            bg="neon-cyan"
-            class="animate-pulse"
-            style={{ 'flex-shrink': 0 }}
-          />
-          <Show when={previousStatus()}>
-            <span
-              text="xs dark-text-tertiary"
-              style={{
-                position: 'absolute',
-                left: '14px',
-                opacity: 0,
-                transition: `opacity ${STATUS_FADE_MS}ms ease`,
-                'pointer-events': 'none',
-              }}
-            >
-              {previousStatus()}
-            </span>
-          </Show>
-          <span
-            text="xs dark-text-secondary"
-            style={{
-              opacity: shownStatus() ? 1 : 0,
-              transition: `opacity ${STATUS_FADE_MS}ms ease`,
-            }}
-          >
-            {shownStatus() ?? '\u00a0'}
-          </span>
-        </div>
+          {/* Header row: pulse + status + counter */}
+          <div flex="~ items-center gap-2" h="4" style={{ position: 'relative' }}>
+            <div
+              w="1.5"
+              h="1.5"
+              rounded="full"
+              bg="neon-cyan"
+              class="animate-pulse"
+              style={{ 'flex-shrink': 0 }}
+            />
 
-        {/* Linear progress bar */}
-        <Progress.Root value={value()} max={100} min={0}>
+            {/* Status slot — two children overlap during crossfade */}
+            <div flex="~ 1" style={{ position: 'relative', 'min-width': 0 }}>
+              <Show when={previousStatus()}>
+                <Progress.Label
+                  text="xs dark-text-tertiary"
+                  truncate=""
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    opacity: 0,
+                    transition: `opacity ${STATUS_FADE_MS}ms ease`,
+                    'pointer-events': 'none',
+                  }}
+                >
+                  {previousStatus()}
+                </Progress.Label>
+              </Show>
+              <Progress.Label
+                text="xs dark-text-secondary"
+                truncate=""
+                style={{
+                  display: 'block',
+                  opacity: shownStatus() ? 1 : 0,
+                  transition: `opacity ${STATUS_FADE_MS}ms ease`,
+                }}
+              >
+                {shownStatus() ?? '\u00a0'}
+              </Progress.Label>
+            </div>
+
+            <Progress.ValueText
+              text="xs dark-text-tertiary tabular-nums"
+              style={{ 'flex-shrink': 0, 'font-variant-numeric': 'tabular-nums' }}
+            >
+              {valueText()}
+            </Progress.ValueText>
+          </div>
+
+          {/* Linear bar */}
           <Progress.Track
             style={{
               height: '3px',
@@ -160,6 +175,7 @@ export const LiveProgressBar = (props: LiveProgressBarProps) => {
             <Progress.Range
               style={{
                 height: '100%',
+                width: `${percent()}%`,
                 'background-image':
                   'linear-gradient(90deg, rgba(0,255,255,0.85), rgba(157,0,255,0.85))',
                 'box-shadow': '0 0 8px rgba(0,255,255,0.45)',

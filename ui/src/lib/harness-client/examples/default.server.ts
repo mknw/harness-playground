@@ -40,10 +40,12 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   const neo4jPattern = simpleLoop<SessionData>(neo4jController, tools.neo4j ?? [], {
     patternId: "neo4j-query",
     schema,
+    liveEvents: true,
   });
 
   const webPattern = simpleLoop<SessionData>(webController, webTools, {
     patternId: "web-search",
+    liveEvents: true,
   });
 
   const codePattern = actorCritic<SessionData>(
@@ -52,24 +54,32 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     tools.all,
     {
       patternId: "code-mode",
+      liveEvents: true,
     },
   );
 
-  const routerPattern = router<SessionData>({
-    neo4j: "Database queries and graph operations",
-    web_search: "Web lookups and information retrieval",
-    code_mode: "Multi-tool script composition",
-  });
+  const routerPattern = router<SessionData>(
+    {
+      neo4j: "Database queries and graph operations",
+      web_search: "Web lookups and information retrieval",
+      code_mode: "Multi-tool script composition",
+    },
+    { liveEvents: true },
+  );
 
-  const routesPattern = routes<SessionData>({
-    neo4j: neo4jPattern,
-    web_search: webPattern,
-    code_mode: codePattern,
-  });
+  const routesPattern = routes<SessionData>(
+    {
+      neo4j: neo4jPattern,
+      web_search: webPattern,
+      code_mode: codePattern,
+    },
+    { liveEvents: true },
+  );
 
   const responseSynth = synthesizer<SessionData>({
     mode: "thread",
     patternId: "response-synth",
+    liveEvents: true,
   });
 
   return [routerPattern, routesPattern, responseSynth];

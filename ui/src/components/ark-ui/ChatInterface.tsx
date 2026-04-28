@@ -21,6 +21,7 @@ import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
 import { AgentSelector } from './AgentSelector'
 import { LiveProgressBar } from './LiveProgressBar'
+import { createChainProgress } from './useChainProgress'
 import { approveAction, rejectAction, clearSession, extractGraphFromResult, extractGraphElements } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
 import type { GraphElement } from './SupportPanel'
@@ -52,16 +53,10 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const [isProcessing, setIsProcessing] = createSignal(false)
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
   const [selectedAgent, setSelectedAgent] = createSignal('default')
-  const [currentStatus, setCurrentStatus] = createSignal<string | null>(null)
-  const [progressMaxTurns, setProgressMaxTurns] = createSignal<number>(5)
-  const [progressTurn, setProgressTurn] = createSignal<number>(0)
+  const progress = createChainProgress()
   // Cursor into ctx.events — tracks how many events were sent last turn so we
   // emit only the delta (new events) rather than the full accumulated history
   let prevEventCount = 0
-
-  const resetProgress = () => {
-    setProgressTurn(0)
-  }
 
   onCleanup(() => {
     // Clean up session when component unmounts
@@ -105,6 +100,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     }
     setMessages([...messages(), userMessage])
     setIsProcessing(true)
+    progress.reset()
 
     try {
       // Stream events via SSE endpoint for real-time updates
@@ -178,25 +174,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                 }
               }
 
-              // Reset progress bar at the start of each pattern; pick up
-              // maxTurns when surfaced (simpleLoop / actorCritic patterns).
-              if (evt.type === 'pattern_enter') {
-                const meta = evt.data as { maxTurns?: number }
-                if (typeof meta.maxTurns === 'number' && meta.maxTurns > 0) {
-                  setProgressMaxTurns(meta.maxTurns)
-                }
-                resetProgress()
-              }
-
-              // Each controller_action advances the bar by one turn and
-              // surfaces its status string for the live indicator.
-              if (evt.type === 'controller_action') {
-                const actionData = evt.data as { action?: { status?: string } }
-                if (actionData.action?.status) {
-                  setCurrentStatus(actionData.action.status)
-                }
-                setProgressTurn((n) => Math.min(n + 1, progressMaxTurns()))
-              }
+              // Feed every event into the chain-progress hook — it derives
+              // running current/total/status across the whole chain.
+              progress.ingest(evt)
 
               // Convert error events to inline chat messages
               if (evt.type === 'error') {
@@ -225,9 +205,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         }
       }
 
-      // Clear transient status
-      setCurrentStatus(null)
-      resetProgress()
+      // Mark progress complete — bar fills, fades, and unmounts.
+      progress.finish()
 
       // Update event count cursor and emit final context
       if (finalResult?.context) {
@@ -265,7 +244,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         content: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date()
       }
-      setCurrentStatus(null)
+      progress.finish()
       setMessages([...messages(), errorMessage])
     } finally {
       setIsProcessing(false)
@@ -406,12 +385,18 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           onHighlightEntities={props.onHighlightEntities}
         />
 
-        {/* Live progress: status text crossfades, bar fills 1/maxTurns per turn,
-            then animates out before the assistant message lands. */}
+        {/* Live progress: status text crossfades, bar fills cumulatively across
+            the chain (router + loop turns + synthesizer), then animates out
+            before the assistant message lands. */}
         <LiveProgressBar
-          status={currentStatus()}
-          progress={progressTurn() / progressMaxTurns()}
-          visible={isProcessing() && currentStatus() !== null}
+          status={progress.snapshot().status}
+          current={progress.snapshot().currentTurn}
+          total={progress.snapshot().totalTurns}
+          visible={
+            isProcessing() &&
+            !progress.snapshot().done &&
+            progress.snapshot().totalTurns > 0
+          }
         />
 
         {/* Input */}

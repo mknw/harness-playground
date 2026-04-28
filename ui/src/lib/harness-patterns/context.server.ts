@@ -303,12 +303,16 @@ export function getDefaultCommitStrategy(patternType: string): CommitStrategy {
   return DEFAULT_COMMIT_STRATEGY[patternType] ?? 'always'
 }
 
-/** Merge pattern config with defaults */
+/** Merge pattern config with defaults.
+ *  Spreads the caller's config first so unrecognised fields (e.g. pattern-specific
+ *  options like `maxTurns`, plus opt-in flags like `liveEvents`) are preserved
+ *  after defaults are applied for the well-known base fields. */
 export function resolveConfig(
   patternType: string,
   config?: PatternConfig
 ): Required<Pick<PatternConfig, 'patternId' | 'commitStrategy' | 'trackHistory' | 'errorSeverity'>> & PatternConfig {
   return {
+    ...config,
     patternId: config?.patternId ?? generateId(patternType),
     commitStrategy: config?.commitStrategy ?? getDefaultCommitStrategy(patternType),
     trackHistory: config?.trackHistory ?? getDefaultTrackHistory(patternType),

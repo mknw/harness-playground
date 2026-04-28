@@ -10,6 +10,7 @@ import type {
   PatternConfig
 } from '../types'
 import { trackEvent, resolveConfig, createEvent } from '../context.server'
+import { emitLive } from '../live-event-context.server'
 
 assertServerOnImport()
 
@@ -50,13 +51,22 @@ export function parallel<T extends Record<string, unknown>>(
           )
         )
 
-        // Merge fulfilled events; log rejected branches
+        // Merge fulfilled events; log rejected branches.
+        // Branch boundary events also fire live so progress UIs see them.
         for (const [i, r] of results.entries()) {
           if (r.status === 'fulfilled') {
             const branchId = patterns[i].config.patternId ?? patterns[i].name
-            scope.events.push(createEvent('pattern_enter', branchId, { pattern: patterns[i].name }))
+            const branchMaxTurns = (patterns[i].config as { maxTurns?: number }).maxTurns
+            const enterEvt = createEvent('pattern_enter', branchId, {
+              pattern: patterns[i].name,
+              ...(branchMaxTurns !== undefined ? { maxTurns: branchMaxTurns } : {})
+            })
+            scope.events.push(enterEvt)
+            emitLive(enterEvt)
             scope.events.push(...r.value.events)
-            scope.events.push(createEvent('pattern_exit', branchId, { status: 'completed' }))
+            const exitEvt = createEvent('pattern_exit', branchId, { status: 'completed' })
+            scope.events.push(exitEvt)
+            emitLive(exitEvt)
             scope.data = { ...scope.data, ...r.value.data }
           } else {
             trackEvent(scope, 'error', {
