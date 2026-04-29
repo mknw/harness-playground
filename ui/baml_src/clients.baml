@@ -242,7 +242,7 @@ client<llm> SynthesizerFallback {
 client<llm> DescribeFallback {
   provider fallback
   options {
-    strategy [GroqFast, OpenRouterGemma4, OpenAIGPT5Mini]
+    strategy [GroqFast, OpenRouterGemma4, OpenAIGPT5]
   }
 }
 
@@ -268,7 +268,7 @@ retry_policy Exponential {
   max_retries 2
   strategy {
     type exponential_backoff
-    delay_ms 500
+    delay_ms 300
     multiplier 1.5
     max_delay_ms 10000
   }

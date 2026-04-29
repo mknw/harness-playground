@@ -42,6 +42,10 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   CustomHaiku: 200_000,
   CustomOpus4: 200_000,
   CustomSonnet4: 200_000,
+  // Cerebras — separate-quota safety nets at end of each fallback chain
+  CerebrasGPT120B: 131_072,        // gpt-oss-120b
+  CerebrasZaiGLM4_7: 131_072,      // zai-glm-4.7
+  CerebrasQwen3_235B: 131_072,     // qwen-3-235b-a22b-instruct-2507
   // Local (local-client.baml, not used in chains)
   LocalGLM: 16_384,
 }

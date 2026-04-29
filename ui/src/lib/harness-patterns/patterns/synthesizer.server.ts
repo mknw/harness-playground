@@ -329,6 +329,7 @@ export function synthesizer<T extends SynthesizerData>(
   return {
     name: 'synthesizer',
     fn,
-    config: resolved
+    config: resolved,
+    estimateTurns: () => 1
   }
 }

@@ -6,6 +6,7 @@
  */
 
 import { assertServerOnImport } from './assert.server'
+import { emitLive } from './live-event-context.server'
 import type {
   UnifiedContext,
   PatternScope,
@@ -124,7 +125,9 @@ export function shouldTrack(type: EventType, trackHistory: TrackHistory): boolea
   return false
 }
 
-/** Add event to scope if it should be tracked */
+/** Add event to scope if it should be tracked.
+ *  When the current pattern has `liveEvents: true`, the event is also forwarded
+ *  to the harness `onEvent` listener immediately via `emitLive()`. */
 export function trackEvent(
   scope: PatternScope<unknown>,
   type: EventType,
@@ -132,9 +135,10 @@ export function trackEvent(
   trackHistory: TrackHistory,
   llmCall?: LLMCallData
 ): void {
-  if (shouldTrack(type, trackHistory)) {
-    scope.events.push(createEvent(type, scope.id, data, llmCall))
-  }
+  if (!shouldTrack(type, trackHistory)) return
+  const event = createEvent(type, scope.id, data, llmCall)
+  scope.events.push(event)
+  emitLive(event)
 }
 
 // ============================================================================
@@ -197,19 +201,24 @@ function findLastIndex<T>(arr: T[], pred: (item: T) => boolean): number {
 // Pattern Lifecycle Helpers
 // ============================================================================
 
-/** Add pattern_enter event to context */
+/** Add pattern_enter event to context.
+ *  Optional `meta` is merged into the event's data (e.g. `{ maxTurns }`)
+ *  so downstream consumers (UI progress bar) can compute progress. */
 export function enterPattern<T>(
   ctx: UnifiedContext<T>,
   patternId: string,
-  patternName: string
+  patternName: string,
+  meta?: Record<string, unknown>
 ): void {
-  ctx.events.push({
+  const event: ContextEvent = {
     id: generateId('ev'),
     type: 'pattern_enter',
     ts: Date.now(),
     patternId,
-    data: { pattern: patternName }
-  })
+    data: { pattern: patternName, ...(meta ?? {}) }
+  }
+  ctx.events.push(event)
+  emitLive(event)
 }
 
 /** Add pattern_exit event to context */
@@ -217,13 +226,15 @@ export function exitPattern<T>(
   ctx: UnifiedContext<T>,
   patternId: string
 ): void {
-  ctx.events.push({
+  const event: ContextEvent = {
     id: generateId('ev'),
     type: 'pattern_exit',
     ts: Date.now(),
     patternId,
     data: { status: ctx.status, error: ctx.error }
-  })
+  }
+  ctx.events.push(event)
+  emitLive(event)
 }
 
 // ============================================================================
@@ -292,12 +303,16 @@ export function getDefaultCommitStrategy(patternType: string): CommitStrategy {
   return DEFAULT_COMMIT_STRATEGY[patternType] ?? 'always'
 }
 
-/** Merge pattern config with defaults */
+/** Merge pattern config with defaults.
+ *  Spreads the caller's config first so unrecognised fields (e.g. pattern-specific
+ *  options like `maxTurns`, plus opt-in flags like `liveEvents`) are preserved
+ *  after defaults are applied for the well-known base fields. */
 export function resolveConfig(
   patternType: string,
   config?: PatternConfig
 ): Required<Pick<PatternConfig, 'patternId' | 'commitStrategy' | 'trackHistory' | 'errorSeverity'>> & PatternConfig {
   return {
+    ...config,
     patternId: config?.patternId ?? generateId(patternType),
     commitStrategy: config?.commitStrategy ?? getDefaultCommitStrategy(patternType),
     trackHistory: config?.trackHistory ?? getDefaultTrackHistory(patternType),

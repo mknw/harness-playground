@@ -15,11 +15,13 @@
  * - Session ID per component instance
  */
 
-import { createSignal, Show, onMount, onCleanup } from 'solid-js'
+import { createSignal, onMount, onCleanup } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { ChatSidebar } from './ChatSidebar'
 import { AgentSelector } from './AgentSelector'
+import { LiveProgressBar } from './LiveProgressBar'
+import { createChainProgress } from './useChainProgress'
 import { approveAction, rejectAction, clearSession, extractGraphFromResult, extractGraphElements } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
 import type { GraphElement } from './SupportPanel'
@@ -51,7 +53,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const [isProcessing, setIsProcessing] = createSignal(false)
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
   const [selectedAgent, setSelectedAgent] = createSignal('default')
-  const [currentStatus, setCurrentStatus] = createSignal<string | null>(null)
+  const progress = createChainProgress()
   // Cursor into ctx.events — tracks how many events were sent last turn so we
   // emit only the delta (new events) rather than the full accumulated history
   let prevEventCount = 0
@@ -98,6 +100,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     }
     setMessages([...messages(), userMessage])
     setIsProcessing(true)
+    progress.reset()
 
     try {
       // Stream events via SSE endpoint for real-time updates
@@ -171,13 +174,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                 }
               }
 
-              // Extract status from controller_action events for transient display
-              if (evt.type === 'controller_action') {
-                const actionData = evt.data as { action?: { status?: string } }
-                if (actionData.action?.status) {
-                  setCurrentStatus(actionData.action.status)
-                }
-              }
+              // Feed every event into the chain-progress hook — it derives
+              // running current/total/status across the whole chain.
+              progress.ingest(evt)
 
               // Convert error events to inline chat messages
               if (evt.type === 'error') {
@@ -206,8 +205,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         }
       }
 
-      // Clear transient status
-      setCurrentStatus(null)
+      // Mark progress complete — bar fills, fades, and unmounts.
+      progress.finish()
 
       // Update event count cursor and emit final context
       if (finalResult?.context) {
@@ -245,7 +244,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         content: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date()
       }
-      setCurrentStatus(null)
+      progress.finish()
       setMessages([...messages(), errorMessage])
     } finally {
       setIsProcessing(false)
@@ -377,35 +376,29 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           </div>
         </div>
 
-        {/* Messages */}
+        {/* Messages — the live progress bar rides as a trailing slot so it
+            appears where the next assistant bubble will land, then animates
+            out as that bubble takes its place. */}
         <ChatMessages
           messages={messages()}
           onApproveWrite={handleApproveWrite}
           onRejectWrite={handleRejectWrite}
           graphEntityNames={props.graphEntityNames}
           onHighlightEntities={props.onHighlightEntities}
-        />
-
-        {/* Transient status indicator (from ControllerAction.status) */}
-        <Show when={currentStatus()}>
-          <div
-            flex="~ items-center gap-2"
-            px="4"
-            py="1.5"
-            text="xs dark-text-secondary"
-            bg="dark-bg-tertiary/50"
-            border="t dark-border-primary"
-          >
-            <div
-              w="1.5"
-              h="1.5"
-              rounded="full"
-              bg="neon-cyan"
-              class="animate-pulse"
+          trailing={() => (
+            <LiveProgressBar
+              status={progress.snapshot().status}
+              current={progress.snapshot().currentTurn}
+              pathProjection={progress.snapshot().pathProjection}
+              maxProjection={progress.snapshot().maxProjection}
+              visible={
+                isProcessing() &&
+                !progress.snapshot().done &&
+                progress.snapshot().maxProjection > 0
+              }
             />
-            {currentStatus()}
-          </div>
-        </Show>
+          )}
+        />
 
         {/* Input */}
         <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">

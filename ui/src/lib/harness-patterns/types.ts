@@ -145,6 +145,9 @@ export interface PatternConfig {
   viewConfig?: ViewConfig
   /** Error severity classification for this pattern (default varies by pattern) */
   errorSeverity?: 'recoverable' | 'irrecoverable'
+  /** Stream this pattern's events to the harness `onEvent` listener as they're
+   *  tracked, instead of buffering until commit. Default: false. */
+  liveEvents?: boolean
 }
 
 // ============================================================================
@@ -248,11 +251,24 @@ export type ScopedPattern<T> = (
   view: EventView
 ) => Promise<PatternScope<T>>
 
+/** Settings consulted by `estimateTurns` — patterns whose effective `maxTurns`
+ *  / `maxRetries` come from runtime settings need these to project a cost. */
+export interface TurnEstimateSettings {
+  maxToolTurns: number
+  maxRetries: number
+}
+
 /** Configured pattern with metadata for chain/harness */
 export interface ConfiguredPattern<T> {
   name: string
   fn: ScopedPattern<T>
   config: PatternConfig
+  /** Optional projection of how many "turns" this pattern will produce.
+   *  Used by `harness()` to stamp `chainTurnEstimate` on the initial
+   *  `user_message` event so progress consumers can size themselves up front.
+   *  Wrapper patterns delegate to their child(ren). Returning `undefined` is
+   *  equivalent to a contribution of 1. */
+  estimateTurns?: (settings: TurnEstimateSettings) => number
 }
 
 // ============================================================================
@@ -371,6 +387,10 @@ export interface SynthesizerData {
 /** Data payload for user_message event */
 export interface UserMessageEventData {
   content: string
+  /** Best-effort estimate of total chain turns, set by `harness()` from the
+   *  composed patterns' `estimateTurns` projections. UI progress bars use
+   *  this as the initial denominator before any pattern_enter arrives. */
+  chainTurnEstimate?: number
 }
 
 /** Data payload for assistant_message event */
@@ -405,6 +425,13 @@ export interface ToolResultEventData {
 /** Data payload for controller_action event */
 export interface ControllerActionEventData {
   action: import('../../../baml_client/types').ControllerAction
+  /** 0-indexed turn within this loop pass — set by simpleLoop / actorCritic. */
+  turn?: number
+  /** Effective max turns for this loop instance (post-settings resolution).
+   *  Loop patterns include this so consumers (e.g. progress UI) can size
+   *  themselves without having to read the pattern config — which doesn't
+   *  reflect runtime overrides like `settings.maxToolTurns`. */
+  maxTurns?: number
 }
 
 /** Data payload for critic_result event */
@@ -415,6 +442,9 @@ export interface CriticResultEventData {
 /** Data payload for pattern_enter event */
 export interface PatternEnterEventData {
   pattern: string
+  /** Pattern's configured maxTurns (simpleLoop/actorCritic) — used by the UI
+   *  progress bar to compute fill ratio per controller_action. */
+  maxTurns?: number
 }
 
 /** Data payload for pattern_exit event */

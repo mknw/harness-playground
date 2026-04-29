@@ -25,6 +25,7 @@ import type {
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
+import { emitLive } from '../live-event-context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit, getContextWindow } from '../token-budget.server'
@@ -183,7 +184,8 @@ export function router<T extends RouterData>(
   return {
     name: 'router',
     fn,
-    config: resolved
+    config: resolved,
+    estimateTurns: () => 1
   }
 }
 
@@ -239,19 +241,32 @@ export function routes<T extends RouterData & Record<string, unknown>>(
       const childId = pattern.config.patternId ?? pattern.name
       const childScope = createScope<T>(childId, scope.data)
 
-      scope.events.push(
-        createEvent('pattern_enter', childId, { pattern: pattern.name, route: routeName })
-      )
+      // Surface the dispatched pattern's maxTurns on its boundary event so
+      // downstream consumers (UI progress) can size their indicators.
+      const childMaxTurns = (pattern.config as { maxTurns?: number }).maxTurns
+      const enterEvent = createEvent('pattern_enter', childId, {
+        pattern: pattern.name,
+        route: routeName,
+        ...(childMaxTurns !== undefined ? { maxTurns: childMaxTurns } : {})
+      })
+      scope.events.push(enterEvent)
+      emitLive(enterEvent)
+
       const childResult = await pattern.fn(childScope, view)
       // Merge child events and data back into routes' scope
       scope.events.push(...childResult.events)
-      scope.events.push(
-        createEvent('pattern_exit', childId, { status: 'completed' })
-      )
+      const exitEvent = createEvent('pattern_exit', childId, { status: 'completed' })
+      scope.events.push(exitEvent)
+      emitLive(exitEvent)
       scope.data = childResult.data
 
       return scope
     },
-    config: resolved
+    config: resolved,
+    // Worst-case projection: route is picked at runtime, so the longest branch
+    // drives perceived progress duration. UI can refine downward once the
+    // dispatched branch's `pattern_enter` arrives.
+    estimateTurns: (s) =>
+      Math.max(...Object.values(patternMap).map((p) => p.estimateTurns?.(s) ?? 1))
   }
 }

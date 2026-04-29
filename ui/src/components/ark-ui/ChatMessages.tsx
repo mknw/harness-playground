@@ -1,7 +1,7 @@
 
 import { Collapsible } from '@ark-ui/solid/collapsible'
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
-import { For, Show, Switch, Match, createEffect, createSignal } from 'solid-js'
+import { For, Show, Switch, Match, createEffect, createSignal, type JSX } from 'solid-js'
 import type { ElementDefinition } from 'cytoscape'
 import type { ToolCallInfo } from './types'
 import { ToolCallDisplay } from './ToolCallDisplay'
@@ -36,6 +36,10 @@ interface ChatMessagesProps {
   graphEntityNames?: Map<string, string[]>
   /** Callback to highlight graph element IDs (hover/click) */
   onHighlightEntities?: (ids: string[]) => void
+  /** Optional slot rendered after the last message, inside the scroll area —
+   *  used by ChatInterface to inline the live progress bar where the next
+   *  assistant bubble would appear. */
+  trailing?: () => JSX.Element
 }
 
 // ============================================================================
@@ -386,6 +390,12 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                 </div>
               </div>
             </div>
+          </Show>
+
+          {/* Trailing slot — e.g. the live progress bar, rendered where the
+              next assistant bubble would appear. */}
+          <Show when={props.trailing}>
+            {(slot) => slot()()}
           </Show>
 
           {/* Sentinel element for auto-scroll */}

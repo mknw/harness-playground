@@ -163,11 +163,14 @@ export function simpleLoop<T extends SimpleLoopData>(
           )
           action = controllerResult.action
 
-          // Track controller action event with LLM call data
+          // Track controller action event with LLM call data.
+          // `turn` and `maxTurns` are surfaced so live consumers can size
+          // their progress indicators without reading the pattern config
+          // (which doesn't capture settings.maxToolTurns).
           trackEvent(
             scope,
             'controller_action',
-            { action } as ControllerActionEventData,
+            { action, turn, maxTurns } as ControllerActionEventData,
             resolved.trackHistory,
             controllerResult.llmCall
           )
@@ -298,6 +301,7 @@ export function simpleLoop<T extends SimpleLoopData>(
   return {
     name: 'simpleLoop',
     fn,
-    config: resolved
+    config: resolved,
+    estimateTurns: (s) => config?.maxTurns ?? s.maxToolTurns
   }
 }

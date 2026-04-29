@@ -20,6 +20,7 @@ import {
   setError,
   createEvent
 } from '../context.server'
+import { setLivePatternEnabled, wasEmittedLive } from '../live-event-context.server'
 import { createEventView } from './event-view.server'
 
 assertServerOnImport()
@@ -65,6 +66,11 @@ export async function runChain<T extends Record<string, unknown>>(
       }
 
       const patternId = pattern.config.patternId!
+      const liveEnabled = pattern.config.liveEvents === true
+
+      // Toggle live emission for this pattern's lifecycle (incl. enter/exit).
+      // Inner patterns invoked by wrappers inherit this flag automatically.
+      setLivePatternEnabled(liveEnabled)
 
       // 1. Create isolated scope for this pattern
       const scope = createScope<T>(patternId, currentData)
@@ -72,8 +78,15 @@ export async function runChain<T extends Record<string, unknown>>(
       // 2. Create view based on pattern's viewConfig (exclude self from fromLastPattern)
       const view = createEventView(ctx, pattern.config.viewConfig, patternId)
 
-      // 3. Add pattern_enter event
-      enterPattern(ctx, patternId, pattern.name)
+      // 3. Add pattern_enter event (fires live if enabled).
+      //    Surface known config fields (maxTurns) for UI progress tracking.
+      const cfg = pattern.config as PatternConfig & { maxTurns?: number }
+      enterPattern(
+        ctx,
+        patternId,
+        pattern.name,
+        cfg.maxTurns !== undefined ? { maxTurns: cfg.maxTurns } : undefined
+      )
 
       try {
         // 4. Execute pattern
@@ -83,10 +96,12 @@ export async function runChain<T extends Record<string, unknown>>(
         const beforeLen = ctx.events.length
         commitEvents(ctx, result, pattern.config.commitStrategy!)
 
-        // 5b. Emit newly committed events via callback
+        // 5b. Emit newly committed events via callback, skipping any that
+        //     were already delivered live (dedup by event id).
         if (onEvent) {
           for (let j = beforeLen; j < ctx.events.length; j++) {
-            onEvent(ctx.events[j])
+            const ev = ctx.events[j]
+            if (!wasEmittedLive(ev)) onEvent(ev)
           }
         }
 
@@ -97,8 +112,12 @@ export async function runChain<T extends Record<string, unknown>>(
         setError(ctx, msg, patternId)
       }
 
-      // 7. Add pattern_exit event
+      // 7. Add pattern_exit event (fires live if enabled)
       exitPattern(ctx, patternId)
+
+      // Reset the toggle so subsequent patterns without `liveEvents` aren't
+      // accidentally streamed.
+      setLivePatternEnabled(false)
     }
 
     // Update final data
@@ -153,7 +172,9 @@ export function chain<T extends Record<string, unknown>>(
       }
       return current
     },
-    config: resolved
+    config: resolved,
+    estimateTurns: (s) =>
+      patterns.reduce((sum, p) => sum + (p.estimateTurns?.(s) ?? 1), 0)
   }
 }
 

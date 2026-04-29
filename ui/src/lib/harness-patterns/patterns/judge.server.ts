@@ -107,6 +107,7 @@ export function judge<T extends JudgeData>(
         return scope
       }
     },
-    config: resolved
+    config: resolved,
+    estimateTurns: () => 1
   }
 }
