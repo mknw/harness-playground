@@ -37,12 +37,16 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   const codeController = createActorControllerAdapter(tools.all);
   const codeCritic = createCriticAdapter();
 
-  const neo4jPattern = simpleLoop<SessionData>(neo4jController, tools.neo4j ?? [], {
-    patternId: "neo4j-query",
-    schema,
-    liveEvents: true,
-    rememberPriorTurns: false,
-  });
+  const neo4jPattern = simpleLoop<SessionData>(
+    neo4jController,
+    tools.neo4j ?? [],
+    {
+      patternId: "neo4j-query",
+      schema,
+      liveEvents: true,
+      rememberPriorTurns: false,
+    },
+  );
 
   const webPattern = simpleLoop<SessionData>(webController, webTools, {
     patternId: "web-search",

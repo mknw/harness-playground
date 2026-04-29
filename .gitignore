@@ -37,3 +37,6 @@ n8n_data/
 
 # Test coverage
 **/coverage/
+
+# Working memory — Claude session notes
+SCRATCHPAD.md
