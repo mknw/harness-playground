@@ -103,6 +103,7 @@ export function simpleLoop<T extends SimpleLoopData>(
     let hasError = false
     let errorMessage: string | undefined
     let errorTurn: number | undefined
+    let exitedViaReturn = false
 
     // Build structured references to tool results from previous tasks.
     // These are passed as turns_previous_runs (separate from the current task's turns)
@@ -190,6 +191,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             lastAction: action,
             turn
           }
+          exitedViaReturn = true
           break
         }
 
@@ -283,6 +285,16 @@ export function simpleLoop<T extends SimpleLoopData>(
           severity: resolved.errorSeverity,
           hint: getErrorHint(errorMessage ?? ''),
           turn: errorTurn,
+        } as ErrorEventData, true)
+      } else if (!exitedViaReturn && turns.length > 0) {
+        // Loop exhausted maxTurns without controller signaling completion.
+        // Surface as a recoverable error so the synthesizer can warn the user;
+        // partial results from completed turns are still preserved on scope.
+        trackEvent(scope, 'error', {
+          error: `Loop exhausted: reached maxTurns (${maxTurns}) without 'Return' or is_final from the controller. Partial results from ${turns.length} completed turn(s) are preserved.`,
+          severity: 'recoverable',
+          hint: 'The controller may have needed more turns to finish. Consider increasing maxToolTurns in settings, or simplifying the task.',
+          turn: turns.length - 1,
         } as ErrorEventData, true)
       }
 

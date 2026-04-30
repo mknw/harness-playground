@@ -126,6 +126,46 @@ describe('EventViewImpl', () => {
       expect(result).toHaveLength(0)
     })
 
+    it('should resolve to the most-recently-active pattern across multi-turn sessions', async () => {
+      // Regression test for: in a 4-turn session where web-search ran in turn 3
+      // and neo4j-query ran in turn 4, fromLastPattern() must resolve to
+      // neo4j-query (last *activated*), not web-search (last *introduced*).
+      const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
+
+      const events: ContextEvent[] = [
+        // Turn 2: neo4j-query first appears
+        { type: 'pattern_enter', ts: 10, patternId: 'neo4j-query', data: {} },
+        { type: 'tool_result', ts: 11, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher', result: 'turn2-data', success: true } },
+        { type: 'pattern_exit', ts: 12, patternId: 'neo4j-query', data: {} },
+        { type: 'pattern_enter', ts: 13, patternId: 'response-synth', data: {} },
+        { type: 'pattern_exit', ts: 14, patternId: 'response-synth', data: {} },
+        // Turn 3: web-search first appears (LATER first-appearance than neo4j-query)
+        { type: 'pattern_enter', ts: 20, patternId: 'web-search', data: {} },
+        { type: 'tool_result', ts: 21, patternId: 'web-search', data: { tool: 'search', result: 'turn3-web-data', success: true } },
+        { type: 'pattern_exit', ts: 22, patternId: 'web-search', data: {} },
+        { type: 'pattern_enter', ts: 23, patternId: 'response-synth', data: {} },
+        { type: 'pattern_exit', ts: 24, patternId: 'response-synth', data: {} },
+        // Turn 4: neo4j-query runs again (most recent ACTIVATION)
+        { type: 'pattern_enter', ts: 30, patternId: 'neo4j-query', data: {} },
+        { type: 'tool_result', ts: 31, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher', result: 'turn4-data', success: true } },
+        { type: 'pattern_exit', ts: 32, patternId: 'neo4j-query', data: {} },
+        // Synthesizer about to evaluate fromLastPattern()
+        { type: 'pattern_enter', ts: 33, patternId: 'response-synth', data: {} },
+      ]
+
+      const ctx = createMockContext(events)
+      const view = createEventView(ctx, undefined, 'response-synth')
+      const result = view.fromLastPattern().get()
+
+      // Must resolve to turn-4 neo4j-query, not turn-3 web-search
+      expect(result.every(e => e.patternId === 'neo4j-query')).toBe(true)
+      const toolResult = result.find(e => e.type === 'tool_result')
+      expect(toolResult).toBeDefined()
+      expect((toolResult!.data as Record<string, unknown>).result).toBe('turn4-data')
+      // Must NOT include web-search events
+      expect(result.find(e => e.patternId === 'web-search')).toBeUndefined()
+    })
+
     it('should only return events from the last execution when a pattern runs multiple times', async () => {
       const { createEventView } = await import('../../../../lib/harness-patterns/patterns/event-view.server')
 
