@@ -9,7 +9,7 @@ import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
 import { callTool } from '../mcp-client.server'
 import { repairJson } from '../json-repair'
-import type { LoopTurn, PriorResult } from '../../../../baml_client/types'
+import type { LoopTurn, PriorResult, ExpandedRef } from '../../../../baml_client/types'
 import type {
   ControllerAction,
   SimpleLoopConfig,
@@ -27,6 +27,7 @@ import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
+import { dedupByRefId, annotateExpansions } from '../baml-adapters.server'
 
 assertServerOnImport()
 
@@ -35,14 +36,18 @@ assertServerOnImport()
 // ============================================================================
 
 /**
- * Resolve `ref:<eventId>` values in tool args by expanding them
- * to the full tool result data from the UnifiedContext.
+ * Resolve `ref:<eventId>` values in tool args by expanding them to the full
+ * tool result data from the UnifiedContext, **and** capture each successful
+ * substitution so the controller can see (in the next turn's prompt) what
+ * was inlined this turn.
  */
-function resolveRefs(
+function resolveRefsAndCapture(
   args: Record<string, unknown>,
-  view: EventView
-): Record<string, unknown> {
+  view: EventView,
+  maxResultChars: number
+): { resolved: Record<string, unknown>; expansions: ExpandedRef[] } {
   const resolved = { ...args }
+  const expansions: ExpandedRef[] = []
   const allEvents = view.fromAll().get()
   for (const [key, value] of Object.entries(resolved)) {
     if (typeof value === 'string' && value.startsWith('ref:')) {
@@ -53,11 +58,18 @@ function resolveRefs(
         // Skip hidden/archived results — refs to excluded data stay unresolved
         if (!d.hidden && !d.archived) {
           resolved[key] = d.result
+          const raw = typeof d.result === 'string' ? d.result : JSON.stringify(d.result)
+          expansions.push({
+            ref_id: eventId,
+            content: raw.length > maxResultChars
+              ? raw.slice(0, maxResultChars) + '…[truncated]'
+              : raw
+          })
         }
       }
     }
   }
-  return resolved
+  return { resolved, expansions }
 }
 
 export interface SimpleLoopData {
@@ -109,7 +121,7 @@ export function simpleLoop<T extends SimpleLoopData>(
     // These are passed as turns_previous_runs (separate from the current task's turns)
     // so the LLM can clearly distinguish prior context from current work.
     // Summaries (populated async after prior responses) are used when available.
-    let priorResults: PriorResult[] | undefined
+    let turnWindowRefs: PriorResult[] = []
     if (config?.rememberPriorTurns !== false) {
       const turnCount = config?.priorTurnCount ?? settings.priorTurnCount
       const priorEvents = view.fromLastNTurns(turnCount).ofType('tool_result').get()
@@ -118,19 +130,24 @@ export function simpleLoop<T extends SimpleLoopData>(
           return !!e.id && !d.hidden && !d.archived
             && (d.success || config?.includeFailedResults)
         })
-      if (priorEvents.length > 0) {
-        priorResults = priorEvents.map(e => {
-          const d = e.data as ToolResultEventData
-          const rawResult = typeof d.result === 'string' ? d.result : JSON.stringify(d.result)
-          const preview = d.summary ?? rawResult.slice(0, 200).replace(/\n/g, ' ')
-          return {
-            ref_id: e.id!,
-            tool: d.tool,
-            summary: preview + (!d.summary && rawResult.length > 200 ? '...' : '')
-          }
-        })
-      }
+      turnWindowRefs = priorEvents.map(e => {
+        const d = e.data as ToolResultEventData
+        const rawResult = typeof d.result === 'string' ? d.result : JSON.stringify(d.result)
+        const preview = d.summary ?? rawResult.slice(0, 200).replace(/\n/g, ' ')
+        return {
+          ref_id: e.id!,
+          tool: d.tool,
+          summary: preview + (!d.summary && rawResult.length > 200 ? '...' : '')
+        }
+      })
     }
+
+    // Merge `withReferences` attachments (LLM-selected, scope-filtered) with the
+    // turn-window refs. Attached takes precedence on dedup so the selector's
+    // explicit choice wins over the implicit window.
+    const attachedRefs = (scope.data as { attachedRefs?: PriorResult[] }).attachedRefs ?? []
+    const mergedRefs = dedupByRefId([...attachedRefs, ...turnWindowRefs])
+    const basePriorResults: PriorResult[] | undefined = mergedRefs.length > 0 ? mergedRefs : undefined
 
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
@@ -147,6 +164,12 @@ export function simpleLoop<T extends SimpleLoopData>(
           ? (userMessage.data as { content: string }).content
           : ''
         const intent = data.intent ?? userContent
+
+        // Annotate refs with `expanded_in_turn` from accumulated turns so the
+        // controller can see which prior data has already been inlined.
+        const priorResults = basePriorResults
+          ? annotateExpansions(basePriorResults, turns)
+          : undefined
 
         // Call BAML controller — catch validation errors gracefully
         // so partial results from earlier turns are preserved
@@ -218,7 +241,9 @@ export function simpleLoop<T extends SimpleLoopData>(
         const callId = generateId('tc')
 
         // Resolve ref: pointers in args (expands to full tool result data from prior events)
-        const resolvedArgs = resolveRefs(args, view)
+        // and capture the substitutions so they render in the next prompt iteration.
+        const MAX_RESULT_CHARS = settings.maxResultChars
+        const { resolved: resolvedArgs, expansions } = resolveRefsAndCapture(args, view, MAX_RESULT_CHARS)
 
         // Track tool call event (with original args for readability)
         trackEvent(
@@ -247,7 +272,6 @@ export function simpleLoop<T extends SimpleLoopData>(
 
         // Record completed turn for LoopController history.
         // Truncate result to avoid overflowing reasoning models on subsequent turns.
-        const MAX_RESULT_CHARS = settings.maxResultChars
         const resultStr = JSON.stringify(result.data)
         turns.push({
           n: turn,
@@ -260,7 +284,8 @@ export function simpleLoop<T extends SimpleLoopData>(
               : resultStr,
             success: result.success,
             error: result.error ?? null
-          }
+          },
+          ...(expansions.length > 0 ? { expansions } : {})
         })
 
         if (!result.success) {

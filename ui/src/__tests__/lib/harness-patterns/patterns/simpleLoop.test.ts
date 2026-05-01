@@ -1012,4 +1012,147 @@ describe('simpleLoop execution', () => {
     expect(callData.callId).toBe(resultData.callId)
   })
 
+  it('should record expansions on the LoopTurn when ref:<id> is resolved', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    // Capture turns passed to controller across two calls so we can read the
+    // second invocation's input — that's where turn-0's expansions appear.
+    const turnsByCall: unknown[][] = []
+    const mockController = vi.fn(async (
+      _user_message: string, _intent: string, previous_results: string,
+      _n_turn: number, _schema?: unknown, _collector?: unknown, _priorResults?: unknown
+    ) => {
+      turnsByCall.push(JSON.parse(previous_results))
+      const action = turnsByCall.length === 1
+        ? mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"data":"ref:ev-source"}' })
+        : mockFinalAction('Done')
+      return { action, llmCall: undefined }
+    })
+
+    callToolMock.mockResolvedValue({ success: true, data: { rows: [{ id: 1 }] } })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test', trackHistory: true
+    })
+
+    const scope = createScope('test', { intent: 'lookup' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'lookup' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-source',
+          data: { tool: 'search', result: { hello: 'world' }, success: true } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'lookup'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    // Second controller call should see the first turn's expansions populated.
+    expect(turnsByCall.length).toBe(2)
+    const turn0 = (turnsByCall[1] as Array<{ n: number; expansions?: Array<{ ref_id: string }> }>)[0]
+    expect(turn0.n).toBe(0)
+    expect(turn0.expansions).toBeDefined()
+    expect(turn0.expansions!.map(e => e.ref_id)).toEqual(['ev-source'])
+  })
+
+  it('should not include expansions on turns that did not resolve any ref', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const turnsByCall: unknown[][] = []
+    const mockController = vi.fn(async (
+      _user_message: string, _intent: string, previous_results: string,
+      _n_turn: number, _schema?: unknown, _collector?: unknown, _priorResults?: unknown
+    ) => {
+      turnsByCall.push(JSON.parse(previous_results))
+      const action = turnsByCall.length === 1
+        ? mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"q":"plain"}' })
+        : mockFinalAction('Done')
+      return { action, llmCall: undefined }
+    })
+
+    callToolMock.mockResolvedValue({ success: true, data: { rows: [] } })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test', trackHistory: true
+    })
+
+    const scope = createScope('test', { intent: 'plain' })
+    const mockContext = {
+      sessionId: 'test', createdAt: Date.now(),
+      events: [{ type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'plain' } }],
+      status: 'running' as const, data: {}, input: 'plain'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    expect(turnsByCall.length).toBe(2)
+    const turn0 = (turnsByCall[1] as Array<{ n: number; expansions?: unknown }>)[0]
+    expect(turn0.expansions).toBeUndefined()
+  })
+
+  it('merges scope.data.attachedRefs with priorTurnCount-derived refs (dedup)', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const priorByCall: unknown[][] = []
+    const mockController = vi.fn(async (
+      _user_message: string, _intent: string, _previous_results: string,
+      _n_turn: number, _schema?: unknown, _collector?: unknown, priorResults?: unknown
+    ) => {
+      priorByCall.push(priorResults as unknown[])
+      return { action: mockFinalAction('Done'), llmCall: undefined }
+    })
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test', trackHistory: true
+    })
+
+    // attachedRefs include 'ev-shared' (also in turn-window) + 'ev-attached-only'
+    const scope = createScope('test', {
+      intent: 'q',
+      attachedRefs: [
+        { ref_id: 'ev-attached-only', tool: 'web', summary: 'A' },
+        { ref_id: 'ev-shared', tool: 'web', summary: 'shared (from selector)' }
+      ]
+    })
+    const mockContext = {
+      sessionId: 'test', createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'q' } },
+        // Same ev-shared ref is also discoverable via the turn-window mechanism
+        { type: 'tool_result' as const, ts: 2, patternId: 'web-search', id: 'ev-shared',
+          data: { tool: 'web', result: 'shared content', success: true, summary: 'shared (from window)' } },
+        { type: 'tool_result' as const, ts: 3, patternId: 'web-search', id: 'ev-window-only',
+          data: { tool: 'web', result: 'window-only content', success: true, summary: 'W' } }
+      ],
+      status: 'running' as const, data: {}, input: 'q'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    expect(priorByCall.length).toBe(1)
+    const prior = priorByCall[0] as Array<{ ref_id: string; summary: string }>
+    const ids = prior.map(r => r.ref_id)
+    expect(ids).toContain('ev-attached-only')
+    expect(ids).toContain('ev-shared')
+    expect(ids).toContain('ev-window-only')
+    // dedup: ev-shared appears once, and the *attached* version wins (selector summary, not the window summary)
+    const sharedCount = ids.filter(id => id === 'ev-shared').length
+    expect(sharedCount).toBe(1)
+    const sharedRef = prior.find(r => r.ref_id === 'ev-shared')!
+    expect(sharedRef.summary).toBe('shared (from selector)')
+  })
+
 })

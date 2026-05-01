@@ -37,13 +37,15 @@ function LoopController(
 
     {% if turns_previous_runs and turns_previous_runs|length > 0 %}
     RESULTS FROM PREVIOUS TASKS:
-    The following data was retrieved in prior requests. You may reference it as
-    context or re-use it without re-fetching. To pass a full result as a tool
-    argument, use the reference ID: pass "ref:<ref_id>" as the argument value
-    and the system will automatically expand it to the full data.
+    The following data was retrieved in prior requests. Reference it as context
+    or pass it to a tool by using "ref:<ref_id>" as an argument value — the
+    system will expand it inline before the tool runs, and the expanded content
+    will appear under "Expanded refs this turn" on the next iteration. If a
+    ref already shows "(expanded in turn N)" you have already inlined it; reuse
+    that turn's expansion instead of re-passing the ref unnecessarily.
 
     {% for r in turns_previous_runs %}
-    - [ref:{{ r.ref_id }}] {{ r.tool }}: {{ r.summary }}
+    - [ref:{{ r.ref_id }}] {{ r.tool }}: {{ r.summary }}{% if r.expanded_in_turn is not none %} (expanded in turn {{ r.expanded_in_turn }}){% endif %}
     {% endfor %}
     {% endif %}
 
@@ -60,6 +62,12 @@ function LoopController(
     If the error appears transient (timeout, connection), consider retrying with same or modified arguments.
     If the error indicates invalid arguments, fix them and retry.
     If the tool cannot help with this task, try an alternative approach or use Return to explain what went wrong.{% endif %}
+    {% endif %}
+    {% if turn.expansions and turn.expansions|length > 0 %}
+    Expanded refs this turn:
+    {% for e in turn.expansions %}
+      - [ref:{{ e.ref_id }}] → {{ e.content }}
+    {% endfor %}
     {% endif %}
     {% endfor %}
     {% endif %}
