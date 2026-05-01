@@ -395,17 +395,26 @@ export class EventViewImpl implements IEventView {
   // Internal Helpers
   // ─────────────────────────────────────────────────────────────────────────
 
-  /** Get unique pattern IDs in order of first pattern_enter */
+  /**
+   * Get unique pattern IDs ordered by *most recent* pattern_enter.
+   *
+   * Ordering by last-appearance (not first-appearance) is critical for
+   * multi-turn sessions: when a pattern was introduced in an earlier turn
+   * but a different pattern just executed in the current turn,
+   * fromLastPattern() must resolve to the *just-executed* one, not to
+   * whichever pattern happened to be introduced latest historically.
+   */
   private getPatternIds(): string[] {
     const seen = new Set<string>()
-    return this.ctx.events
-      .filter((e) => e.type === 'pattern_enter')
-      .map((e) => e.patternId)
-      .filter((id) => {
-        if (seen.has(id)) return false
-        seen.add(id)
-        return true
-      })
+    const reverseOrder: string[] = []
+    for (let i = this.ctx.events.length - 1; i >= 0; i--) {
+      const e = this.ctx.events[i]
+      if (e.type !== 'pattern_enter') continue
+      if (seen.has(e.patternId)) continue
+      seen.add(e.patternId)
+      reverseOrder.push(e.patternId)
+    }
+    return reverseOrder.reverse()
   }
 
   /** Get the ID of the last pattern that entered (excluding self) */

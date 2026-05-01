@@ -394,6 +394,100 @@ describe('simpleLoop execution', () => {
     expect(JSON.stringify(errorEvents[0].data)).toContain('Controller crashed')
   })
 
+  it('should track recoverable error event when maxTurns is reached without Return', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    // callTool always succeeds — no early break via tool failure
+    callToolMock.mockResolvedValue({
+      success: true,
+      data: { ok: true }
+    })
+
+    // Controller never signals completion (no Return / is_final)
+    const mockController = vi.fn().mockResolvedValue({
+      action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"x"}' }),
+      llmCall: undefined
+    })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test',
+      maxTurns: 3
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Controller was called exactly maxTurns times (loop never broke early)
+    expect(mockController).toHaveBeenCalledTimes(3)
+
+    // Loop should have tracked a recoverable exhaustion event
+    const errorEvents = result.events.filter(e => e.type === 'error')
+    expect(errorEvents.length).toBe(1)
+    const errData = errorEvents[0].data as { error: string; severity?: string; turn?: number }
+    expect(errData.error).toMatch(/exhausted/i)
+    expect(errData.error).toContain('3')  // maxTurns mentioned
+    expect(errData.severity).toBe('recoverable')
+    // Partial results from completed turns should still exist as tool_result events
+    const toolResults = result.events.filter(e => e.type === 'tool_result')
+    expect(toolResults.length).toBe(3)
+  })
+
+  it('should NOT track exhaustion error when controller signals Return', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    callToolMock.mockResolvedValue({ success: true, data: { ok: true } })
+
+    const mockController = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{}' }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        action: mockFinalAction('Done'),
+        llmCall: undefined
+      })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test',
+      maxTurns: 5
+    })
+
+    const scope = createScope('test', {})
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'test' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'test'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Clean exit via Return — no error events should be tracked
+    const errorEvents = result.events.filter(e => e.type === 'error')
+    expect(errorEvents.length).toBe(0)
+  })
+
   it('should accumulate results across iterations', async () => {
     const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
