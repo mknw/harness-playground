@@ -90,7 +90,6 @@ client<llm> OpenAIGPT5 {
   options {
     model "gpt-5"
     api_key env.OPENAI_API_KEY
-    max_tokens 4096
   }
 }
 
@@ -100,7 +99,6 @@ client<llm> OpenAIGPT5Mini {
   options {
     model "gpt-5-mini"
     api_key env.OPENAI_API_KEY
-    max_tokens 4096
   }
 }
 
@@ -111,7 +109,6 @@ client<llm> OpenAIGPT5Nano {
   options {
     model "gpt-5-nano"
     api_key env.OPENAI_API_KEY
-    max_tokens 4096
   }
 }
 
@@ -121,7 +118,6 @@ client<llm> OpenAIGPT5Chat {
   options {
     model "gpt-5"
     api_key env.OPENAI_API_KEY
-    max_tokens 4096
   }
 }
 
@@ -218,7 +214,7 @@ client<llm> ControllerFallback {
   options {
     // 1. GroqGPT120B — gpt-oss-120b, fastest; 2. OpenRouterNemotron120B — when Groq fails structured output
     // on large context; 3. OpenAIGPT5Chat — reliable OpenAI fallback
-    strategy [OpenRouterNemotron120B, OpenAIGPT5, OpenRouterMiniMax2_5, GroqGPT120B]
+    strategy [OpenRouterNemotron120B, OpenRouterMiniMax2_5, GroqGPT120B, OpenAIGPT5]
   }
 }
 
@@ -270,6 +266,6 @@ retry_policy Exponential {
     type exponential_backoff
     delay_ms 300
     multiplier 1.5
-    max_delay_ms 10000
+    max_delay_ms 2000
   }
 }
