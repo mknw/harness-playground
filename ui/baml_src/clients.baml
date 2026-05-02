@@ -122,7 +122,7 @@ client<llm> OpenAIGPT5Chat {
 }
 
 // Latest Anthropic Claude 4 models
-client<llm> CustomOpus4 {
+client<llm> AnthropicOpus4 {
   provider anthropic
   options {
     model "claude-opus-4-1-20250805"
@@ -131,20 +131,20 @@ client<llm> CustomOpus4 {
   }
 }
 
-client<llm> CustomSonnet4 {
+client<llm> AnthropicSonnet46 {
   provider anthropic
   options {
-    model "claude-sonnet-4-20250514"
+    model "claude-sonnet-4-6"
     api_key env.ANTHROPIC_API_KEY
     max_tokens 4096
   }
 }
 
-client<llm> CustomHaiku {
+client<llm> AnthropicHaiku45 {
   provider anthropic
   retry_policy Constant
   options {
-    model "claude-3-5-haiku-20241022"
+    model "claude-haiku-4-5"
     api_key env.ANTHROPIC_API_KEY
     max_tokens 4096
   }
@@ -196,7 +196,7 @@ client<llm> CustomFast {
   provider round-robin
   options {
     // This will alternate between the two clients
-    strategy [OpenAIGPT5Mini, CustomHaiku]
+    strategy [OpenAIGPT5Mini, AnthropicHaiku45]
   }
 }
 
@@ -205,7 +205,7 @@ client<llm> RouterFallback {
   provider fallback
   options {
     // Classification only — fast 20B model sufficient, 120B as backstop
-    strategy [OpenRouterGemma4, GroqFast, GroqGPT120B]
+    strategy [OpenRouterGemma4, GroqFast, GroqGPT120B, AnthropicSonnet46]
   }
 }
 
@@ -214,7 +214,7 @@ client<llm> ControllerFallback {
   options {
     // 1. GroqGPT120B — gpt-oss-120b, fastest; 2. OpenRouterNemotron120B — when Groq fails structured output
     // on large context; 3. OpenAIGPT5Chat — reliable OpenAI fallback
-    strategy [OpenRouterNemotron120B, OpenRouterMiniMax2_5, GroqGPT120B, OpenAIGPT5]
+    strategy [OpenRouterNemotron120B, OpenRouterMiniMax2_5, GroqGPT120B, OpenAIGPT5, AnthropicSonnet46]
   }
 }
 
@@ -222,7 +222,7 @@ client<llm> CriticFallback {
   provider fallback
   options {
     // Qwen3-32B purpose-built for evaluation; GroqGPT120B as backstop
-    strategy [GroqQwen3_32b, GroqGPT120B, OpenRouterMiniMax2_5]
+    strategy [GroqQwen3_32b, GroqGPT120B, OpenRouterMiniMax2_5, AnthropicSonnet46]
   }
 }
 
@@ -230,7 +230,7 @@ client<llm> SynthesizerFallback {
   provider fallback
   options {
     // 1. OpenRouterGemma4 — fast prose synthesis; 2. GroqQwen3_32b (Qwen3-32B); 3. OpenAIGPT5Mini
-    strategy [OpenRouterGemma4, GroqQwen3_32b, OpenAIGPT5]
+    strategy [OpenRouterGemma4, GroqQwen3_32b, OpenAIGPT5, AnthropicSonnet46]
   }
 }
 
@@ -238,18 +238,18 @@ client<llm> SynthesizerFallback {
 client<llm> DescribeFallback {
   provider fallback
   options {
-    strategy [GroqFast, OpenRouterGemma4, OpenAIGPT5]
+    strategy [GroqFast, OpenRouterGemma4, OpenAIGPT5, AnthropicHaiku45]
   }
 }
 
 // https://docs.boundaryml.com/docs/snippets/clients/fallback
-client<llm> OpenaiFallback {
-  provider fallback
-  options {
-    // This will try the clients in order until one succeeds
-    strategy [OpenAIGPT5Mini, OpenAIGPT5]
-  }
-}
+// client<llm> OpenaiFallback {
+//   provider fallback
+//   options {
+//     // This will try the clients in order until one succeeds
+//     strategy [OpenAIGPT5Mini, OpenAIGPT5]
+//   }
+// }
 
 // https://docs.boundaryml.com/docs/snippets/clients/retry
 retry_policy Constant {

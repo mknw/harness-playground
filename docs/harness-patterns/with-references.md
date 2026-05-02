@@ -55,9 +55,9 @@ Two distinct kinds of cross-pattern data flow:
                             │  ┌─ controller turn 1 ─┐        │
         external (ingress) ─┼──► priorResults        │  (internal)
                             │  └─ controller turn 2 ─┘  ◄────┐│
-                            │     │ may call expand_data    ││
-                            │     ├─ tool_call              ││
-                            │     ╰─ tool_result  ──────────┘│
+                            │     │ may call expand_data     ││
+                            │     ├─ tool_call               ││
+                            │     ╰─ tool_result ────────────┘│
                             ╰─────────────────────────────────╯
 ```
 

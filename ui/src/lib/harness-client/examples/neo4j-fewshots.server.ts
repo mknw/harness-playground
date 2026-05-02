@@ -106,12 +106,14 @@ export const NEO4J_FEW_SHOTS: FewShot[] = [
   },
 ];
 
-/** Subset shipped to the default agent — three picks covering read filter,
- *  read aggregation, and write+connect. (The remaining two — simple read
- *  and bulk UNWIND — stay available in NEO4J_FEW_SHOTS for callers that
- *  want a fuller prompt.) */
+/** Subset shipped to the default agent — substring search, degree aggregation,
+ *  and bulk UNWIND upsert. The simpler single-node lookup is implicitly covered
+ *  by the substring-search shape (the controller can drop the OR clause when
+ *  it wants an exact match), so we drop it in favor of the more advanced bulk
+ *  write — which is the one the LLM is most likely to under-utilize without
+ *  an explicit example. */
 export const NEO4J_FEW_SHOTS_DEFAULT: FewShot[] = [
-  NEO4J_FEW_SHOTS[1], // case-insensitive substring search
-  NEO4J_FEW_SHOTS[2], // degree aggregation
-  NEO4J_FEW_SHOTS[3], // create + connect
+  NEO4J_FEW_SHOTS[1], // substring search        (read · filter)
+  NEO4J_FEW_SHOTS[2], // degree aggregation      (read · aggregate)
+  NEO4J_FEW_SHOTS[NEO4J_FEW_SHOTS.length - 1], // bulk UNWIND upsert (write · batch)
 ];

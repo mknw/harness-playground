@@ -41,6 +41,46 @@ assertServerOnImport()
  * substitution so the controller can see (in the next turn's prompt) what
  * was inlined this turn.
  */
+/**
+ * Parse the `tool_args` of an `expandPreviousResult` call into a list of
+ * ref_ids. Accepts the canonical compact form and a JSON-object form
+ * for resilience against LLMs that ignore the prompt's args contract.
+ *
+ *   "ref:abc"                    → ["abc"]
+ *   "ref:abc,def,ghi"            → ["abc", "def", "ghi"]
+ *   '{"ref_id": "abc"}'          → ["abc"]
+ *   '{"ref_ids": ["abc","def"]}' → ["abc", "def"]
+ *
+ * Whitespace around individual ids is trimmed; empty entries are dropped.
+ * Returns [] when no parseable id is present (caller treats as failure).
+ */
+function parseExpandRefs(argsStr: string): string[] {
+  const trimmed = argsStr.trim()
+  if (trimmed.startsWith('ref:')) {
+    return trimmed
+      .slice(4)
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+  }
+  try {
+    const parsed = repairJson(trimmed)
+    if (Array.isArray(parsed.ref_ids)) {
+      return parsed.ref_ids
+        .filter((x: unknown): x is string => typeof x === 'string')
+        .map((s: string) => (s.startsWith('ref:') ? s.slice(4) : s).trim())
+        .filter(Boolean)
+    }
+    const single = parsed.ref_id ?? parsed.ref ?? parsed.id
+    if (typeof single === 'string') {
+      const s = single.trim()
+      const id = s.startsWith('ref:') ? s.slice(4) : s
+      return id ? [id] : []
+    }
+  } catch { /* fall through to [] */ }
+  return []
+}
+
 function resolveRefsAndCapture(
   args: Record<string, unknown>,
   view: EventView,
@@ -219,58 +259,90 @@ export function simpleLoop<T extends SimpleLoopData>(
           break
         }
 
-        // Synthetic tool: `expandPreviousResult` — resolves a ref:<id> to its
-        // prior tool_result and records it as a normal turn. Intercepted here
-        // (before tools.includes guard) so the LLM has an explicit affordance
-        // for "I want to reuse this prior data" without needing a real tool.
+        // Synthetic tool: `expandPreviousResult` — resolves one or more
+        // ref_ids to their prior tool_results and records them as a single
+        // turn. Intercepted here (before tools.includes guard) so the LLM
+        // has an explicit affordance for "I want to reuse this prior data"
+        // without needing a real tool. Supports four arg shapes:
+        //   "ref:<id>"                   — single (canonical)
+        //   "ref:<id_1>,<id_2>,..."      — comma-separated batch
+        //   {"ref_id": "<id>"}           — JSON, single (resilience)
+        //   {"ref_ids": ["<id>", ...]}   — JSON, batch
         if (action.tool_name === EXPAND_TOOL_NAME) {
           const callId = generateId('tc')
-          // tool_args is the raw `ref:<eventId>` string (per prompt contract).
-          // Be lenient: also accept a JSON object `{"ref_id": "..."}`.
-          const argsStr = action.tool_args.trim()
-          let refId = ''
-          if (argsStr.startsWith('ref:')) {
-            refId = argsStr.slice(4)
-          } else {
-            try {
-              const parsed = repairJson(argsStr)
-              const candidate = parsed.ref_id ?? parsed.ref ?? parsed.id
-              refId = typeof candidate === 'string'
-                ? (candidate.startsWith('ref:') ? candidate.slice(4) : candidate)
-                : ''
-            } catch { /* refId stays '' */ }
-          }
+          const refIds = parseExpandRefs(action.tool_args)
 
           const allEvents = view.fromAll().get()
-          const refEvent = allEvents.find(e => e.id === refId)
-          const refData = refEvent?.type === 'tool_result'
-            ? (refEvent.data as ToolResultEventData)
-            : null
-          const usable = refData && !refData.hidden && !refData.archived
-          const expanded = usable ? refData.result : null
-          const success = usable === true
-          const errorMsg = success
-            ? undefined
-            : `ref_id "${refId}" not found in tool_result events (or excluded as hidden/archived)`
+          type Resolution = { ref_id: string; success: boolean; result: unknown; error?: string }
+          const resolutions: Resolution[] = refIds.map(refId => {
+            const refEvent = allEvents.find(e => e.id === refId)
+            const refData = refEvent?.type === 'tool_result'
+              ? (refEvent.data as ToolResultEventData)
+              : null
+            const usable = refData && !refData.hidden && !refData.archived
+            return usable
+              ? { ref_id: refId, success: true, result: refData.result }
+              : {
+                  ref_id: refId,
+                  success: false,
+                  result: null,
+                  error: `ref_id "${refId}" not found in tool_result events (or excluded as hidden/archived)`
+                }
+          })
+
+          const noRefs = refIds.length === 0
+          const overallSuccess = !noRefs && resolutions.some(r => r.success)
+          const failureErrors = resolutions.filter(r => !r.success).map(r => r.error)
+          const errorMsg = noRefs
+            ? `expandPreviousResult: no ref_id parsed from tool_args (${action.tool_args})`
+            : failureErrors.length > 0
+              ? failureErrors.join('; ')
+              : undefined
+
+          // For backward compatibility, a single-ref call returns the bare
+          // result; multi-ref calls return a map keyed by ref_id (failures
+          // surface as { __error: "..." }).
+          const combinedResult: unknown = refIds.length === 1
+            ? resolutions[0].result
+            : resolutions.reduce<Record<string, unknown>>((acc, r) => {
+                acc[r.ref_id] = r.success ? r.result : { __error: r.error }
+                return acc
+              }, {})
+
+          // tool_call args mirror the input shape: scalar for one ref, list
+          // for many. Keeps observability faithful to what the LLM produced.
+          const trackedArgs = refIds.length === 1
+            ? { ref_id: refIds[0] }
+            : { ref_ids: refIds }
 
           trackEvent(scope, 'tool_call',
-            { callId, tool: EXPAND_TOOL_NAME, args: { ref_id: refId } } as ToolCallEventData,
+            { callId, tool: EXPAND_TOOL_NAME, args: trackedArgs } as ToolCallEventData,
             resolved.trackHistory)
           trackEvent(scope, 'tool_result', {
             callId,
             tool: EXPAND_TOOL_NAME,
-            result: expanded,
-            success,
+            result: combinedResult,
+            success: overallSuccess,
             error: errorMsg
           } as ToolResultEventData, resolved.trackHistory)
 
           // Record as a turn — same shape as a real tool, plus expansions[]
-          // so the per-turn rendering and `expanded_in_turn` annotation work.
+          // (one entry per *successfully* resolved ref) so the per-turn
+          // rendering and `expanded_in_turn` annotation work.
           const MAX_RESULT_CHARS = settings.maxResultChars
-          const resultStr = JSON.stringify(expanded)
-          const truncated = success && resultStr.length > MAX_RESULT_CHARS
-            ? resultStr.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
-            : resultStr
+          const truncate = (s: string) =>
+            s.length > MAX_RESULT_CHARS
+              ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
+              : s
+          const resultStr = JSON.stringify(combinedResult)
+          const truncated = truncate(resultStr)
+          const expansions = resolutions
+            .filter(r => r.success)
+            .map(r => ({
+              ref_id: r.ref_id,
+              content: truncate(typeof r.result === 'string' ? r.result : JSON.stringify(r.result))
+            }))
+
           turns.push({
             n: turn,
             reasoning: action.reasoning,
@@ -278,10 +350,10 @@ export function simpleLoop<T extends SimpleLoopData>(
             tool_result: {
               tool: EXPAND_TOOL_NAME,
               result: truncated,
-              success,
+              success: overallSuccess,
               error: errorMsg ?? null
             },
-            ...(success ? { expansions: [{ ref_id: refId, content: truncated }] } : {})
+            ...(expansions.length > 0 ? { expansions } : {})
           })
 
           scope.data = { ...scope.data, turn, lastAction: action }

@@ -45,19 +45,22 @@ function LoopController(
       {% if tool.args_schema %}  Args: {{ tool.args_schema }}{% endif %}
     {% endfor %}
     {% if turns_previous_runs and turns_previous_runs|length > 0 %}
-    - expandPreviousResult: (tool_args = ref:<ref_id>)
+    - expandPreviousResult: Bring one or more prior tool results into your context this turn.
+        tool_args: "ref:<ref_id>"           (single)
+                 | "ref:<id_1>,<id_2>,..."  (multiple — expanded together)
     {% endif %}
     - Return: Signal task completion (tool_args = final answer or summary)
 
     {% if turns_previous_runs and turns_previous_runs|length > 0 %}
     RESULTS FROM PREVIOUS TASKS:
-    Call `expandPreviousResult` with `tool_args = ref:<ref_id>` to load full
-    data, or pass `ref:<ref_id>` as any tool's argument to inline-expand it.
-    Refs marked `(expanded in turn N)` are already in your context — reuse,
-    don't re-expand.
+    The data below was retrieved in earlier turns. Call `expandPreviousResult`
+    to bring it into your working context — pass `ref:<ref_id>` for one, or
+    `ref:<id_1>,<id_2>,...` to expand several at once. Refs annotated
+    `(expanded in turn N)` are already in your context — reuse them, do not
+    re-expand.
 
     {% for r in turns_previous_runs %}
-    - [ref:{{ r.ref_id }}] {{ r.tool }}: {{ r.summary }}{% if r.expanded_in_turn is not none %} (expanded in turn {{ r.expanded_in_turn }}){% endif %}
+    - [ref:{{ r.ref_id }}] {{ r.tool }}: {% if r.expanded_in_turn is not none %}(expanded in turn {{ r.expanded_in_turn }}){% else %}{{ r.summary }}{% endif %}
     {% endfor %}
     {% endif %}
 
@@ -65,15 +68,22 @@ function LoopController(
     CURRENT TASK — PREVIOUS TURNS:
     {% for turn in turns %}
     --- Turn {{ turn.n }} ---
-    {% if turn.reasoning %}Reasoning: {{ turn.reasoning }}{% endif %}
-    {% if turn.tool_call %}Called: {{ turn.tool_call.tool }}({{ turn.tool_call.args }}){% endif %}
+    {% if turn.reasoning %}
+    Reasoning: {{ turn.reasoning }}
+    {% endif %}
+    {% if turn.tool_call %}
+    Called: {{ turn.tool_call.tool }}({{ turn.tool_call.args }})
+    {% endif %}
     {% if turn.tool_result %}
-    {% if turn.tool_result.success %}Result: {{ turn.tool_result.result }}
-    {% else %}ERROR: {{ turn.tool_result.error }}
+    {% if turn.tool_result.success %}
+    Result: {{ turn.tool_result.result }}
+    {% else %}
+    ERROR: {{ turn.tool_result.error }}
 
     If the error appears transient (timeout, connection), consider retrying with same or modified arguments.
     If the error indicates invalid arguments, fix them and retry.
-    If the tool cannot help with this task, try an alternative approach or use Return to explain what went wrong.{% endif %}
+    If the tool cannot help with this task, try an alternative approach or use Return to explain what went wrong.
+    {% endif %}
     {% endif %}
     {% if turn.expansions and turn.expansions|length > 0 %}
     Expanded refs this turn:
