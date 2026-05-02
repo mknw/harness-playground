@@ -272,7 +272,10 @@ export function dedupByRefId(refs: PriorResult[]): PriorResult[] {
 }
 
 /** Annotate each ref with the **first** `turn.n` whose `expansions[]` contains
- *  its `ref_id`. Refs never expanded keep `expanded_in_turn: undefined`. */
+ *  its `ref_id`. Refs never expanded get `expanded_in_turn: null` (explicitly,
+ *  not absent) — MiniJinja distinguishes None from undefined, and `is none`
+ *  in the prompt template only matches None. If we left the field absent the
+ *  template's `is not none` test would incorrectly fire for unannotated refs. */
 export function annotateExpansions(refs: PriorResult[], turns: LoopTurn[]): PriorResult[] {
   const firstTurn = new Map<string, number>()
   for (const t of turns) {
@@ -280,10 +283,10 @@ export function annotateExpansions(refs: PriorResult[], turns: LoopTurn[]): Prio
       if (!firstTurn.has(e.ref_id)) firstTurn.set(e.ref_id, t.n)
     }
   }
-  return refs.map(r => {
-    const n = firstTurn.get(r.ref_id)
-    return n === undefined ? r : { ...r, expanded_in_turn: n }
-  })
+  return refs.map(r => ({
+    ...r,
+    expanded_in_turn: firstTurn.get(r.ref_id) ?? null
+  }))
 }
 
 // ============================================================================

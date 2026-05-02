@@ -634,13 +634,20 @@ describe('annotateExpansions', () => {
     const out = annotateExpansions(refs, turns)
     expect(out[0].expanded_in_turn).toBe(1)  // 'a' first appears at turn 1
     expect(out[1].expanded_in_turn).toBe(0)  // 'b' first appears at turn 0
-    expect(out[2].expanded_in_turn).toBeUndefined()  // 'c' never expanded
+    // Unannotated refs get `null` explicitly (NOT undefined) so the BAML
+    // MiniJinja template's `is none` test fires correctly. If we left the
+    // field as undefined, MiniJinja's `is not none` would evaluate TRUE
+    // (because undefined ≠ None), incorrectly rendering "(expanded in turn )"
+    // and causing the LLM to hallucinate data instead of expanding it.
+    expect(out[2].expanded_in_turn).toBeNull()
   })
 
-  it('leaves all refs untouched when no turns have expansions', async () => {
+  it('always sets expanded_in_turn (null when no turns have expansions)', async () => {
     const { annotateExpansions } = await import('../../../lib/harness-patterns/baml-adapters.server')
     const refs = [{ ref_id: 'a', tool: 'x', summary: 's' }]
     const out = annotateExpansions(refs, [{ n: 0 }, { n: 1, expansions: [] }])
-    expect(out[0].expanded_in_turn).toBeUndefined()
+    expect(out[0].expanded_in_turn).toBeNull()
+    // Field must be present in the object — NOT absent.
+    expect('expanded_in_turn' in out[0]).toBe(true)
   })
 })
