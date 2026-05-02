@@ -1,8 +1,9 @@
 # withReferences — Design Doc
 
-> **Status:** Draft. Captures decisions reached in [issue #30](https://github.com/mknw/harness-playground/issues/30); precedes implementation.
+> **Status:** Implemented. Shipped in [PR #34](https://github.com/mknw/harness-playground/pull/34) ([issue #30](https://github.com/mknw/harness-playground/issues/30)).
 > **Supersedes:** #26, #29 (both marked `[SUPERSEDED by #30]`).
-> **Orthogonal:** #19 (synthetic `expand_data` tool — internal cross-turn).
+> **Companion:** #19's `expandPreviousResult` synthetic tool also landed in PR #34 — see [§4 Mechanism](#4-mechanism) for how the two compose.
+> **API reference:** [`ui/src/lib/harness-patterns/README.md#withreferencespattern-config`](../../ui/src/lib/harness-patterns/README.md#withreferencespattern-config).
 
 ## 1. Problem
 

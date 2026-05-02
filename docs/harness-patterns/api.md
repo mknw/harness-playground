@@ -93,6 +93,28 @@ interface CriticResult {
   explanation: string
   suggested_approach?: string
 }
+
+// LoopTurn — entries pushed by simpleLoop on each iteration
+interface LoopTurn {
+  n: number
+  reasoning?: string
+  tool_call?: ToolCall
+  tool_result?: ToolResult
+  expansions?: ExpandedRef[]    // Refs resolved via ref:<id> this turn (rendered as "Expanded refs this turn")
+}
+
+interface ExpandedRef {
+  ref_id: string
+  content: string               // Full content (truncated to settings.maxResultChars)
+}
+
+// PriorResult — compact reference attached to LoopController as turns_previous_runs
+interface PriorResult {
+  ref_id: string                // Pass as ref:<id> in any tool's args to inline-expand
+  tool: string
+  summary: string
+  expanded_in_turn: number | null  // Set explicitly to null when not yet expanded (MiniJinja `is none` semantics)
+}
 ```
 
 ---
@@ -152,6 +174,40 @@ approvalPredicates.writes     // tool_name includes 'write'
 approvalPredicates.deletes    // tool_name includes 'delete'
 approvalPredicates.mutations  // write, delete, create, update, insert, remove
 ```
+
+### withReferences
+
+Wrap a pattern so that on entry, an LLM-driven selector picks relevant prior `tool_result` events and attaches them to the inner pattern's `priorResults` channel via `scope.data.attachedRefs`. See [`with-references.md`](with-references.md) for full design + selection cases.
+
+```typescript
+function withReferences<T>(
+  pattern: ConfiguredPattern<T>,
+  config?: WithReferencesConfig
+): ConfiguredPattern<T>
+
+interface WithReferencesConfig extends PatternConfig {
+  scope?: 'self' | 'global'    // Default: 'global'
+  source?: string | string[]   // Explicit patternId allow-list; overrides scope
+  maxRefs?: number             // Default: 5 (cap after selection)
+  selector?: SelectorFn        // Override default LLM selector (b.ReferenceSelector)
+}
+
+type SelectorFn = (input: {
+  intent: string
+  recentMessages: Array<{ role: 'user' | 'assistant'; content: string }>
+  candidates: ReferenceCandidate[]
+}) => Promise<{
+  selected: Array<{ ref_id: string; reason: string }>
+  reasoning: string
+}>
+```
+
+**Skip optimizations:** the LLM selector is bypassed and a `reference_attached` event with a `skipped` field is emitted when:
+- `skipped: 'empty'` — no eligible candidates
+- `skipped: 'single'` — exactly one candidate (attached unconditionally)
+- `skipped: 'cached'` — process-lifetime LRU hit on `(intent_hash, stash_snapshot_hash)`
+
+**Composes with `expandPreviousResult`:** the wrapper attaches *compact* refs (summary only). Inside the loop, the controller can either pass `ref:<ref_id>` as a tool argument (inline-expanded by `resolveRefs` before dispatch) or call the synthetic `expandPreviousResult` tool to load full content into a turn record. Either path records an `expansions[]` entry on the `LoopTurn`; the compact ref's `expanded_in_turn` field is then annotated with the first turn that expanded it, rendered as `(expanded in turn N)`.
 
 ### synthesizer
 
