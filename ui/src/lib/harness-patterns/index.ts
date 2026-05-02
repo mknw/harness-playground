@@ -36,6 +36,7 @@ export type {
   ControllerAction,
   CriticResult,
   ScriptExecutionEvent,
+  FewShot,
 
   // Router Config Types
   RouterConfig,

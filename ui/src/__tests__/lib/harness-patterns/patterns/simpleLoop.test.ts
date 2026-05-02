@@ -89,6 +89,50 @@ describe('simpleLoop', () => {
     expect(pattern.name).toBe('simpleLoop')
     expect(pattern.config.patternId).toBe('limited-loop')
   })
+
+  it('passes config.fewShots through to the controller', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn().mockResolvedValue({
+      action: mockFinalAction('Done'),
+      llmCall: undefined
+    })
+
+    const fewShots = [
+      {
+        user: 'List all concepts',
+        reasoning: 'plain MATCH',
+        tool: 'read_neo4j_cypher',
+        args: '{"query":"MATCH (c:Concept) RETURN c.name"}'
+      }
+    ]
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'shots-loop',
+      fewShots
+    })
+
+    const scope = createScope('shots-loop', { intent: 'q' })
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'q' } }
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'q'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    // 8th positional arg of controller(...) is fewShots
+    const args = mockController.mock.calls[0]
+    expect(args[7]).toEqual(fewShots)
+  })
 })
 
 describe('simpleLoop execution', () => {

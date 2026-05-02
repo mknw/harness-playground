@@ -599,6 +599,46 @@ describe('priorResults parameter passing', () => {
   })
 })
 
+describe('fewShots parameter passing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockLoopController.mockResolvedValue(mockFinalAction())
+  })
+
+  it('should pass fewShots as 7th argument to LoopController', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    const fewShots = [
+      {
+        user: 'Find concept by name',
+        reasoning: 'Direct property lookup',
+        tool: 'read_neo4j_cypher',
+        args: '{"query":"MATCH (c:Concept {name:$n}) RETURN c","params":{"n":"Redis"}}'
+      }
+    ]
+
+    await controller('msg', 'intent', '[]', 0, undefined, undefined, undefined, fewShots)
+
+    expect(mockLoopController).toHaveBeenCalled()
+    // LoopController args: user_message, intent, tools, turns, context, priorResults, fewShots
+    const [, , , , , , passedShots] = mockLoopController.mock.calls[0]
+    expect(passedShots).toEqual(fewShots)
+  })
+
+  it('should pass undefined fewShots when not provided', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    await controller('msg', 'intent', '[]', 0)
+
+    const [, , , , , , passedShots] = mockLoopController.mock.calls[0]
+    expect(passedShots).toBeUndefined()
+  })
+})
+
 describe('dedupByRefId', () => {
   it('drops duplicates, first occurrence wins', async () => {
     const { dedupByRefId } = await import('../../../lib/harness-patterns/baml-adapters.server')

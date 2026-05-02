@@ -12,7 +12,8 @@ function LoopController(
   tools: ToolDescription[],
   turns: LoopTurn[],
   context: string?,
-  turns_previous_runs: PriorResult[]?
+  turns_previous_runs: PriorResult[]?,
+  few_shots: FewShot[]?
 ) -> ControllerAction {
   client ControllerFallback
   prompt #"
@@ -26,6 +27,16 @@ function LoopController(
     {% if context %}
     CONTEXT:
     {{ context }}
+    {% endif %}
+
+    {% if few_shots and few_shots|length > 0 %}
+    EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
+    {% for ex in few_shots %}
+    - User: {{ ex.user }}
+      Reasoning: {{ ex.reasoning }}
+      Tool: {{ ex.tool }}
+      Args: {{ ex.args }}
+    {% endfor %}
     {% endif %}
 
     AVAILABLE TOOLS:

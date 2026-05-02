@@ -183,7 +183,8 @@ export function simpleLoop<T extends SimpleLoopData>(
             turn,
             config?.schema,
             collector,
-            priorResults
+            priorResults,
+            config?.fewShots
           )
           action = controllerResult.action
 
