@@ -24,6 +24,7 @@
 | [harness-patterns/examples.md](harness-patterns/examples.md) | Example agent catalog (10 agents) |
 | [harness-patterns/parallel.md](harness-patterns/parallel.md) | Parallel pattern design notes |
 | [harness-patterns/with-references.md](harness-patterns/with-references.md) | `withReferences` meta-pattern + `expandPreviousResult` synthetic tool design (#30, #19) |
+| [harness-patterns/withReferences-tutorial.md](harness-patterns/withReferences-tutorial.md) | Hands-on walkthrough — search the web, attach refs at ingress, write to Neo4j |
 
 Authoritative source-level docs (closer to the code):
 - [`ui/src/lib/harness-patterns/README.md`](../ui/src/lib/harness-patterns/README.md) — full framework API

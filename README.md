@@ -2,6 +2,14 @@
 
 A knowledge graph agent system with a BAML-powered AI agent, Neo4j graph database, SolidStart UI, and MCP Gateway for tool integration.
 
+## Feature showcase
+
+Cross-pattern data flow with `withReferences` — the agent searches the web in one turn, then writes the results into Neo4j on the next turn. The LLM-driven selector at each route's ingress attaches the most relevant prior `tool_result` events to the new pattern's `priorResults` channel; the controller uses the synthetic `expandPreviousResult` tool (or inline `ref:<id>` argument substitution) to pull the full data when it needs it. No re-fetching; no hallucinated content.
+
+![TypeScript 5.7 features fetched via web_search and written to Neo4j as connected Concept nodes](docs/harness-patterns/screenshots/05-neo4j-graph-result.png)
+
+→ Walkthrough: [`docs/harness-patterns/withReferences-tutorial.md`](docs/harness-patterns/withReferences-tutorial.md) · Design: [`docs/harness-patterns/with-references.md`](docs/harness-patterns/with-references.md)
+
 ## Architecture Overview
 
 ```
