@@ -1271,6 +1271,65 @@ describe('simpleLoop execution', () => {
     expect((expandResult.data as { result: unknown }).result).toEqual({ ok: true })
   })
 
+  it('regression: priorResults sent to controller have explicit null for unexpanded refs (postgres-18 hallucination repro)', async () => {
+    // Repro of the bug observed against the live agent (PR #34, fix 2a751e7):
+    // withReferences attached the postgres-18 web-search ref, but my original
+    // annotateExpansions left `expanded_in_turn` absent (not null). MiniJinja's
+    // `is not none` test evaluates TRUE for undefined attributes (because
+    // undefined ≠ None), so the prompt's `{% if r.expanded_in_turn is not none %}`
+    // branch fired for refs that had never been expanded — rendering
+    // "(expanded in turn )" with an empty turn number, suppressing the summary,
+    // and causing the LLM to hallucinate PostgreSQL release notes instead of
+    // calling expandPreviousResult.
+    //
+    // Fix: annotateExpansions always sets `expanded_in_turn: number | null`
+    // (never absent). This test guards against regressing to the absent-field
+    // form by asserting the explicit-null shape on the controller's input.
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const priorByCall: Array<unknown[]> = []
+    const mockController = vi.fn(async (
+      _user_message: string, _intent: string, _previous_results: string,
+      _n_turn: number, _schema?: unknown, _collector?: unknown, priorResults?: unknown
+    ) => {
+      priorByCall.push(priorResults as unknown[])
+      return { action: mockFinalAction('Done'), llmCall: undefined }
+    })
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'neo4j-query', trackHistory: true
+    })
+
+    const scope = createScope('neo4j-query', {
+      intent: 'Update Neo4j knowledge graph with PostgreSQL 18 release information',
+      attachedRefs: [
+        { ref_id: 'ev-pg18', tool: 'search',
+          summary: 'PostgreSQL 18 was released on September 25 2025...' }
+      ]
+    })
+    const mockContext = {
+      sessionId: 'test', createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness',
+          data: { content: 'Add this info to the neo4j graph' } }
+      ],
+      status: 'running' as const, data: {}, input: 'Add this info to the neo4j graph'
+    }
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    expect(priorByCall.length).toBe(1)
+    const prior = priorByCall[0] as Array<{ ref_id: string; expanded_in_turn: unknown }>
+    expect(prior).toHaveLength(1)
+    expect(prior[0].ref_id).toBe('ev-pg18')
+    // The critical assertion: `expanded_in_turn` is explicitly null, NOT absent.
+    expect(prior[0].expanded_in_turn).toBeNull()
+    expect('expanded_in_turn' in prior[0]).toBe(true)
+  })
+
   it('merges scope.data.attachedRefs with priorTurnCount-derived refs (dedup)', async () => {
     const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
