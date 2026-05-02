@@ -20,7 +20,7 @@ import type {
   ToolResultEventData,
   ControllerActionEventData
 } from '../types'
-import { MAX_TOOL_TURNS } from '../types'
+import { MAX_TOOL_TURNS, EXPAND_TOOL_NAME } from '../types'
 import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
@@ -216,6 +216,76 @@ export function simpleLoop<T extends SimpleLoopData>(
           }
           exitedViaReturn = true
           break
+        }
+
+        // Synthetic tool: `expandPreviousResult` — resolves a ref:<id> to its
+        // prior tool_result and records it as a normal turn. Intercepted here
+        // (before tools.includes guard) so the LLM has an explicit affordance
+        // for "I want to reuse this prior data" without needing a real tool.
+        if (action.tool_name === EXPAND_TOOL_NAME) {
+          const callId = generateId('tc')
+          // tool_args is the raw `ref:<eventId>` string (per prompt contract).
+          // Be lenient: also accept a JSON object `{"ref_id": "..."}`.
+          const argsStr = action.tool_args.trim()
+          let refId = ''
+          if (argsStr.startsWith('ref:')) {
+            refId = argsStr.slice(4)
+          } else {
+            try {
+              const parsed = repairJson(argsStr)
+              const candidate = parsed.ref_id ?? parsed.ref ?? parsed.id
+              refId = typeof candidate === 'string'
+                ? (candidate.startsWith('ref:') ? candidate.slice(4) : candidate)
+                : ''
+            } catch { /* refId stays '' */ }
+          }
+
+          const allEvents = view.fromAll().get()
+          const refEvent = allEvents.find(e => e.id === refId)
+          const refData = refEvent?.type === 'tool_result'
+            ? (refEvent.data as ToolResultEventData)
+            : null
+          const usable = refData && !refData.hidden && !refData.archived
+          const expanded = usable ? refData.result : null
+          const success = usable === true
+          const errorMsg = success
+            ? undefined
+            : `ref_id "${refId}" not found in tool_result events (or excluded as hidden/archived)`
+
+          trackEvent(scope, 'tool_call',
+            { callId, tool: EXPAND_TOOL_NAME, args: { ref_id: refId } } as ToolCallEventData,
+            resolved.trackHistory)
+          trackEvent(scope, 'tool_result', {
+            callId,
+            tool: EXPAND_TOOL_NAME,
+            result: expanded,
+            success,
+            error: errorMsg
+          } as ToolResultEventData, resolved.trackHistory)
+
+          // Record as a turn — same shape as a real tool, plus expansions[]
+          // so the per-turn rendering and `expanded_in_turn` annotation work.
+          const MAX_RESULT_CHARS = settings.maxResultChars
+          const resultStr = JSON.stringify(expanded)
+          const truncated = success && resultStr.length > MAX_RESULT_CHARS
+            ? resultStr.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
+            : resultStr
+          turns.push({
+            n: turn,
+            reasoning: action.reasoning,
+            tool_call: { tool: EXPAND_TOOL_NAME, args: action.tool_args },
+            tool_result: {
+              tool: EXPAND_TOOL_NAME,
+              result: truncated,
+              success,
+              error: errorMsg ?? null
+            },
+            ...(success ? { expansions: [{ ref_id: refId, content: truncated }] } : {})
+          })
+
+          scope.data = { ...scope.data, turn, lastAction: action }
+          // Continue to next turn — let the controller use the resolved data.
+          continue
         }
 
         // Validate tool

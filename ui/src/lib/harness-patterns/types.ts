@@ -215,6 +215,12 @@ export interface ActorCriticConfig extends PatternConfig {
   maxRetries?: number
 }
 
+/** Synthetic tool injected into LoopController's tools list when prior results
+ *  are present. simpleLoop intercepts this name before MCP dispatch — see
+ *  `simpleLoop.server.ts` for the resolver. tool_args is the raw `ref:<id>`
+ *  string (not JSON). */
+export const EXPAND_TOOL_NAME = 'expandPreviousResult'
+
 /** A compact reference candidate offered to a selector or attached to a pattern */
 export interface ReferenceCandidate {
   ref_id: string

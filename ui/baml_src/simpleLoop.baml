@@ -33,16 +33,17 @@ function LoopController(
     - {{ tool.name }}: {{ tool.description }}
       {% if tool.args_schema %}  Args: {{ tool.args_schema }}{% endif %}
     {% endfor %}
+    {% if turns_previous_runs and turns_previous_runs|length > 0 %}
+    - expandPreviousResult: (tool_args = ref:<ref_id>)
+    {% endif %}
     - Return: Signal task completion (tool_args = final answer or summary)
 
     {% if turns_previous_runs and turns_previous_runs|length > 0 %}
     RESULTS FROM PREVIOUS TASKS:
-    The following data was retrieved in prior requests. Reference it as context
-    or pass it to a tool by using "ref:<ref_id>" as an argument value — the
-    system will expand it inline before the tool runs, and the expanded content
-    will appear under "Expanded refs this turn" on the next iteration. If a
-    ref already shows "(expanded in turn N)" you have already inlined it; reuse
-    that turn's expansion instead of re-passing the ref unnecessarily.
+    Call `expandPreviousResult` with `tool_args = ref:<ref_id>` to load full
+    data, or pass `ref:<ref_id>` as any tool's argument to inline-expand it.
+    Refs marked `(expanded in turn N)` are already in your context — reuse,
+    don't re-expand.
 
     {% for r in turns_previous_runs %}
     - [ref:{{ r.ref_id }}] {{ r.tool }}: {{ r.summary }}{% if r.expanded_in_turn is not none %} (expanded in turn {{ r.expanded_in_turn }}){% endif %}
@@ -73,7 +74,7 @@ function LoopController(
     {% endif %}
 
     {{ _.role("user") }}
-    {{ user_message }}
+    INSTRUCTIONS: {{ user_message }}
 
     {{ _.role("assistant") }}
     Turn {{ turns|length + 1 }}. Decide the next action.

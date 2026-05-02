@@ -1100,6 +1100,177 @@ describe('simpleLoop execution', () => {
     expect(turn0.expansions).toBeUndefined()
   })
 
+  it('expandPreviousResult: resolves a valid ref and pushes a turn with expansions', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const turnsByCall: unknown[][] = []
+    const mockController = vi.fn(async (
+      _user_message: string, _intent: string, previous_results: string,
+      _n_turn: number, _schema?: unknown, _collector?: unknown, _priorResults?: unknown
+    ) => {
+      turnsByCall.push(JSON.parse(previous_results))
+      const action = turnsByCall.length === 1
+        ? mockAction({ tool_name: 'expandPreviousResult', tool_args: 'ref:ev-target' })
+        : mockFinalAction('Done')
+      return { action, llmCall: undefined }
+    })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'test', trackHistory: true
+    })
+
+    const scope = createScope('test', { intent: 'q' })
+    const mockContext = {
+      sessionId: 'test', createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'q' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-target',
+          data: { tool: 'web', result: { hello: 'world' }, success: true } }
+      ],
+      status: 'running' as const, data: {}, input: 'q'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // The synthetic call should NOT have hit the real tool dispatcher.
+    expect(callToolMock).not.toHaveBeenCalled()
+
+    // tool_call + tool_result should both be tracked under 'expandPreviousResult'.
+    const calls = result.events.filter(e => e.type === 'tool_call')
+    const results = result.events.filter(e => e.type === 'tool_result')
+    expect(calls.find(e => (e.data as { tool: string }).tool === 'expandPreviousResult')).toBeDefined()
+    const expandResult = results.find(e => (e.data as { tool: string }).tool === 'expandPreviousResult')!
+    expect((expandResult.data as { success: boolean }).success).toBe(true)
+    expect((expandResult.data as { result: unknown }).result).toEqual({ hello: 'world' })
+
+    // Second controller call sees turn 0 with expansions populated.
+    expect(turnsByCall.length).toBe(2)
+    const turn0 = (turnsByCall[1] as Array<{ n: number; expansions?: Array<{ ref_id: string }> }>)[0]
+    expect(turn0.expansions?.map(e => e.ref_id)).toEqual(['ev-target'])
+  })
+
+  it('expandPreviousResult: invalid ref_id is tracked as failure but loop continues', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'expandPreviousResult', tool_args: 'ref:ev-missing' }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        action: mockFinalAction('Done'),
+        llmCall: undefined
+      })
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test', trackHistory: true
+    })
+
+    const scope = createScope('test', { intent: 'q' })
+    const mockContext = {
+      sessionId: 'test', createdAt: Date.now(),
+      events: [{ type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'q' } }],
+      status: 'running' as const, data: {}, input: 'q'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Loop should not have aborted with an error event — it continues.
+    expect(result.events.some(e => e.type === 'error')).toBe(false)
+    // The second controller call should have happened (loop continued).
+    expect(mockController).toHaveBeenCalledTimes(2)
+
+    const expandResult = result.events.find(e =>
+      e.type === 'tool_result' && (e.data as { tool: string }).tool === 'expandPreviousResult'
+    )!
+    expect((expandResult.data as { success: boolean }).success).toBe(false)
+    expect((expandResult.data as { error: string }).error).toContain('ev-missing')
+  })
+
+  it('expandPreviousResult: hidden tool_results are unresolvable', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'expandPreviousResult', tool_args: 'ref:ev-hidden' }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        action: mockFinalAction('Done'),
+        llmCall: undefined
+      })
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test', trackHistory: true
+    })
+
+    const scope = createScope('test', { intent: 'q' })
+    const mockContext = {
+      sessionId: 'test', createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'q' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-hidden',
+          data: { tool: 'web', result: 'secret', success: true, hidden: true } }
+      ],
+      status: 'running' as const, data: {}, input: 'q'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    const expandResult = result.events.find(e =>
+      e.type === 'tool_result' && (e.data as { tool: string }).tool === 'expandPreviousResult'
+    )!
+    expect((expandResult.data as { success: boolean }).success).toBe(false)
+  })
+
+  it('expandPreviousResult: also accepts JSON form {"ref_id": "..."} for resilience', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const mockController = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'expandPreviousResult', tool_args: '{"ref_id":"ev-json"}' }),
+        llmCall: undefined
+      })
+      .mockResolvedValueOnce({
+        action: mockFinalAction('Done'),
+        llmCall: undefined
+      })
+
+    const pattern = simpleLoop(mockController, ['Return'], {
+      patternId: 'test', trackHistory: true
+    })
+
+    const scope = createScope('test', { intent: 'q' })
+    const mockContext = {
+      sessionId: 'test', createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: 1, patternId: 'harness', data: { content: 'q' } },
+        { type: 'tool_result' as const, ts: 2, patternId: 'p1', id: 'ev-json',
+          data: { tool: 'web', result: { ok: true }, success: true } }
+      ],
+      status: 'running' as const, data: {}, input: 'q'
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+    const expandResult = result.events.find(e =>
+      e.type === 'tool_result' && (e.data as { tool: string }).tool === 'expandPreviousResult'
+    )!
+    expect((expandResult.data as { success: boolean }).success).toBe(true)
+    expect((expandResult.data as { result: unknown }).result).toEqual({ ok: true })
+  })
+
   it('merges scope.data.attachedRefs with priorTurnCount-derived refs (dedup)', async () => {
     const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')
