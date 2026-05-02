@@ -58,7 +58,8 @@ const eventIcons: Record<EventType, string> = {
   pattern_exit: '■',
   approval_request: '⏸️',
   approval_response: '✅',
-  error: '❌'
+  error: '❌',
+  reference_attached: '🔗'
 }
 
 const eventColors: Record<EventType, string> = {
@@ -72,7 +73,8 @@ const eventColors: Record<EventType, string> = {
   pattern_exit: '#94a3b8',      // overridden per-pattern
   approval_request: '#f97316',  // orange-500
   approval_response: '#10b981', // emerald-500
-  error: '#ef4444'              // red-500
+  error: '#ef4444',             // red-500
+  reference_attached: '#c084fc' // purple-400
 }
 
 // ============================================================================

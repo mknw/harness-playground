@@ -34,6 +34,7 @@ Functional, composable framework for agentic tool execution.
   - [simpleLoop()](#simpleloopcontroller-tools-config)
   - [actorCritic()](#actorcriticactor-critic-tools-config)
   - [withApproval()](#withapprovalpattern-predicate)
+  - [withReferences()](#withreferencespattern-config)
   - [synthesizer()](#synthesizerconfig)
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
@@ -376,6 +377,52 @@ withApproval(
 approvalPredicates.writes     // tool_name includes 'write'
 approvalPredicates.deletes    // tool_name includes 'delete'
 approvalPredicates.mutations  // write, delete, create, update, insert, remove
+```
+
+### `withReferences(pattern, config?)`
+
+Wrap a pattern so that on entry, an LLM-driven selector picks relevant prior
+`tool_result` events from the visible event stream and attaches them to the
+inner pattern's `priorResults` channel via `scope.data.attachedRefs`. The
+adapter merges these into BAML's `turns_previous_runs` argument — **zero
+controller-prompt changes**.
+
+```typescript
+withReferences(
+  simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema }),
+  { scope: 'global', maxRefs: 5 }
+)
+```
+
+**Config:**
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `scope` | `'self' \| 'global'` | `'global'` | `'self'` = only the wrapper's own `patternId`. |
+| `source` | `string \| string[]` | — | Explicit `patternId` allow-list. Overrides `scope`. |
+| `maxRefs` | `number` | `5` | Cap on attached refs after selection. |
+| `selector` | `SelectorFn` | LLM-driven (`b.ReferenceSelector`) | Override for tests, evals, or deterministic policies. |
+
+**Skip optimizations** — the selector is bypassed when:
+- the eligible stash is empty → `skipped: 'empty'`, no refs attached
+- there is exactly one candidate → `skipped: 'single'`, attached unconditionally
+- a cache hit on `(intent_hash, stash_snapshot_hash)` → `skipped: 'cached'`, prior decision reused
+
+Each entry exit emits a `reference_attached` event with `{ candidates, selected, reasoning, skipped? }` for observability.
+
+**Composes with `expandPreviousResult`.** The wrapper attaches *compact* refs (summary only). Inside the loop, the controller can either:
+- pass `ref:<ref_id>` as a tool argument — the system inlines the full data into that tool's args before dispatch, **or**
+- call the synthetic `expandPreviousResult` tool (auto-injected by simpleLoop when prior results are present) with `tool_args = ref:<ref_id>` to load the full content into a turn record.
+
+Either path records an `expansions[]` entry on the `LoopTurn`; the compact ref entry then renders `(expanded in turn N)` so the controller doesn't redundantly re-expand.
+
+```typescript
+// Default agent migration (excerpt from examples/default.server.ts)
+const routesPattern = routes<SessionData>({
+  neo4j:       withReferences(neo4jPattern,       { scope: 'global' }),
+  web_search:  withReferences(webPattern,         { scope: 'global' }),
+  code_mode:   withReferences(codePattern,        { scope: 'global' })
+})
 ```
 
 ### `synthesizer(config)`

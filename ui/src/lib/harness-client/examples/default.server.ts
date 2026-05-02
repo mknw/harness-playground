@@ -11,6 +11,7 @@ import {
   simpleLoop,
   actorCritic,
   synthesizer,
+  withReferences,
   Tools,
   callTool,
   createNeo4jController,
@@ -73,11 +74,14 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     { liveEvents: true },
   );
 
+  // Each route is wrapped in `withReferences` so the inner pattern receives
+  // an LLM-curated set of relevant prior tool_results from any earlier turn,
+  // attached to its `priorResults` channel. See docs/harness-patterns/with-references.md.
   const routesPattern = routes<SessionData>(
     {
-      neo4j: neo4jPattern,
-      web_search: webPattern,
-      code_mode: codePattern,
+      neo4j: withReferences<SessionData>(neo4jPattern, { scope: "global", liveEvents: true }),
+      web_search: withReferences<SessionData>(webPattern, { scope: "global", liveEvents: true }),
+      code_mode: withReferences<SessionData>(codePattern, { scope: "global", liveEvents: true }),
     },
     { liveEvents: true },
   );

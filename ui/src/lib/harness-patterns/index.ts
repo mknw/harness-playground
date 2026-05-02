@@ -123,6 +123,7 @@ export {
   actorCritic,
   withApproval,
   approvalPredicates,
+  withReferences,
   chain,
   runChain,
   synthesizer,

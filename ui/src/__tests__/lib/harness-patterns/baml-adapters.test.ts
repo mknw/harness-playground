@@ -598,3 +598,56 @@ describe('priorResults parameter passing', () => {
     expect(passedPrior).toBeUndefined()
   })
 })
+
+describe('dedupByRefId', () => {
+  it('drops duplicates, first occurrence wins', async () => {
+    const { dedupByRefId } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const out = dedupByRefId([
+      { ref_id: 'a', tool: 'x', summary: 'first' },
+      { ref_id: 'b', tool: 'y', summary: 'b' },
+      { ref_id: 'a', tool: 'x', summary: 'second' }
+    ])
+    expect(out).toHaveLength(2)
+    expect(out[0]).toEqual({ ref_id: 'a', tool: 'x', summary: 'first' })
+    expect(out[1].ref_id).toBe('b')
+  })
+
+  it('returns empty array when input is empty', async () => {
+    const { dedupByRefId } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    expect(dedupByRefId([])).toEqual([])
+  })
+})
+
+describe('annotateExpansions', () => {
+  it('sets expanded_in_turn to first turn whose expansions contain the ref_id', async () => {
+    const { annotateExpansions } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const refs = [
+      { ref_id: 'a', tool: 'x', summary: 's' },
+      { ref_id: 'b', tool: 'y', summary: 's' },
+      { ref_id: 'c', tool: 'z', summary: 's' }
+    ]
+    const turns = [
+      { n: 0, expansions: [{ ref_id: 'b', content: 'B' }] },
+      { n: 1, expansions: [{ ref_id: 'a', content: 'A1' }, { ref_id: 'b', content: 'B2' }] },
+      { n: 2, expansions: [{ ref_id: 'a', content: 'A2' }] }
+    ]
+    const out = annotateExpansions(refs, turns)
+    expect(out[0].expanded_in_turn).toBe(1)  // 'a' first appears at turn 1
+    expect(out[1].expanded_in_turn).toBe(0)  // 'b' first appears at turn 0
+    // Unannotated refs get `null` explicitly (NOT undefined) so the BAML
+    // MiniJinja template's `is none` test fires correctly. If we left the
+    // field as undefined, MiniJinja's `is not none` would evaluate TRUE
+    // (because undefined ≠ None), incorrectly rendering "(expanded in turn )"
+    // and causing the LLM to hallucinate data instead of expanding it.
+    expect(out[2].expanded_in_turn).toBeNull()
+  })
+
+  it('always sets expanded_in_turn (null when no turns have expansions)', async () => {
+    const { annotateExpansions } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const refs = [{ ref_id: 'a', tool: 'x', summary: 's' }]
+    const out = annotateExpansions(refs, [{ n: 0 }, { n: 1, expansions: [] }])
+    expect(out[0].expanded_in_turn).toBeNull()
+    // Field must be present in the object — NOT absent.
+    expect('expanded_in_turn' in out[0]).toBe(true)
+  })
+})

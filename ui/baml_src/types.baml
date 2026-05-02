@@ -22,6 +22,13 @@ class LoopTurn {
   reasoning string? @description("Agent reasoning for this turn")
   tool_call ToolCall? @description("Tool invocation if any")
   tool_result ToolResult? @description("Tool execution result if any")
+  expansions ExpandedRef[]? @description("Refs resolved into tool_args this turn via ref:<id>")
+}
+
+/// A ref:<id> argument that was expanded inline during a turn
+class ExpandedRef {
+  ref_id string @description("Event ID that was expanded")
+  content string @description("Expanded content as it was inlined into tool_args (may be truncated)")
 }
 
 /// Tool call event
@@ -57,6 +64,7 @@ class PriorResult {
   ref_id string @description("Event ID — pass as ref:<ref_id> in tool arguments to expand full data")
   tool string @description("Tool that produced this result")
   summary string @description("Brief summary or preview of the result")
+  expanded_in_turn int? @description("Turn (in current loop) where this ref was first inlined; absent if never expanded")
 }
 
 // ============================================================================

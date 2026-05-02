@@ -45,6 +45,7 @@ export type EventType =
   | 'approval_request'
   | 'approval_response'
   | 'error'
+  | 'reference_attached'
 
 /** A single event in the context stream */
 export interface ContextEvent {
@@ -212,6 +213,44 @@ export interface ActorCriticConfig extends PatternConfig {
   availableTools?: string[]
   /** Max retries before giving up (default: 3) */
   maxRetries?: number
+}
+
+/** Synthetic tool injected into LoopController's tools list when prior results
+ *  are present. simpleLoop intercepts this name before MCP dispatch — see
+ *  `simpleLoop.server.ts` for the resolver. tool_args is the raw `ref:<id>`
+ *  string (not JSON). */
+export const EXPAND_TOOL_NAME = 'expandPreviousResult'
+
+/** A compact reference candidate offered to a selector or attached to a pattern */
+export interface ReferenceCandidate {
+  ref_id: string
+  tool: string
+  summary: string
+  tool_args?: string
+  ts: number
+}
+
+/** Custom selector function for `withReferences`. Override the default LLM-driven
+ *  selector when you want deterministic policies (tests, evals, fast-path). */
+export type SelectorFn = (input: {
+  intent: string
+  recentMessages: Array<{ role: 'user' | 'assistant'; content: string }>
+  candidates: ReferenceCandidate[]
+}) => Promise<{
+  selected: Array<{ ref_id: string; reason: string }>
+  reasoning: string
+}>
+
+/** Configuration for `withReferences` meta-pattern wrapper */
+export interface WithReferencesConfig extends PatternConfig {
+  /** Which patterns' tool_results are eligible. Default: 'global' */
+  scope?: 'self' | 'global'
+  /** Explicit patternId allow-list. Overrides `scope` when set. */
+  source?: string | string[]
+  /** Cap on attached refs after selection. Default: 5 */
+  maxRefs?: number
+  /** Override the default LLM-driven selector */
+  selector?: SelectorFn
 }
 
 // ============================================================================
@@ -476,6 +515,15 @@ export interface ErrorEventData {
   turn?: number
   /** Retry iteration (for actorCritic, 0-indexed) */
   iteration?: number
+}
+
+/** Data payload for reference_attached event — emitted by `withReferences` on pattern entry */
+export interface ReferenceAttachedEventData {
+  candidates: Array<{ ref_id: string; tool: string; summary: string }>
+  selected: Array<{ ref_id: string; reason: string }>
+  reasoning: string
+  /** Set when the selector wasn't called (skip optimization fast-path) */
+  skipped?: 'empty' | 'single' | 'cached'
 }
 
 // ============================================================================
