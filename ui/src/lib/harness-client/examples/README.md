@@ -26,6 +26,7 @@ compositions across all available MCP servers.
 | `simpleLoop` | `(controller, tools, config?)` | ReAct decide-execute loop |
 | `actorCritic` | `(actor, critic, tools, config?)` | Generate-evaluate with retry |
 | `withApproval` | `(pattern, predicate)` | Pause for user approval on matching actions |
+| `withReferences` | `(pattern, config?)` | LLM-curated prior-result attachment at pattern ingress (cross-pattern data flow, [#30](../../../../docs/harness-patterns/with-references.md)) |
 | `synthesizer` | `(config)` | Transform tool results into natural language |
 | `router` | `(routeDescriptions, config?)` | Intent classification → sets `data.route` |
 | `routes` | `(patternMap, config?)` | Dispatch to matched sub-pattern; pass-through on `'user'` route |
@@ -34,6 +35,8 @@ compositions across all available MCP servers.
 | `parallel` | `(...patterns)` | Execute multiple patterns concurrently, merge events with enter/exit markers |
 | `guardrail` | `(pattern, config)` | Multi-layered validation: input rails, execution rails, output rails, circuit breakers |
 | `hook` | `(pattern, config)` | Side-effect pattern triggered by lifecycle events; supports background fire-and-forget |
+
+> **Synthetic tool:** simpleLoop's `LoopController` prompt also exposes `expandPreviousResult` when prior results are present — a virtual tool that loads the full data behind a `ref:<id>` and records it as a normal turn. See [`with-references.md`](../../../../docs/harness-patterns/with-references.md) for the ingress/expansion taxonomy.
 
 ---
 

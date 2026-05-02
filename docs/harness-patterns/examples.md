@@ -29,19 +29,22 @@ All agents are registered in `registry.server.ts` and available via `getAgentLis
 
 **File:** `default.server.ts`
 
-Router-based multi-capability agent.
+Router-based multi-capability agent. Each route is wrapped with `withReferences` so the inner pattern receives an LLM-curated set of relevant prior `tool_result` events from any earlier turn (subsumes #26 / #29 — see [`with-references.md`](with-references.md)).
 
 ```typescript
-router(
-  { neo4j: '...', web_search: '...', code_mode: '...' },
-  { neo4j: neo4jPattern, web_search: webPattern, code_mode: codePattern }
-)
+router({ neo4j: '...', web_search: '...', code_mode: '...' })
+→ routes({
+    neo4j:      withReferences(neo4jPattern, { scope: 'global' }),
+    web_search: withReferences(webPattern,   { scope: 'global' }),
+    code_mode:  withReferences(codePattern,  { scope: 'global' })
+  })
 → synthesizer({ mode: 'thread' })
 ```
 
 - Neo4j queries with approval for mutations
 - Web search via DuckDuckGo
 - Code mode with actor-critic loop
+- Cross-turn data flow: `withReferences` selector attaches relevant prior refs at each route's ingress; the controller can use `expandPreviousResult` or pass `ref:<id>` in tool args to inline-expand the full data
 
 ---
 

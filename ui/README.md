@@ -71,7 +71,7 @@ Harness parameters (max tool turns, retries, result truncation, etc.) are config
 - **Neo4j driver format**: Objects with `identity`/`elementId`, `labels[]`, `properties{}`
 
 ### Agent Framework
-See [harness-patterns/README.md](src/lib/harness-patterns/README.md) for the full API reference.
+See [harness-patterns/README.md](src/lib/harness-patterns/README.md) for the full API reference. Cross-pattern data flow is handled by `withReferences` ([design](../docs/harness-patterns/with-references.md)) — every default-agent route is wrapped so the inner pattern receives an LLM-curated set of relevant prior `tool_result` events on entry, plus a synthetic `expandPreviousResult` tool the controller can call to load full content.
 
 ## Commands
 

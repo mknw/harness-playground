@@ -32,13 +32,24 @@ See [ui/ROADMAP.md](../ui/ROADMAP.md) for frontend-specific work: graph editing,
 ### Harness Patterns Framework ✅
 Replaced the legacy `baml-agent` system. Functional, composable agent patterns built on `UnifiedContext`.
 
-- 10 patterns: `simpleLoop`, `actorCritic`, `withApproval`, `synthesizer`, `router`, `chain`, `parallel`, `judge`, `guardrail`, `hook`
+- 11 patterns: `simpleLoop`, `actorCritic`, `withApproval`, `withReferences`, `synthesizer`, `router`, `chain`, `parallel`, `judge`, `guardrail`, `hook`
 - 10 pre-built agents in registry
 - EventView fluent API, BAML adapter factories
 - UnifiedContext session persistence + SSE event streaming
 - Redis-backed circuit breaker for guardrail pattern
 
 **Docs:** [harness-patterns/README.md](harness-patterns/README.md) · [API reference](harness-patterns/api.md) · [Examples](harness-patterns/examples.md)
+
+### Cross-Pattern Data Flow (`withReferences` + `expandPreviousResult`) ✅
+Replaced ad-hoc cross-pattern reference passing with a single declarative wrapper plus a synthetic expansion tool. Shipped in [PR #34](https://github.com/mknw/harness-playground/pull/34); subsumes #26 and #29.
+
+- `withReferences(pattern, { scope, source, maxRefs, selector })` — on entry, runs an LLM-driven selector over visible `tool_result` events and attaches relevant ones to the inner pattern's `priorResults` channel via `scope.data.attachedRefs` (issue #30)
+- `expandPreviousResult` — synthetic tool injected into the LoopController's tools list when prior results are present; simpleLoop intercepts the call, resolves `ref:<id>` against the event stream, and records a normal `tool_call` / `tool_result` pair plus an `expansions[]` entry on the LoopTurn (issue #19)
+- `LoopController` prompt enhanced with `(expanded in turn N)` annotations on compact refs, plus a per-turn `Expanded refs this turn` block — gives the controller self-referential awareness of which prior data has already been pulled into context
+- `reference_attached` event type for observability of the selection decision (candidates, selected, reasoning, skipped fast-path)
+- Default agent migrated: each route is wrapped with `withReferences({ scope: 'global' })`
+
+**Docs:** [harness-patterns/with-references.md](harness-patterns/with-references.md) · [API reference](../ui/src/lib/harness-patterns/README.md#withreferencespattern-config)
 
 ### Neo4j Integration ✅
 - Direct `neo4j-driver` for read/write operations
