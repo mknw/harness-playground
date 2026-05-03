@@ -274,8 +274,24 @@ interface SimpleLoopConfig extends PatternConfig {
   rememberPriorTurns?: boolean // Include prior tool results (default: true)
   priorTurnCount?: number      // How many prior user turns (default: 3)
   includeFailedResults?: boolean // Include failed tool results in prior context (default: false)
+  fewShots?: FewShot[]         // Domain-specific examples rendered into the LoopController prompt
+}
+
+interface FewShot {
+  user: string         // Example user request
+  reasoning: string    // Reasoning the agent followed
+  tool: string         // Tool name selected
+  args: string         // JSON-encoded tool arguments
 }
 ```
+
+**Few-shot examples.** `fewShots` is a per-pattern config knob that injects an `EXAMPLES`
+block into the controller prompt. Best for routes with a narrow tool surface where the
+LLM benefits from seeing the canonical query shape (e.g., parameterized Cypher with
+`MERGE` semantics, bulk `UNWIND` patterns, idiomatic `toLower()` substring search).
+Keep the list short (3-5) — the prompt grows with every shot and is sent on every turn.
+See `ui/src/lib/harness-client/examples/neo4j-fewshots.server.ts` for a worked example
+verified against the live Neo4j MCP.
 
 **How it works:**
 1. Extract params from context: `input`, `intent`, `previous_results`, `turn`

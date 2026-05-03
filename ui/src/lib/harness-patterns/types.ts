@@ -8,7 +8,8 @@
 export type {
   ControllerAction,
   CriticResult,
-  Attempt
+  Attempt,
+  FewShot
 } from '../../../baml_client/types'
 
 /**
@@ -205,6 +206,11 @@ export interface SimpleLoopConfig extends PatternConfig {
   priorTurnCount?: number
   /** Include failed tool results in prior turn context (default: false) */
   includeFailedResults?: boolean
+  /** Domain-specific few-shot examples rendered into the LoopController prompt.
+   *  Each shot is a `(user, reasoning, tool, args)` tuple shown verbatim under
+   *  an "EXAMPLES" section. Keep the list short (3-5) — the prompt grows with
+   *  every shot and is sent on every turn. */
+  fewShots?: import('../../../baml_client/types').FewShot[]
 }
 
 /** Configuration for actorCritic pattern */

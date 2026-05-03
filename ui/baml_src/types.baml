@@ -68,6 +68,20 @@ class PriorResult {
 }
 
 // ============================================================================
+// Few-Shot Examples
+// ============================================================================
+
+/// A canonical example of how the agent should pick a tool for a given user request.
+/// Few-shots are domain-specific — pass at config time on a per-route basis (e.g., a
+/// neo4j route ships graph-query examples; a web route ships search-formulation examples).
+class FewShot {
+  user string @description("Example user request")
+  reasoning string @description("Reasoning the agent followed before choosing the tool")
+  tool string @description("Tool name selected")
+  args string @description("JSON-encoded tool arguments matching the tool's schema")
+}
+
+// ============================================================================
 // Routing Types
 // ============================================================================
 

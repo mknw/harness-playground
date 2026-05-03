@@ -22,6 +22,7 @@ import {
 } from "../../harness-patterns";
 import type { SessionData } from "../session.server";
 import type { AgentConfig } from "../registry.server";
+import { NEO4J_FEW_SHOTS_DEFAULT } from "./neo4j-fewshots.server";
 
 async function getSchema(): Promise<string> {
   const result = await callTool("get_neo4j_schema", {});
@@ -46,6 +47,7 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
       schema,
       liveEvents: true,
       rememberPriorTurns: false,
+      fewShots: NEO4J_FEW_SHOTS_DEFAULT,
     },
   );
 

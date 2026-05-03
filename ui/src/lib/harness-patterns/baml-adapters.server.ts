@@ -19,7 +19,7 @@
 
 import { assertServerOnImport } from './assert.server'
 import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, CriticResult, ScriptExecutionEvent, LLMCallData } from './types'
-import type { ToolDescription, LoopTurn, Attempt, PriorResult } from '../../../baml_client/types'
+import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot } from '../../../baml_client/types'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 
@@ -49,7 +49,8 @@ export type ControllerFnWithLLMData = (
   n_turn: number,
   schema?: string,
   collector?: Collector,
-  priorResults?: PriorResult[]
+  priorResults?: PriorResult[],
+  fewShots?: FewShot[]
 ) => Promise<ControllerCallResult>
 
 /** Critic function that returns result + observability data */
@@ -183,7 +184,8 @@ export function createLoopControllerAdapter(
     n_turn: number,
     schema?: string,
     collector?: Collector,
-    priorResults?: PriorResult[]
+    priorResults?: PriorResult[],
+    fewShots?: FewShot[]
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
@@ -203,7 +205,7 @@ export function createLoopControllerAdapter(
       context = parts.join('\n\n')
     }
 
-    const variables = { user_message, intent, tools, turns, context, turns_previous_runs: priorResults }
+    const variables = { user_message, intent, tools, turns, context, turns_previous_runs: priorResults, few_shots: fewShots }
 
     // Call with or without collector.
     // On BamlValidationError, BAML's built-in fallback won't retry (it only covers network/API
@@ -212,15 +214,15 @@ export function createLoopControllerAdapter(
     let action: ControllerAction
     try {
       action = collector
-        ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, { collector })
-        : await b.LoopController(user_message, intent, tools, turns, context, priorResults)
+        ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, { collector })
+        : await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots)
     } catch (e) {
       if (!(e instanceof BamlValidationError)) throw e
       try {
-        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, { client: 'GroqGPT120B' })
+        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, { client: 'GroqGPT120B' })
       } catch (e2) {
         if (!(e2 instanceof BamlValidationError)) throw e2
-        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, { client: 'GroqFast' })
+        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, { client: 'GroqFast' })
       }
     }
 
