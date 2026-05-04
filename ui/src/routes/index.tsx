@@ -4,6 +4,7 @@ import { ChatInterface } from '~/components/ark-ui/ChatInterface'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
+import { mergeGraphElements } from '~/lib/graph-merge'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 
 export default function Home() {
@@ -13,13 +14,10 @@ export default function Home() {
   const [contextEvents, setContextEvents] = createSignal<ContextEvent[]>([])
   const [unifiedContext, setUnifiedContext] = createSignal<UnifiedContext | undefined>(undefined)
 
-  // Accumulate graph elements across calls (deduplicate by ID)
+  // Accumulate graph elements across calls. Dedup + touched-flag refresh logic
+  // lives in `mergeGraphElements` so it can be unit-tested in isolation.
   const accumulateGraphElements = (newElements: GraphElement[]) => {
-    setGraphElements(prev => {
-      const existingIds = new Set(prev.map(e => e.data?.id))
-      const uniqueNew = newElements.filter(e => !existingIds.has(e.data?.id))
-      return [...prev, ...uniqueNew]
-    })
+    setGraphElements(prev => mergeGraphElements(prev, newElements))
     // Track newly added IDs for highlighting
     const newIds = newElements.map(e => e.data?.id).filter((id): id is string => !!id)
     setHighlightedIds(newIds)

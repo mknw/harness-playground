@@ -133,10 +133,23 @@ function simpleLoop<T>(
 ): ConfiguredPattern<T>
 
 interface SimpleLoopConfig extends PatternConfig {
-  schema?: string             // Injected to controller
-  maxTurns?: number           // Default: 5
+  schema?: string                 // Injected to controller
+  maxTurns?: number               // Default: 5
+  rememberPriorTurns?: boolean    // Default: true
+  priorTurnCount?: number         // Default: 3
+  includeFailedResults?: boolean  // Default: false
+  fewShots?: FewShot[]            // EXAMPLES block in controller prompt
+  onToolResult?: OnToolResult     // Enrich/transform tool results pre-commit (closes #7)
 }
+
+type OnToolResult = (
+  toolName: string,
+  result: { success: boolean; data: unknown; error?: string },
+  context: { callId?: string; args: unknown }
+) => Promise<{ data?: unknown } | void> | { data?: unknown } | void
 ```
+
+See [`ui/src/lib/harness-patterns/README.md` § Hooks](../../ui/src/lib/harness-patterns/README.md#simpleloopcontroller-tools-config) for the full hook contract and the `enrichNeo4jResult` recipe.
 
 ### actorCritic
 
@@ -152,7 +165,8 @@ function actorCritic<T>(
 
 interface ActorCriticConfig extends PatternConfig {
   availableTools?: string[]
-  maxRetries?: number         // Default: 3
+  maxRetries?: number             // Default: 3
+  onToolResult?: OnToolResult     // Same shape + semantics as SimpleLoopConfig
 }
 ```
 

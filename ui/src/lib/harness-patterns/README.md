@@ -275,6 +275,7 @@ interface SimpleLoopConfig extends PatternConfig {
   priorTurnCount?: number      // How many prior user turns (default: 3)
   includeFailedResults?: boolean // Include failed tool results in prior context (default: false)
   fewShots?: FewShot[]         // Domain-specific examples rendered into the LoopController prompt
+  onToolResult?: OnToolResult  // Enrich/transform tool results before they're committed (see "Hooks" below)
 }
 
 interface FewShot {
@@ -283,6 +284,12 @@ interface FewShot {
   tool: string         // Tool name selected
   args: string         // JSON-encoded tool arguments
 }
+
+type OnToolResult = (
+  toolName: string,
+  result: { success: boolean; data: unknown; error?: string },
+  context: { callId?: string; args: unknown }
+) => Promise<{ data?: unknown } | void> | { data?: unknown } | void
 ```
 
 **Few-shot examples.** `fewShots` is a per-pattern config knob that injects an `EXAMPLES`
@@ -292,6 +299,32 @@ LLM benefits from seeing the canonical query shape (e.g., parameterized Cypher w
 Keep the list short (3-5) — the prompt grows with every shot and is sent on every turn.
 See `ui/src/lib/harness-client/examples/neo4j-fewshots.server.ts` for a worked example
 verified against the live Neo4j MCP.
+
+**Hooks: `onToolResult`** (closes #7). Called between `callTool()` and the
+`tool_result` event being committed, so the hook can enrich or transform the tool's
+output before downstream patterns and the UI see it. Returning `{ data }` replaces
+`result.data`; returning `void` leaves it unchanged. Failures are non-fatal — the
+loop logs an `error` event with severity `recoverable` and proceeds with the
+original result.
+
+```typescript
+import { enrichNeo4jResult } from '../harness-client/neo4j-enricher.server'
+
+simpleLoop(neo4jController, tools.neo4j, {
+  patternId: 'neo4j-query',
+  fewShots: NEO4J_FEW_SHOTS_DEFAULT,
+  onToolResult: enrichNeo4jResult,
+})
+```
+
+The `enrichNeo4jResult` recipe (`ui/src/lib/harness-client/neo4j-enricher.server.ts`)
+walks the tool's returned rows for `name` strings, fetches a 1-hop neighborhood
+directly via the `neo4j-driver` singleton, and emits an enriched payload of shape
+`{ rows, _neighborhood: { rows }, _touched: [...names] }`. The graph extractor
+recognizes that shape, dedups across the rows + neighborhood, and tags each
+node whose name is in `_touched` with `data.touched = true` so the Neo4j panel
+can highlight what the agent actually queried (vs. surrounding context).
+The same hook is also wired into `actorCritic`.
 
 **How it works:**
 1. Extract params from context: `input`, `intent`, `previous_results`, `turn`
@@ -313,7 +346,8 @@ actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all, {
 })
 
 interface ActorCriticConfig extends PatternConfig {
-  maxRetries?: number   // Default: 3
+  maxRetries?: number             // Default: 3
+  onToolResult?: OnToolResult     // Same shape + semantics as in SimpleLoopConfig
 }
 ```
 
@@ -968,7 +1002,7 @@ harness-patterns/
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, describeToolResultOp, etc.
 ├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window
-├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas)
+├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values)
 ├── assert.server.ts        # Server-only guards
 └── patterns/
     ├── index.ts

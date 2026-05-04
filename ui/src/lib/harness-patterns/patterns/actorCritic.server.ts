@@ -146,6 +146,31 @@ export function actorCritic<T extends ActorCriticData>(
         // Execute tool
         const result = await callTool(action.tool_name, args)
 
+        // onToolResult hook: enrich/transform result before commit. See SimpleLoop for full doc.
+        if (config?.onToolResult) {
+          try {
+            const hookResult = await config.onToolResult(
+              action.tool_name,
+              result,
+              { callId, args }
+            )
+            if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
+              result.data = hookResult.data
+            }
+          } catch (hookErr) {
+            const message = hookErr instanceof Error ? hookErr.message : String(hookErr)
+            trackEvent(
+              scope,
+              'error',
+              {
+                error: `onToolResult hook failed for ${action.tool_name}: ${message}`,
+                severity: 'recoverable',
+              },
+              true
+            )
+          }
+        }
+
         // Track result
         const script = typeof args.script === 'string' ? args.script : JSON.stringify(args)
         previousAttempts.push({

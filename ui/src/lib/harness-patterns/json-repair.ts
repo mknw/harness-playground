@@ -57,5 +57,30 @@ export function repairJson(raw: string): Record<string, unknown> {
     ': "$1"$2'
   )
 
+  try {
+    return JSON.parse(s)
+  } catch {
+    // continue to last-resort handler
+  }
+
+  // Last-resort: single-key object whose unquoted value contains commas / parens
+  // and so trips the "value up to next , } ]" regex above. Common with BAML's
+  // lossy stringification of Cypher tool_args, e.g.
+  //   {query: MATCH (c)-[r]-() RETURN c.name, count(r)}
+  // We extract the key, then take everything between the first colon and the
+  // final closing brace as a single string value. Only safe when the value has
+  // no nested `{`/`}` — bail otherwise.
+  const original = raw.trim()
+  const singleKey = original.match(/^\{\s*"?([a-zA-Z_$][\w$]*)"?\s*:\s*([\s\S]+?)\s*\}\s*$/)
+  if (singleKey) {
+    const [, key, rawValue] = singleKey
+    const value = rawValue.trim()
+    if (!value.includes('{') && !value.includes('}')) {
+      // Strip optional surrounding quotes the LLM may or may not have added.
+      const unquoted = value.replace(/^['"`]([\s\S]*)['"`]$/, '$1')
+      return { [key]: unquoted }
+    }
+  }
+
   return JSON.parse(s)
 }

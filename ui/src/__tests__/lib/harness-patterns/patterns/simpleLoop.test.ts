@@ -133,6 +133,100 @@ describe('simpleLoop', () => {
     const args = mockController.mock.calls[0]
     expect(args[7]).toEqual(fewShots)
   })
+
+  it('awaits onToolResult and uses returned data in the tool_result event', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const onToolResult = vi.fn().mockResolvedValue({ data: { enriched: true, original: 'kept' } })
+
+    const mockController = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"MATCH (n) RETURN n"}' }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'hook',
+      onToolResult,
+    })
+
+    const scope = createScope('hook', { intent: 'q' })
+    const mockContext = {
+      sessionId: 'hook',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'q' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'q',
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    expect(onToolResult).toHaveBeenCalledTimes(1)
+    const [calledTool, calledResult, calledCtx] = onToolResult.mock.calls[0]
+    expect(calledTool).toBe('read_neo4j_cypher')
+    expect(typeof calledResult.success).toBe('boolean')
+    expect(typeof calledCtx.callId).toBe('string')
+
+    const toolResults = result.events.filter(e => e.type === 'tool_result')
+    expect(toolResults).toHaveLength(1)
+    const data = toolResults[0].data as { result: { enriched: boolean; original: string } }
+    expect(data.result.enriched).toBe(true)
+    expect(data.result.original).toBe('kept')
+  })
+
+  it('does not abort the loop when onToolResult throws — logs an error and keeps original result', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    const onToolResult = vi.fn().mockRejectedValue(new Error('enrichment exploded'))
+
+    const mockController = vi.fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"MATCH (n) RETURN n"}' }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher', 'Return'], {
+      patternId: 'hook-err',
+      onToolResult,
+    })
+
+    const scope = createScope('hook-err', { intent: 'q' })
+    const mockContext = {
+      sessionId: 'hook-err',
+      createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'q' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'q',
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Original tool_result is preserved (mock callTool returns fixtures.neo4j.queryResult).
+    const toolResults = result.events.filter(e => e.type === 'tool_result')
+    expect(toolResults).toHaveLength(1)
+    expect((toolResults[0].data as { success: boolean }).success).toBe(true)
+
+    // Hook failure surfaces as an error event, not a fatal abort.
+    const errors = result.events.filter(e => e.type === 'error')
+    expect(errors.some(e => JSON.stringify(e.data).includes('onToolResult hook failed'))).toBe(true)
+
+    // Controller still got called for the final 'Return' turn.
+    expect(mockController).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('simpleLoop execution', () => {
