@@ -399,6 +399,33 @@ export function simpleLoop<T extends SimpleLoopData>(
         // Execute tool with resolved args
         const result = await callTool(action.tool_name, resolvedArgs)
 
+        // onToolResult hook: enrich/transform result before the event is committed.
+        // Failures here are non-fatal — log an error event, keep the original result.
+        if (config?.onToolResult) {
+          try {
+            const hookResult = await config.onToolResult(
+              action.tool_name,
+              result,
+              { callId, args: resolvedArgs }
+            )
+            if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
+              result.data = hookResult.data
+            }
+          } catch (hookErr) {
+            const message = hookErr instanceof Error ? hookErr.message : String(hookErr)
+            trackEvent(
+              scope,
+              'error',
+              {
+                error: `onToolResult hook failed for ${action.tool_name}: ${message}`,
+                severity: 'recoverable',
+                turn,
+              } as ErrorEventData,
+              true
+            )
+          }
+        }
+
         // Track tool result event
         trackEvent(
           scope,

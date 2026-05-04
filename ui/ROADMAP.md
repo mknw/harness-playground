@@ -77,6 +77,15 @@
 - [x] Data Stash tab in SupportPanel with Current Turn / Previous Turns / Archived sections
 - [x] Hide/unhide/archive/unarchive via `POST /api/stash` with optimistic UI updates
 
+### Neo4j Tab — Reliable Visualization with Touched-Node Highlight
+- [x] `get_neo4j_schema` no longer renders relationship-type names as fake nodes (#14): extractor short-circuits the tool name and tightens the plain-object fallback so it requires a string `name`/`id`/`title` and rejects schema-info bags
+- [x] `onToolResult` hook on `SimpleLoopConfig` + `ActorCriticConfig` (closes #7) — failures are non-fatal `recoverable` events
+- [x] `neo4j-enricher.server.ts` — fetches a 1-hop neighborhood for touched node names directly via the `neo4j-driver` singleton; emits `{ rows, _neighborhood, _touched }`; canonicalises rel-tuple direction (`rel.start → rel.end`) so dup edges across queries collapse
+- [x] `TOUCHED_NODE_STYLES` in `SupportPanel` (Neo4j tab only) — magenta highlight via `extraStyles`
+- [x] `mergeGraphElements` (`ui/src/lib/graph-merge.ts`) refreshes `data.touched` per batch so the highlight tracks the most recent enriched query
+- [x] `repairJson` single-key fallback for BAML's lossy stringification of comma-rich Cypher tool_args
+- [x] Fixture-driven tests against real MCP outputs (`graph-extractor.test.ts`, `neo4j-enricher.test.ts`, `graph-merge.test.ts`) — 550/550 passing
+
 ### All Tab — Turn-Based Graph Explorer
 - [x] `lazyMount` + `unmountOnExit` on Tabs.Root (prevents hidden Cytoscape instances)
 - [x] FloatingPanel turn picker with horizontal turn columns

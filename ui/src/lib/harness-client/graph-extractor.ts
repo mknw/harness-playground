@@ -73,6 +73,26 @@ export function isMemoryGraphResult(toolName: string, _result: unknown): boolean
   return memoryTools.some(t => toolName.includes(t))
 }
 
+/** Enrichment payload produced by `enrichNeo4jResult()` — original rows plus
+ * a 1-hop neighborhood and the list of touched node names (canonical = `name`).
+ */
+interface EnrichedNeo4jResult {
+  rows: unknown
+  _neighborhood: { rows: unknown }
+  _touched: string[]
+}
+
+function isEnrichedNeo4jResult(value: unknown): value is EnrichedNeo4jResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const v = value as Record<string, unknown>
+  return Array.isArray(v._touched) && 'rows' in v && '_neighborhood' in v
+}
+
+/** Schema-info bag from `get_neo4j_schema` (APOC shape) — never a graph node. */
+function looksLikeSchemaInfo(obj: Record<string, unknown>): boolean {
+  return (obj.type === 'node' || obj.type === 'relationship') && 'count' in obj
+}
+
 /** Parse Neo4j Cypher result into graph elements.
  *
  * Handles two formats:
@@ -91,6 +111,24 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
   let parsed = result
   if (typeof result === 'string') {
     try { parsed = JSON.parse(result) } catch { return elements }
+  }
+
+  // Enrichment payload from onToolResult hook: original rows + 1-hop neighborhood.
+  // Process both as records, then tag nodes whose name is in `_touched`.
+  if (isEnrichedNeo4jResult(parsed)) {
+    const enriched = parsed as EnrichedNeo4jResult
+    const touched = new Set(enriched._touched.map(String))
+    const fromRows = parseNeo4jResult(enriched.rows, source)
+    const fromNeighborhood = parseNeo4jResult(enriched._neighborhood?.rows, source)
+    const all = [...fromRows, ...fromNeighborhood]
+    for (const el of all) {
+      if (!el.data) continue
+      const isNode = el.data.source === undefined && el.data.target === undefined
+      if (isNode && el.data.id !== undefined && touched.has(String(el.data.id))) {
+        el.data.touched = true
+      }
+    }
+    return deduplicateElements(all)
   }
 
   // Handle array of records (typical Cypher result)
@@ -138,18 +176,21 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
         continue
       }
 
-      // MCP node format: plain object with properties (has name/id, no identity/elementId)
+      // MCP node format: plain object with properties (has name/id, no identity/elementId).
+      // Require a string name/id/title to be confident this is a real node — this avoids
+      // synthesizing fake nodes from schema-info bags (`get_neo4j_schema` shape) and other
+      // metadata-shaped objects. (Bug #14 root cause was the absence of this guard.)
       if (typeof value === 'object' && !Array.isArray(value) && !isNeo4jNode(value)) {
         const obj = value as Record<string, unknown>
-        const id = String(obj.name ?? obj.id ?? `node-${key}-${elements.length}`)
-        // Skip scalar-wrapper objects (e.g. { count: 5 })
-        if (Object.keys(obj).length > 0) {
-          elements.push({
-            data: { id, label: id, type: 'Node', ...obj },
-            source
-          })
-          continue
-        }
+        if (looksLikeSchemaInfo(obj)) continue
+        const idSource = obj.name ?? obj.id ?? obj.title
+        if (typeof idSource !== 'string' || idSource.length === 0) continue
+        const id = idSource
+        elements.push({
+          data: { id, label: id, type: 'Node', ...obj },
+          source
+        })
+        continue
       }
 
       // Neo4j driver format (identity, labels, properties)
@@ -374,6 +415,11 @@ export function extractGraphElements(events: unknown[]): GraphElement[] {
 
     const toolName = data.tool ?? ''
     const result = data.result
+
+    // Schema is metadata, not graph data — skip entirely. (Bug #14: the APOC schema
+    // shape `{ Concept: { type: 'node', count, ... }, HAS_CONCEPT: { type: 'relationship', count } }`
+    // would otherwise produce one fake node per top-level key.)
+    if (toolName === 'get_neo4j_schema') continue
 
     // Determine source based on pattern ID and tool name
     let source = getSourceFromPattern(patternId)

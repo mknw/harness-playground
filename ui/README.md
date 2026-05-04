@@ -29,16 +29,18 @@ src/
 ├── lib/
 │   ├── harness-patterns/      # Core agent framework (see harness-patterns/README.md)
 │   ├── harness-client/
-│   │   ├── actions.server.ts  # processMessage(), processMessageStreaming()
-│   │   ├── session.server.ts  # In-memory session store
-│   │   ├── registry.server.ts # Registers all agents
-│   │   ├── graph-extractor.ts # ContextEvent → GraphElement[] (MCP + driver formats)
-│   │   └── examples/          # 10 pre-built agent configurations
+│   │   ├── actions.server.ts        # processMessage(), processMessageStreaming()
+│   │   ├── session.server.ts        # In-memory session store
+│   │   ├── registry.server.ts       # Registers all agents
+│   │   ├── graph-extractor.ts       # ContextEvent → GraphElement[] (MCP + driver + enriched payload)
+│   │   ├── neo4j-enricher.server.ts # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
+│   │   └── examples/                # 10 pre-built agent configurations
 │   ├── settings.ts            # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
 │   ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
 │   ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
 │   ├── turn-utils.ts          # splitIntoTurns(), extractTurnGraphElements()
 │   ├── turn-colors.ts         # Per-turn color palette for graph visualization
+│   ├── graph-merge.ts         # mergeGraphElements() — accumulator dedup + touched-flag refresh
 │   ├── neo4j/
 │   │   ├── queries.ts         # Schema, manual Cypher, node properties
 │   │   └── write-action.ts    # Parameterized Cypher writes from graph UI
@@ -69,6 +71,8 @@ Harness parameters (max tool turns, retries, result truncation, etc.) are config
 `graph-extractor.ts` handles two Neo4j result formats:
 - **MCP format**: Flat record objects where nodes are `{ name, description, ... }` and relationships are `[startNode, "TYPE", endNode]` tuples
 - **Neo4j driver format**: Objects with `identity`/`elementId`, `labels[]`, `properties{}`
+
+It also recognises the **enriched payload** produced by `neo4j-enricher.server.ts` (`{ rows, _neighborhood, _touched }`) — the Neo4j panel uses the `data.touched` flag to highlight the nodes the agent's query actually targeted, while neighborhood context renders in the default cyan. `get_neo4j_schema` results are suppressed entirely (#14: prevented relationship-type names from being rendered as fake nodes). See [`harness-client/README.md`](src/lib/harness-client/README.md#graph-extraction) for the full pipeline.
 
 ### Agent Framework
 See [harness-patterns/README.md](src/lib/harness-patterns/README.md) for the full API reference. Cross-pattern data flow is handled by `withReferences` ([design](../docs/harness-patterns/with-references.md)) — every default-agent route is wrapped so the inner pattern receives an LLM-curated set of relevant prior `tool_result` events on entry, plus a synthetic `expandPreviousResult` tool the controller can call to load full content.

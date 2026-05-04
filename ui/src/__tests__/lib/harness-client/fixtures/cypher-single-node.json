@@ -1,0 +1,8 @@
+[
+  {
+    "c": {
+      "name": "Redis",
+      "description": "Open-source in-memory key-value database written in C, released 2009, maintained by Redis Labs."
+    }
+  }
+]

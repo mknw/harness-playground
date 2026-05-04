@@ -102,6 +102,21 @@ describe('repairJson', () => {
         query: 'MATCH (n) RETURN n LIMIT 10'
       })
     })
+
+    it('handles BAML-stringified single-key Cypher (commas + parens in value)', () => {
+      // Reproduction of the failure case observed in `neo4j-query` (turn 1):
+      // BAML lossily stringified {query: "..."} to a JS-style object literal,
+      // dropping all quotes. The value contains commas and parens from the Cypher.
+      const input = '{query: MATCH (c:Concept)-[r]-() RETURN c.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 1}'
+      expect(repairJson(input)).toEqual({
+        query: 'MATCH (c:Concept)-[r]-() RETURN c.name AS name, count(r) AS degree ORDER BY degree DESC LIMIT 1'
+      })
+    })
+
+    it('strips surrounding quotes from the lossy single-key value', () => {
+      const input = '{query: "MATCH (c)-[r]-() RETURN c, r"}'
+      expect(repairJson(input)).toEqual({ query: 'MATCH (c)-[r]-() RETURN c, r' })
+    })
   })
 
   describe('error cases', () => {

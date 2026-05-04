@@ -1,0 +1,47 @@
+[
+  {
+    "a": { "name": "Redis", "description": "Open-source in-memory key-value database." },
+    "r": [
+      { "name": "Redis", "description": "Open-source in-memory key-value database." },
+      "HAS_CONCEPT",
+      { "name": "vector embedding", "description": "A dense numeric representation of data." }
+    ],
+    "b": { "name": "vector embedding", "description": "A dense numeric representation of data." }
+  },
+  {
+    "a": { "name": "Redis", "description": "Open-source in-memory key-value database." },
+    "r": [
+      { "name": "Redis", "description": "Open-source in-memory key-value database." },
+      "CAN_BE",
+      { "name": "Open Source", "description": "Software with source code publicly available." }
+    ],
+    "b": { "name": "Open Source", "description": "Software with source code publicly available." }
+  },
+  {
+    "a": { "name": "Redis", "description": "Open-source in-memory key-value database." },
+    "r": [
+      { "name": "Redis", "description": "Open-source in-memory key-value database." },
+      "HAS_FIELD",
+      { "name": "C Programming Language", "description": "Systems programming language used to implement Redis." }
+    ],
+    "b": { "name": "C Programming Language", "description": "Systems programming language used to implement Redis." }
+  },
+  {
+    "a": { "name": "Redis", "description": "Open-source in-memory key-value database." },
+    "r": [
+      { "name": "Redis", "description": "Open-source in-memory key-value database." },
+      "CAN_BE",
+      { "name": "In-Memory Data Platform", "description": "A platform that stores data primarily in RAM." }
+    ],
+    "b": { "name": "In-Memory Data Platform", "description": "A platform that stores data primarily in RAM." }
+  },
+  {
+    "a": { "name": "Redis", "description": "Open-source in-memory key-value database." },
+    "r": [
+      { "name": "Redis", "description": "Open-source in-memory key-value database." },
+      "HAS_FIELD",
+      { "name": "Redis 8.6.2", "description": "Latest stable release as of March 2026." }
+    ],
+    "b": { "name": "Redis 8.6.2", "description": "Latest stable release as of March 2026." }
+  }
+]

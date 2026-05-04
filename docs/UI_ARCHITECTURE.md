@@ -329,6 +329,10 @@ Tabbed right panel. **Observability is the default tab.** Uses `lazyMount` + `un
 
 **Conversation Sync toggle:** The Neo4j and Memory graph tabs have a ⏸/▶ "Sync" button (cyan when live, amber when paused). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
 
+**Touched-node highlight (Neo4j tab only):** When an agent runs a Neo4j query, the `enrichNeo4jResult` hook (`onToolResult` on `simpleLoop`) attaches a 1-hop neighborhood plus a `_touched` list to the tool result. The extractor tags nodes whose name is in that list with `data.touched = true`, and the Neo4j tab passes a static `TOUCHED_NODE_STYLES` block (`node[touched]` selector → magenta fill/border + glow) as `extraStyles` to `GraphVisualization`. The result: nodes the agent's query *actually targeted* render in magenta, while neighborhood-context nodes render in the default cyan. The Memory tab does not receive this stylesheet.
+
+**Touched-flag refresh across turns** (`ui/src/lib/graph-merge.ts`): `index.tsx` accumulates elements via `mergeGraphElements(prev, fresh)` rather than ad-hoc dedup. When a fresh batch carries any element with `touched: true`, the merger first strips the flag from all prior elements, then re-applies it to elements in the new batch — so the magenta highlight tracks the most recent enriched query and doesn't linger on nodes from earlier topics. When the fresh batch carries no `touched` flags (e.g., a non-enriched tool, or a count-only query), prior `touched` flags are preserved.
+
 **All Tab — Turn Explorer (AllGraphTab.tsx):**
 The All tab does not use the accumulated `graphElements` signal. Instead, it derives graph elements on-demand from `contextEvents`:
 
@@ -432,7 +436,7 @@ Displays the full agent event timeline:
 
 ```
 index.tsx (top-level state)
-    ├─ graphElements: Signal<GraphElement[]>     ← accumulated, deduplicated
+    ├─ graphElements: Signal<GraphElement[]>     ← accumulated via mergeGraphElements (dedup + touched-flag refresh)
     ├─ contextEvents: Signal<ContextEvent[]>     ← accumulated per turn
     ├─ unifiedContext: Signal<UnifiedContext?>   ← latest full session context
     ├─ highlightedIds: Signal<string[]>          ← newly added graph node IDs

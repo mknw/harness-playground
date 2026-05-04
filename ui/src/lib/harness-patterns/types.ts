@@ -194,6 +194,24 @@ export type CodeModeControllerFn = (
 // Pattern Configuration
 // ============================================================================
 
+/** Result handed to `onToolResult` and returned (mutated) back to the loop. */
+export interface ToolCallResult {
+  success: boolean
+  data: unknown
+  error?: string
+}
+
+/** Hook called by simpleLoop / actorCritic between `callTool()` and the
+ *  `tool_result` event being committed. Returning `{ data }` replaces
+ *  `result.data`; returning void/undefined leaves it unchanged. Throwing
+ *  is non-fatal — the loop logs an `error` event and continues with the
+ *  original result. Closes #7. */
+export type OnToolResult = (
+  toolName: string,
+  result: ToolCallResult,
+  context: { callId?: string; args: unknown }
+) => Promise<{ data?: unknown } | void> | { data?: unknown } | void
+
 /** Configuration for simpleLoop pattern */
 export interface SimpleLoopConfig extends PatternConfig {
   /** Optional schema to inject (for neo4j) */
@@ -211,6 +229,9 @@ export interface SimpleLoopConfig extends PatternConfig {
    *  an "EXAMPLES" section. Keep the list short (3-5) — the prompt grows with
    *  every shot and is sent on every turn. */
   fewShots?: import('../../../baml_client/types').FewShot[]
+  /** Hook to enrich/transform a tool result before the `tool_result` event is
+   *  committed. See `OnToolResult`. */
+  onToolResult?: OnToolResult
 }
 
 /** Configuration for actorCritic pattern */
@@ -219,6 +240,9 @@ export interface ActorCriticConfig extends PatternConfig {
   availableTools?: string[]
   /** Max retries before giving up (default: 3) */
   maxRetries?: number
+  /** Hook to enrich/transform a tool result before the `tool_result` event is
+   *  committed. See `OnToolResult`. */
+  onToolResult?: OnToolResult
 }
 
 /** Synthetic tool injected into LoopController's tools list when prior results

@@ -1,0 +1,24 @@
+{
+  "Concept": {
+    "type": "node",
+    "count": 37,
+    "properties": {
+      "name": { "indexed": false, "type": "STRING" },
+      "description": { "indexed": false, "type": "STRING" }
+    },
+    "relationships": {
+      "HAS_CONCEPT": { "direction": "out", "labels": ["Concept"] },
+      "DEFINES": { "direction": "out", "labels": ["Concept"] },
+      "HAS_ROOT": { "direction": "out", "labels": ["Concept"] },
+      "HAS_FIELD": { "direction": "out", "labels": ["Concept"] },
+      "RESOLVED_BY": { "direction": "out", "labels": ["Concept"] },
+      "CAN_BE": { "direction": "out", "labels": ["Concept"] }
+    }
+  },
+  "HAS_CONCEPT": { "type": "relationship", "count": 2 },
+  "DEFINES": { "type": "relationship", "count": 9 },
+  "HAS_ROOT": { "type": "relationship", "count": 4 },
+  "HAS_FIELD": { "type": "relationship", "count": 8 },
+  "RESOLVED_BY": { "type": "relationship", "count": 3 },
+  "CAN_BE": { "type": "relationship", "count": 14 }
+}

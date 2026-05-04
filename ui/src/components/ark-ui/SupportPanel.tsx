@@ -12,8 +12,23 @@ import { ObservabilityPanel } from './ObservabilityPanel';
 import { DataStashPanel, type StashAction } from './DataStashPanel';
 import { ToolsPanel } from './ToolsPanel';
 import { AllGraphTabWrapper } from './AllGraphTab';
-import type { ElementDefinition } from 'cytoscape';
+import type { ElementDefinition, StylesheetJsonBlock } from 'cytoscape';
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns';
+
+/** Highlight nodes the agent's query actually touched (vs. surrounding context).
+ *  The extractor sets `data.touched = true` on these — see `graph-extractor.ts`. */
+const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
+  {
+    selector: 'node[touched]',
+    style: {
+      'background-color': '#ff00ff',
+      'border-color': '#ff00ff',
+      'border-width': 4,
+      'overlay-color': '#ff00ff',
+      'overlay-opacity': 0.3,
+    },
+  },
+];
 
 // ============================================================================
 // Types
@@ -218,6 +233,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
               onEdgeClick={props.onEdgeClick}
               onClearGraph={props.onClearGraph}
               onCypherWrite={props.onCypherWrite}
+              extraStyles={TOUCHED_NODE_STYLES}
               emptyMessage="No Neo4j graph data yet. Query your knowledge base to see results."
               emptyIcon="🗄️"
             />
@@ -308,6 +324,7 @@ interface GraphTabContentProps {
   onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>;
   emptyMessage: string;
   emptyIcon: string;
+  extraStyles?: StylesheetJsonBlock[];
 }
 
 const GraphTabContent = (props: GraphTabContentProps) => {
@@ -390,6 +407,7 @@ const GraphTabContent = (props: GraphTabContentProps) => {
             onNodeClick={props.onNodeClick}
             onEdgeClick={props.onEdgeClick}
             onCypherWrite={props.onCypherWrite}
+            extraStyles={props.extraStyles}
           />
         </Show>
       </div>

@@ -6,6 +6,11 @@
 
 ## Planned / Deferred
 
+### Open follow-ups from the Neo4j panel work
+- [ ] [#37](https://github.com/mknw/harness-playground/issues/37) — synthesizer ignores `Return.tool_args` and replays stale "Loop exhausted" error (bug, good first issue)
+- [ ] [#38](https://github.com/mknw/harness-playground/issues/38) — `ResizeObserver loop completed with undelivered notifications` when switching to/from Neo4j tab (bug)
+- [ ] [#39](https://github.com/mknw/harness-playground/issues/39) — tag each `turns_previous_runs` entry with its originating `user_message` (good first issue, low priority)
+
 ### Observability
 - [ ] Collapsible sections for large JSON payloads in EventDetailOverlay
 - [ ] Show tool input arguments in detail overlay (currently only output/result is shown)
@@ -39,6 +44,18 @@ Replaced the legacy `baml-agent` system. Functional, composable agent patterns b
 - Redis-backed circuit breaker for guardrail pattern
 
 **Docs:** [harness-patterns/README.md](harness-patterns/README.md) · [API reference](harness-patterns/api.md) · [Examples](harness-patterns/examples.md)
+
+### Neo4j Panel Reliability + `onToolResult` Hook ✅
+Made the Neo4j visualization tab actually reflect what the agent did. Branch `mknw/issue-14-neo4j-panel`; subsumes #14 and #7.
+
+- **Extractor (`graph-extractor.ts`)** — short-circuits `get_neo4j_schema` (the APOC schema shape was being walked as graph data and rendering relationship-type names as fake nodes — bug #14); tightened the plain-object fallback so it only synthesises a node when a string `name`/`id`/`title` is present and the value isn't a `{type, count, …}` schema-info bag; recognises an enriched `{ rows, _neighborhood, _touched }` payload and tags touched-node IDs.
+- **`onToolResult` hook on `SimpleLoopConfig` + `ActorCriticConfig`** (closes #7) — called between `callTool()` and the `tool_result` event commit; can return `{ data }` to replace the result, throws are non-fatal (logged as `recoverable` error). Mirrored in `actorCritic`.
+- **`neo4j-enricher.server.ts`** — default recipe: walks the result for `name` strings, fetches a 1-hop neighborhood directly via the `neo4j-driver` singleton, returns the enriched payload. Always serialises the rel tuple in the relationship's actual direction (`rel.start → rel.end`) so edge IDs remain stable across queries that touch the same rel from either endpoint (no duplicate edges).
+- **Touched-node highlight** — `TOUCHED_NODE_STYLES` in `SupportPanel` (Neo4j tab only) maps `data.touched` to a magenta fill via `extraStyles`. `mergeGraphElements` (`ui/src/lib/graph-merge.ts`) refreshes the flag per batch so the highlight tracks the most recent enriched query.
+- **`json-repair`** — added a single-key fallback for BAML's lossy stringification of object tool_args (`{query: MATCH (c)-[r]-() RETURN c, r}` → previously failed because the unquoted Cypher value contains commas + parens).
+- **Fixture-driven tests** — `graph-extractor.test.ts`, `neo4j-enricher.test.ts`, `graph-merge.test.ts` all use real MCP outputs captured against the live gateway. 550/550 tests passing.
+
+**Docs:** [`ui/src/lib/harness-patterns/README.md` § Hooks](../ui/src/lib/harness-patterns/README.md#simpleloopcontroller-tools-config) · [`ui/src/lib/harness-client/README.md` § Neo4j enricher](../ui/src/lib/harness-client/README.md#neo4j-enricher-ontoolresult-recipe)
 
 ### Cross-Pattern Data Flow (`withReferences` + `expandPreviousResult`) ✅
 Replaced ad-hoc cross-pattern reference passing with a single declarative wrapper plus a synthetic expansion tool. Shipped in [PR #34](https://github.com/mknw/harness-playground/pull/34); subsumes #26 and #29.

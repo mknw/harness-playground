@@ -1,0 +1,33 @@
+{
+  "rows": [
+    {
+      "c": {
+        "name": "Redis",
+        "description": "Open-source in-memory key-value database."
+      }
+    }
+  ],
+  "_neighborhood": {
+    "rows": [
+      {
+        "n": { "name": "Redis", "description": "Open-source in-memory key-value database." },
+        "r": [
+          { "name": "Redis", "description": "Open-source in-memory key-value database." },
+          "HAS_CONCEPT",
+          { "name": "vector embedding", "description": "A dense numeric representation of data." }
+        ],
+        "m": { "name": "vector embedding", "description": "A dense numeric representation of data." }
+      },
+      {
+        "n": { "name": "Redis", "description": "Open-source in-memory key-value database." },
+        "r": [
+          { "name": "Redis", "description": "Open-source in-memory key-value database." },
+          "CAN_BE",
+          { "name": "Open Source", "description": "Software with source code publicly available." }
+        ],
+        "m": { "name": "Open Source", "description": "Software with source code publicly available." }
+      }
+    ]
+  },
+  "_touched": ["Redis"]
+}
