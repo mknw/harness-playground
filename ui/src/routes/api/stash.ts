@@ -1,15 +1,28 @@
 /**
  * Data Stash API — Hide / Unhide / Archive / Unarchive tool results
  *
- * Mutates the in-memory session context and re-serializes.
- * Hidden/archived tool results are excluded from serializeCompact()
- * so loop patterns no longer see them.
+ * Loads the persisted UnifiedContext for the current user, mutates the
+ * specified tool_result via `enrichToolResult`, and writes the updated
+ * blob back to Postgres.
  */
 import type { APIEvent } from "@solidjs/start/server";
-import { getSession, updateSession } from "../../lib/harness-client/session.server";
-import { enrichToolResult, serializeContext } from "../../lib/harness-patterns";
+import {
+  loadSession,
+  saveSession,
+} from "../../lib/harness-client/session.server";
+import {
+  deserializeContext,
+  enrichToolResult,
+  serializeContext,
+} from "../../lib/harness-patterns";
+import { getAuthenticatedUser } from "../../lib/auth/server";
 
 type StashAction = "hide" | "unhide" | "archive" | "unarchive";
+
+async function requireUserId(): Promise<string> {
+  if (import.meta.env.VITE_DEV_BYPASS_AUTH === "true") return "dev-bypass-user";
+  return (await getAuthenticatedUser()).id;
+}
 
 export async function POST(event: APIEvent) {
   const body = await event.request.json();
@@ -26,15 +39,25 @@ export async function POST(event: APIEvent) {
     );
   }
 
-  const session = getSession(sessionId);
-  if (!session?.lastResult?.context) {
+  let userId: string;
+  try {
+    userId = await requireUserId();
+  } catch (err) {
     return new Response(
-      JSON.stringify({ error: "Session not found or no context available" }),
+      JSON.stringify({ error: err instanceof Error ? err.message : "Unauthorized" }),
+      { status: 401, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  const loaded = await loadSession(sessionId, userId);
+  if (!loaded) {
+    return new Response(
+      JSON.stringify({ error: "Session not found" }),
       { status: 404, headers: { "Content-Type": "application/json" } },
     );
   }
 
-  const ctx = session.lastResult.context;
+  const ctx = deserializeContext(loaded.serializedContext);
   const patch: { hidden?: boolean; archived?: boolean } = {};
 
   switch (action) {
@@ -66,9 +89,7 @@ export async function POST(event: APIEvent) {
     );
   }
 
-  updateSession(sessionId, {
-    serializedContext: serializeContext(ctx),
-  });
+  await saveSession(sessionId, userId, loaded.agentId, serializeContext(ctx));
 
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,

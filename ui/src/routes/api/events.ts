@@ -6,9 +6,15 @@
  */
 import type { APIEvent } from "@solidjs/start/server";
 import { processMessageStreaming } from "../../lib/harness-client/actions.server";
-import { updateSession } from "../../lib/harness-client/session.server";
+import { saveSession } from "../../lib/harness-client/session.server";
 import { scheduleSummarization, serializeContext } from "../../lib/harness-patterns";
+import { getAuthenticatedUser } from "../../lib/auth/server";
 import type { HarnessSettings } from "../../lib/settings";
+
+async function requireUserId(): Promise<string> {
+  if (import.meta.env.VITE_DEV_BYPASS_AUTH === "true") return "dev-bypass-user";
+  return (await getAuthenticatedUser()).id;
+}
 
 export async function POST(event: APIEvent) {
   const body = await event.request.json();
@@ -26,6 +32,19 @@ export async function POST(event: APIEvent) {
     });
   }
 
+  // Auth here so we have a userId for the post-response background save —
+  // the wrapped server action below also authenticates (defense in depth).
+  let userId: string;
+  try {
+    userId = await requireUserId();
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: err instanceof Error ? err.message : "Unauthorized" }),
+      { status: 401, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  const resolvedAgentId = agentId ?? "default";
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -34,7 +53,7 @@ export async function POST(event: APIEvent) {
         const result = await processMessageStreaming(
           sessionId,
           message,
-          agentId ?? "default",
+          resolvedAgentId,
           (evt) => {
             const data = JSON.stringify(evt);
             controller.enqueue(encoder.encode(`data: ${data}\n\n`));
@@ -59,9 +78,12 @@ export async function POST(event: APIEvent) {
         // Summaries are stored on tool_result events and persisted to session,
         // so they appear as compact pointers on subsequent turns.
         scheduleSummarization(result.context, async () => {
-          updateSession(sessionId, {
-            serializedContext: serializeContext(result.context),
-          });
+          await saveSession(
+            sessionId,
+            userId,
+            resolvedAgentId,
+            serializeContext(result.context),
+          );
         }).catch((err) =>
           console.error("[summarize] background summarization failed:", err),
         );
