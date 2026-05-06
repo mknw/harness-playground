@@ -29,12 +29,15 @@ src/
 ├── lib/
 │   ├── harness-patterns/      # Core agent framework (see harness-patterns/README.md)
 │   ├── harness-client/
-│   │   ├── actions.server.ts        # processMessage(), processMessageStreaming()
-│   │   ├── session.server.ts        # In-memory session store
+│   │   ├── actions.server.ts        # processMessage(), processMessageStreaming(), listConversations(), loadConversation()
+│   │   ├── session.server.ts        # In-process pattern cache + Postgres-backed serialized context (per-user)
 │   │   ├── registry.server.ts       # Registers all agents
 │   │   ├── graph-extractor.ts       # ContextEvent → GraphElement[] (MCP + driver + enriched payload)
 │   │   ├── neo4j-enricher.server.ts # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
 │   │   └── examples/                # 10 pre-built agent configurations
+│   ├── db/
+│   │   ├── client.server.ts         # Lazy pg.Pool singleton + idempotent schema bootstrap
+│   │   └── conversations.server.ts  # Conversations repo (load/save/list/delete + deriveTitle)
 │   ├── settings.ts            # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
 │   ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
 │   ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
@@ -54,6 +57,9 @@ src/
 
 ### SSE Event Streaming
 Agent events stream to the client in real-time via `POST /api/events`. The UI updates the graph visualization and observability panel incrementally as events arrive.
+
+### Conversation Persistence
+Conversations are persisted to Postgres in a single `conversations` table; the `context` column holds the full `serializeContext()` blob. The sidebar lists per-user threads via `listConversations()`, and selecting a thread calls `loadConversation()` which rehydrates events into the graph + observability panel. Titles are sticky (first 60 chars of the first user message). Auth is gated by Stack Auth (or `dev-bypass-user` when `VITE_DEV_BYPASS_AUTH=true`). See [`src/lib/harness-client/README.md`](src/lib/harness-client/README.md#session-lifecycle) for the session lifecycle.
 
 ### Interactive Graph Visualization
 - Cytoscape.js rendering with dark theme and multiple layouts

@@ -14,26 +14,29 @@ Cross-pattern data flow with `withReferences` — the agent searches the web in 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    SolidStart UI (Port 3000)                    │
+│                    SolidStart UI (Port 3444)                    │
 │  ┌─────────────┐  ┌────────────────┐  ┌───────────────────────┐ │
-│  │ Chat        │  │ Graph          │  │ Support Panel         │ │
-│  │ Interface   │  │ Visualization  │  │ (Observability/Tools) │ │
+│  │ Chat +      │  │ Graph          │  │ Support Panel         │ │
+│  │ Sidebar     │  │ Visualization  │  │ (Observability/Tools) │ │
 │  └──────┬──────┘  └────────────────┘  └───────────────────────┘ │
 │         │                                                        │
 │         ▼                                                        │
 │  ┌──────────────────────────────────────────────────────────┐   │
-│  │              BAML Agent (Server Functions)                │   │
-│  │  RouteUserMessage → Tool Loop → CreateToolResponse        │   │
+│  │           Harness Patterns (Server Functions)             │   │
+│  │  Router → simpleLoop / actorCritic / withReferences /     │   │
+│  │  parallel / withApproval / … → Synthesizer                │   │
+│  │  + UnifiedContext, EventView, BAML adapters, SSE stream   │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                               │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-     ┌────────────┐  ┌────────────────┐  ┌──────────┐
-     │ Neo4j      │  │ MCP Gateway    │  │ n8n      │
-     │ (Direct)   │  │ (Port 8811)    │  │ (5678)   │
-     │ Port 7687  │  │ web_search,    │  │ Workflows│
-     └────────────┘  │ fetch, etc.    │  └──────────┘
+              ┌───────────────┼─────────────┬──────────────┐
+              ▼               ▼             ▼              ▼
+     ┌────────────┐  ┌────────────────┐  ┌──────────┐  ┌──────────┐
+     │ Neo4j      │  │ MCP Gateway    │  │ Postgres │  │ Redis    │
+     │ (Direct +  │  │ (Port 8811)    │  │ (5432)   │  │ (6379)   │
+     │  via MCP)  │  │ neo4j, web,    │  │ chat     │  │ guardrail│
+     │ Port 7687  │  │ memory, redis, │  │ history  │  │ + h9s    │
+     └────────────┘  │ filesystem, …  │  └──────────┘  └──────────┘
                      └────────────────┘
 ```
 
@@ -62,57 +65,68 @@ pnpm dev
 ```
 
 **Access Points:**
-- **UI**: http://localhost:3000
+- **UI**: http://localhost:3444
 - **Neo4j Browser**: http://localhost:7474 (neo4j/password)
 - **MCP Gateway**: http://localhost:8811/mcp
+- **Postgres** (chat history): localhost:5432 (postgres/password, db `kgagent`)
 - **n8n** (optional): http://localhost:5678
 
 ## Services
 
 All services run in Docker containers via the `app-network` bridge network:
 
-| Service | Port | Description | Config File Reference |
-|---------|------|-------------|----------------------|
-| **Neo4j** | 7474, 7687 | Graph database with APOC and n10s plugins | `docker-compose.yaml:17-35` |
-| **MCP Gateway** | 8811 | Model Context Protocol gateway for AI tools | `docker-compose.yaml:37-56` |
-| **n8n** | 5678 | Workflow automation (optional) | `docker-compose.yaml:1-15` |
+| Service | Port | Description |
+|---------|------|-------------|
+| **Neo4j** | 7474, 7687 | Graph database with APOC and n10s plugins |
+| **MCP Gateway** | 8811 | Model Context Protocol gateway for AI tools |
+| **Postgres** | 5432 | Conversation history (per-user, persisted across restarts) |
+| **Redis** | 6379 | Guardrail circuit-breaker state, ephemeral cache |
+| **n8n** | 5678 | Workflow automation (optional) |
 
-## BAML Agent
+## Agent Framework
 
-The agent uses [BAML](https://docs.boundaryml.com/) for structured LLM reasoning with type-safe outputs.
+The agent runs on **harness-patterns** — a composable pattern framework built on a `UnifiedContext` event log. Patterns are functions of `(scope, view, tools)` that emit events and can be composed via `chain`, `router`, `parallel`, `withApproval`, `withReferences`, etc. BAML provides type-safe LLM reasoning at each pattern's leaf.
 
-### Core Flow
+### Core flow
 
-1. **RouteUserMessage** - Detect intent and determine tool needs
-2. **Tool Loop** (max 5 turns) - Plan and execute tools with namespace-specific handlers
-3. **CreateToolResponse** - Synthesize results into user-friendly response
+1. **Router** classifies the user message and selects a route
+2. **Inner pattern** (typically `simpleLoop` or `actorCritic`) runs the tool loop, optionally wrapped with `withReferences` so prior `tool_result` events from earlier turns are attached to the new pattern's `priorResults` channel via an LLM-driven selector
+3. **Synthesizer** turns the accumulated events into the final assistant response
 
-### Tool Namespaces
+### Tool namespaces (via MCP Gateway)
 
-| Namespace | Tools | Execution Method |
-|-----------|-------|------------------|
-| `neo4j` | read_neo4j_cypher, write_neo4j_cypher, get_neo4j_schema | Direct neo4j-driver |
-| `web_search` | web_search (DuckDuckGo), fetch | MCP Gateway |
-| `code_mode` | JavaScript multi-tool composition | MCP Gateway |
+`neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database`, `code` — plus any custom servers added to `configs/custom-catalog.yaml`. Tool grouping happens in `ui/src/lib/harness-patterns/tools.server.ts` (`inferServer()` + `KNOWN_TOOL_SERVERS` lookup).
 
-See [docs/baml_agent/ARCHITECTURE.md](docs/baml_agent/ARCHITECTURE.md) for detailed architecture.
+Full API: [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md) · Examples: [`ui/src/lib/harness-client/examples/README.md`](ui/src/lib/harness-client/examples/README.md) · Cross-pattern data flow walkthrough: [`docs/harness-patterns/withReferences-tutorial.md`](docs/harness-patterns/withReferences-tutorial.md).
+
+## Conversation Persistence
+
+Conversations are persisted to Postgres in a single `conversations(id, user_id, agent_id, title, context jsonb, created_at, updated_at)` table — the `context` column is the full `serializeContext()` blob, no normalization. Schema is bootstrapped idempotently on first DB hit, so the bring-up is just `docker compose up -d`.
+
+- Per-user scoping: every load/save is gated by `user_id` (Stack Auth, or `dev-bypass-user` when `VITE_DEV_BYPASS_AUTH=true`)
+- Sticky titles: first 60 chars of the first user message becomes the title, locked in via `COALESCE` on update
+- Sidebar lists threads via `listConversations()`; selecting one calls `loadConversation()` and replays events into the graph + observability panel
+
+Implementation: `ui/src/lib/db/{client,conversations}.server.ts` and `ui/src/lib/harness-client/session.server.ts`.
 
 ## MCP Servers
 
-The system uses three MCP servers configured in `custom-catalog.yaml`:
+Configured in `configs/custom-catalog.yaml` and enabled via `configs/mcp-config.yaml`. The gateway runs with `--enable-all-servers`, so any registered server is exposed unless explicitly disabled.
 
-### neo4j-cypher
-- **Tools**: `get_neo4j_schema`, `read_neo4j_cypher`, `write_neo4j_cypher`
-- **Purpose**: Execute Cypher queries against Neo4j
-- **Note**: Uses custom catalog with fixed `NEO4J_URI` mapping (not `NEO4J_URL`)
+| Server | Tools | Purpose |
+|--------|-------|---------|
+| `neo4j-cypher` | `get_neo4j_schema`, `read_neo4j_cypher`, `write_neo4j_cypher` | Execute Cypher (uses fixed `NEO4J_URI` mapping, not `NEO4J_URL`) |
+| `fetch` | `fetch` | Retrieve content from the web |
+| `web_search` | `web_search` | DuckDuckGo web search |
+| `rust-mcp-filesystem` | filesystem ops | Sandboxed filesystem access via configured allowed directories |
+| `github` | repo / issue / PR ops | GitHub API |
+| `memory` | entity / observation / relation ops | Knowledge-graph–style scratch memory |
+| `redis` | key / hash / json / vector ops | Redis primitives + RediSearch |
+| `database-server` | SQL ops | Generic database access |
+| `playwright` | browser automation | E2E testing (requires `pnpm dev:exposed`) |
+| `context7` | `resolve-library-id`, `get-library-docs` | Library docs |
 
-### fetch
-- **Tools**: `fetch`
-- **Purpose**: Retrieve content from the web
-
-### web_search
-- **Tools**: `web_search`
-- **Purpose**: DuckDuckGo web search for information retrieval
+Tool namespaces consumed by `harness-patterns/tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, `github`, `memory`, `redis`, `database`, `code` (and `all`). See `KNOWN_TOOL_SERVERS` in that file for the namespace lookup.
 
 ## Neo4j Database
 
@@ -162,38 +176,27 @@ docker compose up -d
 
 ```
 kg-agent/
-├── docker-compose.yaml       # Docker service orchestration
-├── mcp-config.yaml           # MCP server configuration
-├── custom-catalog.yaml       # Custom MCP catalog
-├── .mcp.json                  # Claude Code MCP config
+├── docker-compose.yaml       # Neo4j, MCP Gateway, Postgres, Redis, n8n
+├── configs/
+│   ├── mcp-config.yaml       # MCP server connection params
+│   └── custom-catalog.yaml   # Custom MCP catalog (Docker image-based)
+├── .mcp.json                 # Claude Code MCP config
 ├── neo4j_dumps/              # Cypher exports for data versioning
-│   ├── README.md
-│   └── seed-data.cypher
-├── scripts/                  # Utility scripts
-│   ├── export-neo4j.sh
-│   ├── import-neo4j.sh
-│   └── reset-neo4j.sh
+├── scripts/                  # export-neo4j.sh, import-neo4j.sh, reset-neo4j.sh
 ├── ui/                       # SolidStart frontend
-│   ├── baml_src/             # BAML function definitions
-│   │   ├── agent.baml
-│   │   └── clients.baml
+│   ├── baml_src/             # BAML function definitions (regenerate via `pnpm baml-generate`)
 │   ├── src/
+│   │   ├── routes/           # SolidStart routes + /api/events SSE endpoint
 │   │   ├── components/       # UI components (Ark UI)
-│   │   ├── lib/
-│   │   │   ├── utcp-baml-agent/  # Agent implementation
-│   │   │   ├── neo4j/            # Neo4j client
-│   │   │   └── graph/            # Graph transformations
-│   │   └── routes/           # SolidStart routes
+│   │   └── lib/
+│   │       ├── harness-patterns/  # Composable pattern framework
+│   │       ├── harness-client/    # Server actions, registry, session, examples/
+│   │       ├── db/                # Postgres pool + conversations repo
+│   │       ├── neo4j/             # neo4j-driver singleton + write actions
+│   │       └── auth/              # Stack Auth client + server helpers
 │   └── package.json
-├── docs/                     # Documentation
-│   ├── INDEX.md              # Documentation index
-│   ├── baml_agent/
-│   │   └── ARCHITECTURE.md   # Agent architecture
-│   ├── DOCKER_COMPOSE.md
-│   ├── MCP_GATEWAY.md
-│   ├── UI_ARCHITECTURE.md
-│   └── ROADMAP.md
-└── graphiti-mcp/             # Graphiti MCP utilities
+├── docs/                     # Documentation (see docs/INDEX.md)
+└── graphiti-mcp/             # Graphiti MCP utilities (optional)
 ```
 
 ## Adding New MCP Servers
@@ -243,11 +246,12 @@ kg-agent/
 | Document | Description |
 |----------|-------------|
 | [docs/INDEX.md](docs/INDEX.md) | Documentation index and overview |
-| [docs/baml_agent/ARCHITECTURE.md](docs/baml_agent/ARCHITECTURE.md) | BAML agent streaming architecture |
 | [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md) | SolidStart UI structure and patterns |
 | [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md) | Service configuration details |
 | [docs/MCP_GATEWAY.md](docs/MCP_GATEWAY.md) | MCP Gateway reference |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Development roadmap |
+| [docs/harness-patterns/README.md](docs/harness-patterns/README.md) | Harness patterns overview + tutorials |
+| [ui/src/lib/harness-patterns/README.md](ui/src/lib/harness-patterns/README.md) | Harness patterns API reference |
 | [neo4j_dumps/README.md](neo4j_dumps/README.md) | Neo4j data versioning workflow |
 
 ## Troubleshooting
