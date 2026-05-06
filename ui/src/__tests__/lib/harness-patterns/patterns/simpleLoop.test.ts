@@ -1680,3 +1680,140 @@ describe('simpleLoop execution', () => {
   })
 
 })
+
+// ============================================================================
+// Issue #43 — `is_final=true` paired with a real tool must run the tool
+// ============================================================================
+
+describe('simpleLoop is_final on a real tool', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('executes the tool and emits matching events when is_final=true is paired with a real tool', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    callToolMock.mockResolvedValue({ success: true, data: { wrote: 1 } })
+
+    // Single controller call: a real tool with is_final=true. Pre-fix this
+    // was silently dropped; post-fix the tool runs once and the loop exits.
+    const mockController = vi.fn().mockResolvedValueOnce({
+      action: mockAction({
+        tool_name: 'write_neo4j_cypher',
+        tool_args: '{"query":"CREATE (n:Test {name:\\"x\\"}) RETURN n"}',
+        is_final: true,
+      }),
+      llmCall: undefined,
+    })
+
+    const pattern = simpleLoop(mockController, ['write_neo4j_cypher', 'Return'], {
+      patternId: 'final-write', trackHistory: true,
+    })
+
+    const scope = createScope('final-write', { intent: 'create x' })
+    const mockContext = {
+      sessionId: 'final-write', createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'create x' } },
+      ],
+      status: 'running' as const, data: {}, input: 'create x',
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // Tool was actually invoked exactly once.
+    expect(callToolMock).toHaveBeenCalledTimes(1)
+    const [toolName] = callToolMock.mock.calls[0]
+    expect(toolName).toBe('write_neo4j_cypher')
+
+    // Both tool_call and tool_result events landed.
+    const toolCalls = result.events.filter(e => e.type === 'tool_call')
+    const toolResults = result.events.filter(e => e.type === 'tool_result')
+    expect(toolCalls).toHaveLength(1)
+    expect(toolResults).toHaveLength(1)
+
+    // Loop exited via Return-equivalent (no exhaustion error).
+    const errors = result.events.filter(e => e.type === 'error')
+    expect(errors).toHaveLength(0)
+
+    // Controller called exactly once — we did not loop further after is_final.
+    expect(mockController).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT run a tool when tool_name === "Return" (Return remains the explicit termination signal)', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    callToolMock.mockClear()
+    callToolMock.mockResolvedValue({ success: true, data: { ok: true } })
+
+    const mockController = vi.fn().mockResolvedValueOnce({
+      action: mockFinalAction('Done'),
+      llmCall: undefined,
+    })
+
+    const pattern = simpleLoop(mockController, ['Return'], { patternId: 'pure-return' })
+    const scope = createScope('pure-return', {})
+    const mockContext = {
+      sessionId: 'pure-return', createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'q' } },
+      ],
+      status: 'running' as const, data: {}, input: 'q',
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // No tool was invoked; only the controller_action event landed.
+    expect(callToolMock).not.toHaveBeenCalled()
+    expect(result.events.filter(e => e.type === 'tool_call')).toHaveLength(0)
+    expect(result.events.filter(e => e.type === 'tool_result')).toHaveLength(0)
+  })
+
+  it('records is_final tool failures so synthesizer can surface them honestly', async () => {
+    const { simpleLoop } = await import('../../../../lib/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    // Tool fails. The fix should still emit the tool_result (with success=false)
+    // before exiting — never silently swallow a failed final call.
+    callToolMock.mockClear()
+    callToolMock.mockResolvedValue({ success: false, data: null, error: 'cypher syntax error' })
+
+    const mockController = vi.fn().mockResolvedValueOnce({
+      action: mockAction({
+        tool_name: 'write_neo4j_cypher',
+        tool_args: '{"query":"BROKEN"}',
+        is_final: true,
+      }),
+      llmCall: undefined,
+    })
+
+    const pattern = simpleLoop(mockController, ['write_neo4j_cypher', 'Return'], {
+      patternId: 'final-write-fail', trackHistory: true,
+    })
+    const scope = createScope('final-write-fail', {})
+    const mockContext = {
+      sessionId: 'final-write-fail', createdAt: Date.now(),
+      events: [
+        { type: 'user_message' as const, ts: Date.now(), patternId: 'harness', data: { content: 'q' } },
+      ],
+      status: 'running' as const, data: {}, input: 'q',
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    expect(callToolMock).toHaveBeenCalledTimes(1)
+    const toolResults = result.events.filter(e => e.type === 'tool_result')
+    expect(toolResults).toHaveLength(1)
+    const data = toolResults[0].data as { success: boolean; error?: string }
+    expect(data.success).toBe(false)
+    expect(data.error).toBe('cypher syntax error')
+  })
+})

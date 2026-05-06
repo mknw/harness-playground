@@ -15,8 +15,10 @@ import type {
   EventView,
   ConfiguredPattern,
   AssistantMessageEventData,
-  LLMCallData
+  LLMCallData,
+  ContextEvent
 } from '../types'
+import type { ControllerAction } from '../../../../baml_client/types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
@@ -45,7 +47,10 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
   const turns: import('../../../../baml_client/types').LoopTurn[] = []
 
   if (input.loopHistory) {
-    // Convert loop history to LoopTurn array
+    // Convert loop history to LoopTurn array. `success` and `error` are
+    // sourced from the matching `tool_result` event when available — never
+    // hardcoded — so the synthesizer cannot mistake un-executed or failed
+    // calls for successes (issue #45).
     for (const iteration of input.loopHistory.iterations) {
       turns.push({
         n: iteration.turn,
@@ -57,7 +62,8 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
         tool_result: {
           tool: iteration.action.tool_name,
           result: JSON.stringify(iteration.result),
-          success: true
+          success: iteration.success ?? false,
+          error: iteration.error ?? null
         }
       })
     }
@@ -156,6 +162,29 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
 }
 
 /**
+ * True when the last `controller_action` in the given (already-scoped) event
+ * window exited the loop cleanly — either via `Return`, or via `is_final=true`
+ * paired with a real tool whose subsequent `tool_result` reported success.
+ *
+ * Used to gate stale "Loop exhausted"-style errors that may still sit in the
+ * view from earlier turns. After issue #43 the loop reliably emits a
+ * matching `tool_result` for `is_final` real-tool calls, so we can verify
+ * the call actually succeeded before muting the error.
+ */
+function lastActionExitedCleanly(events: readonly ContextEvent[]): boolean {
+  const lastAction = [...events].reverse().find(e => e.type === 'controller_action')
+  if (!lastAction) return false
+  const action = (lastAction.data as { action: ControllerAction }).action
+  if (action.tool_name === 'Return') return true
+  if (action.is_final !== true) return false
+  const followingResult = events.find(e =>
+    e.type === 'tool_result' && e.ts > lastAction.ts
+  )
+  if (!followingResult) return false
+  return (followingResult.data as { success?: boolean }).success === true
+}
+
+/**
  * Build synthesis input from EventView based on mode.
  */
 function buildSynthesisInputFromView(
@@ -169,14 +198,21 @@ function buildSynthesisInputFromView(
     ? (userMessage.data as { content: string }).content
     : ''
 
+  // If the loop's last `controller_action` exited cleanly (a `Return`, or a
+  // successful `is_final=true` real-tool turn), stale recoverable errors from
+  // earlier turns — e.g. a "Loop exhausted" warning that has since been
+  // resolved — are dropped. This stops the synthesizer from apologizing for a
+  // problem the controller already worked around (issue #37).
+  const exitedCleanly = lastActionExitedCleanly(view.fromLastPattern().get())
+
   const input: SynthesizerInput = {
     mode,
     userMessage: userContent,
     intent: data.intent ?? userContent,
     // Read error state from view (scoped by synthesizer's ViewConfig)
     // rather than from data stash, so errors naturally expire with the view window
-    hasError: view.hasErrors(),
-    errorMessage: view.lastError()
+    hasError: !exitedCleanly && view.hasErrors(),
+    errorMessage: exitedCleanly ? undefined : view.lastError()
   }
 
   switch (mode) {
@@ -203,16 +239,31 @@ function buildSynthesisInputFromView(
 
         for (const event of view.fromLastPattern().get()) {
           if (event.type === 'controller_action') {
-            const actionData = event.data as { action: import('../types').ControllerAction }
+            const actionData = event.data as { action: ControllerAction }
+            // `Return` carries the final answer in `tool_args` and emits no
+            // matching `tool_result` event. Surface that payload as the
+            // iteration's result so the synthesizer renders the answer
+            // instead of `Tool: Return / Result: null` (issue #37).
+            let result: unknown = null
+            let success = false
+            if (actionData.action.tool_name === 'Return') {
+              try { result = JSON.parse(actionData.action.tool_args) }
+              catch { result = actionData.action.tool_args }
+              success = true
+            }
             iterations.push({
               turn: turn++,
               action: actionData.action,
-              result: null,
+              result,
+              success,
               timestamp: event.ts
             })
           } else if (event.type === 'tool_result' && iterations.length > 0) {
-            const resultData = event.data as { result: unknown }
-            iterations[iterations.length - 1].result = resultData.result
+            const resultData = event.data as { result: unknown; success?: boolean; error?: string }
+            const last = iterations[iterations.length - 1]
+            last.result = resultData.result
+            last.success = resultData.success ?? true
+            last.error = resultData.error
           }
         }
 

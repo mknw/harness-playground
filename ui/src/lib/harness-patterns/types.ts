@@ -393,6 +393,16 @@ export interface LoopIteration {
   turn: number
   action: import('../../../baml_client/types').ControllerAction
   result: unknown
+  /**
+   * Whether the matching `tool_result` reported success. For `Return`
+   * actions the controller exits cleanly without running a tool, so this
+   * is `true`. When a `controller_action` has no following `tool_result`
+   * (e.g. a real tool was named but never executed), this stays `false`
+   * so downstream synthesis cannot hallucinate success.
+   */
+  success?: boolean
+  /** Error message from the matching `tool_result`, if any. */
+  error?: string
   timestamp: number
 }
 
