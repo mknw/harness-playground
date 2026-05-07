@@ -33,11 +33,21 @@ const NEIGHBORHOOD_QUERY =
   'OPTIONAL MATCH (n)-[r]-(m) ' +
   `RETURN n, r, m LIMIT ${NEIGHBORHOOD_LIMIT}`
 
-export const enrichNeo4jResult: OnToolResult = async (toolName, result, _ctx) => {
+export const enrichNeo4jResult: OnToolResult = async (toolName, result, ctx) => {
   if (!result.success || !ENRICHABLE_TOOLS.has(toolName)) return
-  if (result.data === null || result.data === undefined) return
 
-  const names = collectNames(result.data)
+  // Reads return node objects we can walk for `name`. Writes return only
+  // counters (`{nodes_created, properties_set, ...}`) — no node objects, so
+  // we fall back to parsing the Cypher in the call args for `{name: "..."}`
+  // literals. Without this, successful writes never light up the panel
+  // even though the data is sitting in Neo4j (issue #46).
+  const resultNames = result.data === null || result.data === undefined
+    ? []
+    : collectNames(result.data)
+  const argsNames = toolName === 'write_neo4j_cypher'
+    ? collectNamesFromCypher(ctx?.args)
+    : []
+  const names = dedup([...resultNames, ...argsNames]).slice(0, MAX_TOUCHED_NAMES)
   if (names.length === 0) return
 
   const driver = getNeo4jDriver()
@@ -95,6 +105,40 @@ function collectNames(value: unknown): string[] {
   const out = new Set<string>()
   walk(value, out)
   return Array.from(out).slice(0, MAX_TOUCHED_NAMES)
+}
+
+/** Pull `name` literals out of a Cypher string in the call args. Matches the
+ *  property-bag form the agent's writes use: `{name: "value"}` or `{ name : 'value' }`.
+ *  Writes that use parameters (`{name: $kafka}`) won't match — that's an accepted
+ *  limitation for the common case until we wire a proper Cypher parser.
+ *
+ *  Looks at `args.query` (the canonical shape for `write_neo4j_cypher`) and
+ *  falls back to scanning any string fields in args, in case the agent emits
+ *  the cypher under a different key. */
+function collectNamesFromCypher(args: unknown): string[] {
+  if (!args || typeof args !== 'object') return []
+  const out = new Set<string>()
+  const candidates: string[] = []
+  const obj = args as Record<string, unknown>
+  if (typeof obj.query === 'string') candidates.push(obj.query)
+  for (const v of Object.values(obj)) {
+    if (typeof v === 'string' && v !== obj.query) candidates.push(v)
+  }
+  // `name` followed by `:` then a single- or double-quoted string. Stops at the
+  // closing quote — does not handle escaped quotes (good enough for our agent).
+  const re = /\bname\s*:\s*(?:"([^"]+)"|'([^']+)')/g
+  for (const cypher of candidates) {
+    let m: RegExpExecArray | null
+    while ((m = re.exec(cypher)) !== null) {
+      const name = (m[1] ?? m[2] ?? '').trim()
+      if (name) out.add(name)
+    }
+  }
+  return Array.from(out)
+}
+
+function dedup(values: string[]): string[] {
+  return Array.from(new Set(values))
 }
 
 function walk(value: unknown, out: Set<string>): void {
