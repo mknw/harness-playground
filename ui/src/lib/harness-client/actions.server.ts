@@ -3,6 +3,11 @@
  *
  * Top-level "use server" module for SolidStart server actions.
  * Wraps harness-patterns for use in Solid components.
+ *
+ * Persistence: every public action authenticates the caller via Stack Auth
+ * (or VITE_DEV_BYPASS_AUTH) and scopes session reads/writes to that user.
+ * The full UnifiedContext is stored as a single JSONB blob in Postgres —
+ * see `lib/db/conversations.server.ts`.
  */
 "use server";
 
@@ -12,17 +17,38 @@ import {
   continueSession,
   type HarnessResultScoped,
   type ContextEvent,
+  type UserMessageEventData,
+  type AssistantMessageEventData,
 } from "../harness-patterns";
 import {
-  getOrCreateSession,
-  getSession,
-  updateSession,
+  getOrBuildPatterns,
+  loadSession,
+  saveSession,
   deleteSession,
   type SessionData,
 } from "./session.server";
 import { getAgent, getAgentMetadata } from "./registry.server";
+import { listConversations as dbListConversations } from "../db/conversations.server";
 import type { HarnessSettings } from "../settings";
 import { runWithSettings } from "../settings-context.server";
+import { getAuthenticatedUser } from "../auth/server";
+
+// ============================================================================
+// Auth helper
+// ============================================================================
+
+/**
+ * Resolve the current user. Honors `VITE_DEV_BYPASS_AUTH=true` for local dev
+ * (matches the existing AuthProvider convention) by yielding a stable literal
+ * user id so persistence still works without a real Stack Auth session.
+ */
+async function requireUser(): Promise<{ id: string; email: string }> {
+  if (import.meta.env.VITE_DEV_BYPASS_AUTH === "true") {
+    return { id: "dev-bypass-user", email: "dev@local" };
+  }
+  const u = await getAuthenticatedUser();
+  return { id: u.id, email: u.email };
+}
 
 // ============================================================================
 // Server Actions
@@ -30,10 +56,6 @@ import { runWithSettings } from "../settings-context.server";
 
 /**
  * Process a user message using the default agent.
- *
- * @param sessionId - Unique session identifier (from createUniqueId())
- * @param message - User message content
- * @returns HarnessResult with response and status
  */
 export async function processMessage(
   sessionId: string,
@@ -43,143 +65,114 @@ export async function processMessage(
 }
 
 /**
- * Approve a pending action.
- *
- * @param sessionId - Session identifier
- * @returns HarnessResult after approval
- */
-export async function approveAction(
-  sessionId: string,
-): Promise<HarnessResultScoped<SessionData>> {
-  const session = getSession(sessionId);
-
-  if (!session) {
-    throw new Error("No active session");
-  }
-
-  if (!session.serializedContext || session.lastResult?.status !== "paused") {
-    throw new Error("No pending operation to approve");
-  }
-
-  const result = await resumeHarness(
-    session.serializedContext,
-    session.patterns,
-    true,
-  );
-
-  updateSession(sessionId, {
-    lastResult: result,
-    serializedContext: result.serialized,
-  });
-
-  return result;
-}
-
-/**
- * Reject a pending action.
- *
- * @param sessionId - Session identifier
- * @param _reason - Optional rejection reason (unused for now)
- * @returns HarnessResult after rejection
- */
-export async function rejectAction(
-  sessionId: string,
-  _reason?: string,
-): Promise<HarnessResultScoped<SessionData>> {
-  const session = getSession(sessionId);
-
-  if (!session) {
-    throw new Error("No active session");
-  }
-
-  if (!session.serializedContext || session.lastResult?.status !== "paused") {
-    throw new Error("No pending operation to reject");
-  }
-
-  const result = await resumeHarness(
-    session.serializedContext,
-    session.patterns,
-    false,
-  );
-
-  updateSession(sessionId, {
-    lastResult: result,
-    serializedContext: result.serialized,
-  });
-
-  return result;
-}
-
-/**
- * Clear a session.
- *
- * @param sessionId - Session identifier
- */
-export function clearSession(sessionId: string): void {
-  deleteSession(sessionId);
-}
-
-/**
  * Process a user message using a specific agent.
- *
- * @param sessionId - Unique session identifier
- * @param message - User message content
- * @param agentId - Agent ID to use (defaults to "default")
- * @returns HarnessResult with response and status
  */
 export async function processMessageWithAgent(
   sessionId: string,
   message: string,
   agentId: string = "default",
 ): Promise<HarnessResultScoped<SessionData>> {
-  const session = getOrCreateSession(sessionId);
+  const user = await requireUser();
+  return runTurn(sessionId, user.id, message, agentId);
+}
 
-  // Check if agent changed - reset patterns if so
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sessionAny = session as any;
-  const currentAgentId = sessionAny.agentId as string | undefined;
-  if (currentAgentId !== agentId) {
-    session.patterns = [];
-    sessionAny.agentId = agentId;
-  }
+/**
+ * Process a message with streaming events via callback.
+ * Used by the SSE endpoint for real-time event delivery.
+ */
+export async function processMessageStreaming(
+  sessionId: string,
+  message: string,
+  agentId: string = "default",
+  onEvent: (event: ContextEvent) => void,
+  settings?: HarnessSettings,
+): Promise<HarnessResultScoped<SessionData>> {
+  const user = await requireUser();
+  return runWithSettings(settings, () =>
+    runTurn(sessionId, user.id, message, agentId, onEvent),
+  );
+}
 
-  // Lazy init patterns from agent registry
-  if (session.patterns.length === 0) {
-    const agent = getAgent(agentId);
-    if (!agent) {
-      throw new Error(`Unknown agent: ${agentId}`);
-    }
-    session.patterns = await agent.createPatterns();
-    sessionAny.agentId = agentId;
-  }
+async function runTurn(
+  sessionId: string,
+  userId: string,
+  message: string,
+  agentId: string,
+  onEvent?: (event: ContextEvent) => void,
+): Promise<HarnessResultScoped<SessionData>> {
+  // If the user switched agent within an existing conversation, treat it as
+  // a fresh conversation by ignoring the prior serialized context. The UI is
+  // expected to mint a new sessionId on agent change, but we double-guard
+  // here so a stale id can't continue with a different agent's patterns.
+  const loaded = await loadSession(sessionId, userId);
+  const patterns = await getOrBuildPatterns(sessionId, agentId);
 
   let result: HarnessResultScoped<SessionData>;
-
-  // Continue existing session or start new one
-  if (session.serializedContext) {
+  if (loaded && loaded.agentId === agentId) {
     result = await continueSession(
-      session.serializedContext,
-      session.patterns,
+      loaded.serializedContext,
+      patterns,
       message,
+      onEvent,
     );
   } else {
-    const agent = harness(...session.patterns);
-    result = await agent(message, sessionId);
+    const agent = harness(...patterns);
+    result = await agent(message, sessionId, undefined, onEvent);
   }
 
-  updateSession(sessionId, {
-    lastResult: result,
-    serializedContext: result.serialized,
-  });
-
+  await saveSession(sessionId, userId, agentId, result.serialized);
   return result;
 }
 
 /**
+ * Approve a pending action.
+ */
+export async function approveAction(
+  sessionId: string,
+): Promise<HarnessResultScoped<SessionData>> {
+  return resolveApproval(sessionId, true);
+}
+
+/**
+ * Reject a pending action.
+ */
+export async function rejectAction(
+  sessionId: string,
+  _reason?: string,
+): Promise<HarnessResultScoped<SessionData>> {
+  return resolveApproval(sessionId, false);
+}
+
+async function resolveApproval(
+  sessionId: string,
+  approved: boolean,
+): Promise<HarnessResultScoped<SessionData>> {
+  const user = await requireUser();
+  const loaded = await loadSession(sessionId, user.id);
+  if (!loaded) {
+    throw new Error("No active session");
+  }
+  const patterns = await getOrBuildPatterns(sessionId, loaded.agentId);
+  const result = await resumeHarness(
+    loaded.serializedContext,
+    patterns,
+    approved,
+  );
+  await saveSession(sessionId, user.id, loaded.agentId, result.serialized);
+  return result;
+}
+
+/**
+ * Clear a session — deletes the row from Postgres and evicts the in-memory
+ * pattern cache.
+ */
+export async function clearSession(sessionId: string): Promise<void> {
+  const user = await requireUser();
+  await deleteSession(sessionId, user.id);
+}
+
+/**
  * Get list of available agents (metadata only).
- * This is a server action that safely wraps the registry.
- *
- * @returns Array of agent metadata
  */
 export async function getAgentList(): Promise<
   Array<{
@@ -193,62 +186,108 @@ export async function getAgentList(): Promise<
   return getAgentMetadata();
 }
 
-/**
- * Process a message with streaming events via callback.
- * Used by the SSE endpoint for real-time event delivery.
- *
- * @param sessionId - Session identifier
- * @param message - User message
- * @param agentId - Agent ID
- * @param onEvent - Callback for each committed event
- * @returns HarnessResult after completion
- */
-export async function processMessageStreaming(
-  sessionId: string,
-  message: string,
-  agentId: string = "default",
-  onEvent: (event: ContextEvent) => void,
-  settings?: HarnessSettings,
-): Promise<HarnessResultScoped<SessionData>> {
-  const session = getOrCreateSession(sessionId);
+// ============================================================================
+// Sidebar / persistence actions
+// ============================================================================
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sessionAny = session as any;
-  const currentAgentId = sessionAny.agentId as string | undefined;
-  if (currentAgentId !== agentId) {
-    session.patterns = [];
-    sessionAny.agentId = agentId;
+export interface ConversationSummary {
+  id: string;
+  agentId: string;
+  title: string | null;
+  /** ISO 8601 — Date doesn't survive server-action serialization unscathed. */
+  updatedAt: string;
+}
+
+/**
+ * List the current user's conversations for the sidebar (newest first).
+ *
+ * Returns `[]` for an unauthenticated request rather than throwing — this
+ * server action runs from a top-level `createResource` on page load, before
+ * the AuthProvider has had a chance to redirect to signin. Throwing would
+ * crash the route render.
+ */
+export async function listConversations(): Promise<ConversationSummary[]> {
+  let userId: string;
+  try {
+    userId = (await requireUser()).id;
+  } catch {
+    return [];
+  }
+  const rows = await dbListConversations(userId);
+  return rows.map((r) => ({
+    id: r.id,
+    agentId: r.agentId,
+    title: r.title,
+    updatedAt: r.updatedAt.toISOString(),
+  }));
+}
+
+export interface ReplayedMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  /** Epoch ms — convert to Date on the client. */
+  timestamp: number;
+}
+
+export interface LoadedConversation {
+  id: string;
+  agentId: string;
+  messages: ReplayedMessage[];
+  /** Serialized UnifiedContext. The events array can be replayed by the UI
+   *  to repopulate the graph and observability panel. */
+  serialized: string;
+}
+
+/**
+ * Load a conversation for the current user. Returns the serialized context
+ * plus a chat-ready replay of user/assistant messages.
+ */
+export async function loadConversation(
+  sessionId: string,
+): Promise<LoadedConversation> {
+  const user = await requireUser();
+  const loaded = await loadSession(sessionId, user.id);
+  if (!loaded) {
+    throw new Error("Conversation not found");
   }
 
-  return runWithSettings(settings, async () => {
-    if (session.patterns.length === 0) {
-      const agent = getAgent(agentId);
-      if (!agent) {
-        throw new Error(`Unknown agent: ${agentId}`);
-      }
-      session.patterns = await agent.createPatterns();
-      sessionAny.agentId = agentId;
+  const messages = replayMessages(loaded.serializedContext);
+  return {
+    id: sessionId,
+    agentId: loaded.agentId,
+    messages,
+    serialized: loaded.serializedContext,
+  };
+}
+
+function replayMessages(serializedContext: string): ReplayedMessage[] {
+  let parsed: { events?: ContextEvent[] };
+  try {
+    parsed = JSON.parse(serializedContext) as { events?: ContextEvent[] };
+  } catch {
+    return [];
+  }
+  const events = parsed.events ?? [];
+  const out: ReplayedMessage[] = [];
+  for (const ev of events) {
+    if (ev.type === "user_message") {
+      const data = ev.data as UserMessageEventData;
+      out.push({
+        id: ev.id ?? `replay-${out.length}`,
+        role: "user",
+        content: data.content ?? "",
+        timestamp: ev.ts,
+      });
+    } else if (ev.type === "assistant_message") {
+      const data = ev.data as AssistantMessageEventData;
+      out.push({
+        id: ev.id ?? `replay-${out.length}`,
+        role: "assistant",
+        content: data.content ?? "",
+        timestamp: ev.ts,
+      });
     }
-
-    let result: HarnessResultScoped<SessionData>;
-
-    if (session.serializedContext) {
-      result = await continueSession(
-        session.serializedContext,
-        session.patterns,
-        message,
-        onEvent,
-      );
-    } else {
-      const agent = harness(...session.patterns);
-      result = await agent(message, sessionId, undefined, onEvent);
-    }
-
-    updateSession(sessionId, {
-      lastResult: result,
-      serializedContext: result.serialized,
-    });
-
-    return result;
-  });
+  }
+  return out;
 }

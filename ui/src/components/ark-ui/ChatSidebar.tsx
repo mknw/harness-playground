@@ -1,27 +1,23 @@
-import { For } from 'solid-js'
+import { For, Show } from 'solid-js'
 import { SettingsPanel } from './SettingsPanel'
 
-interface ChatThread {
+export interface ChatThreadSummary {
   id: string
-  title: string
-  timestamp: Date
+  title: string | null
+  /** ISO 8601 timestamp from the server. */
+  updatedAt: string
 }
 
-// Dummy data for thread history
-const dummyThreads: ChatThread[] = [
-  { id: '1', title: 'Knowledge Graph Architecture', timestamp: new Date(Date.now() - 1000 * 60 * 30) },
-  { id: '2', title: 'Authentication Flow Discussion', timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2) },
-  { id: '3', title: 'UnoCSS Setup Questions', timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24) },
-  { id: '4', title: 'Docker Compose Configuration', timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 2) },
-]
-
-const formatTimestamp = (date: Date): string => {
+const formatTimestamp = (iso: string): string => {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
   const diffMins = Math.floor(diffMs / (1000 * 60))
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
 
+  if (diffMins < 1) return 'just now'
   if (diffMins < 60) return `${diffMins}m ago`
   if (diffHours < 24) return `${diffHours}h ago`
   if (diffDays < 7) return `${diffDays}d ago`
@@ -31,6 +27,10 @@ const formatTimestamp = (date: Date): string => {
 interface ChatSidebarProps {
   collapsed: boolean
   onToggle: () => void
+  threads: ChatThreadSummary[]
+  selectedId: string | null
+  onSelectThread: (threadId: string) => void
+  onNewChat: () => void
 }
 
 export const ChatSidebar = (props: ChatSidebarProps) => {
@@ -79,35 +79,50 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       {!props.collapsed && (
         <>
           <div flex="1" overflow="auto">
-            <div p="2" space="y-1">
-              <For each={dummyThreads}>
-                {(thread) => (
-                  <button
-                    w="full"
-                    text="left"
-                    p="3"
-                    rounded="md"
-                    hover="bg-dark-bg-hover"
-                    transition="all"
-                    border="1 transparent hover:neon-cyan/30"
-                    cursor="pointer"
-                  >
-                    <div text="sm dark-text-primary" font="medium" truncate>
-                      {thread.title}
-                    </div>
-                    <div text="xs dark-text-tertiary" m="t-1">
-                      {formatTimestamp(thread.timestamp)}
-                    </div>
-                  </button>
-                )}
-              </For>
-            </div>
+            <Show
+              when={props.threads.length > 0}
+              fallback={
+                <div p="4" text="xs dark-text-tertiary">
+                  No conversations yet. Send a message to start.
+                </div>
+              }
+            >
+              <div p="2" space="y-1">
+                <For each={props.threads}>
+                  {(thread) => {
+                    const isSelected = () => thread.id === props.selectedId
+                    return (
+                      <button
+                        onClick={() => props.onSelectThread(thread.id)}
+                        w="full"
+                        text="left"
+                        p="3"
+                        rounded="md"
+                        bg={isSelected() ? 'cyber-700/30' : ''}
+                        hover="bg-dark-bg-hover"
+                        transition="all"
+                        border={isSelected() ? '1 neon-cyan/40' : '1 transparent hover:neon-cyan/30'}
+                        cursor="pointer"
+                      >
+                        <div text="sm dark-text-primary" font="medium" truncate>
+                          {thread.title ?? '(untitled)'}
+                        </div>
+                        <div text="xs dark-text-tertiary" m="t-1">
+                          {formatTimestamp(thread.updatedAt)}
+                        </div>
+                      </button>
+                    )
+                  }}
+                </For>
+              </div>
+            </Show>
           </div>
 
           {/* Footer: Settings + New Chat */}
           <div p="4" border="t dark-border-primary" flex="~" gap="2" items="center">
             <SettingsPanel />
             <button
+              onClick={() => props.onNewChat()}
               flex="1"
               p="2"
               bg="cyber-700 hover:cyber-600"

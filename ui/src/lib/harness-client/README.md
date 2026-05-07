@@ -1,19 +1,27 @@
 # Harness Client
 
-Server-side module that bridges the UI with the `harness-patterns` framework. Handles session management, agent registration, and event streaming.
+Server-side module that bridges the UI with the `harness-patterns` framework. Handles auth, session persistence, agent registration, and event streaming.
 
 ## File Structure
 
 ```
 harness-client/
-├── actions.server.ts          # processMessage(), processMessageStreaming(), approveAction(), rejectAction()
-├── session.server.ts          # In-memory session store (serialized UnifiedContext per sessionId)
+├── actions.server.ts          # processMessage(), processMessageStreaming(), approveAction(), rejectAction(), listConversations(), loadConversation()
+├── session.server.ts          # In-process pattern cache + Postgres-backed serialized context (per-user, scoped via userId)
 ├── registry.server.ts         # Registers all agents, exports getAgentMetadata()
 ├── graph-extractor.ts         # ContextEvent → GraphElement[] extraction (MCP + driver formats; recognises enriched payloads)
 ├── neo4j-enricher.server.ts   # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
 ├── types.ts                   # GraphElement (extends Cytoscape ElementDefinition)
 ├── index.ts                   # Public exports
 └── examples/                  # 10 pre-built agent configurations (see examples/README.md)
+```
+
+Persistence layer is in `../db/`:
+
+```
+db/
+├── client.server.ts           # Lazy pg.Pool singleton + idempotent CREATE TABLE IF NOT EXISTS
+└── conversations.server.ts    # loadConversation, saveConversation, listConversations, deleteConversation, deriveTitle
 ```
 
 ## API
@@ -44,6 +52,13 @@ Resume a paused session after user approval or rejection of a write operation.
 ### `getAgentMetadata()`
 
 Returns metadata for all registered agents (id, name, description, icon).
+
+### `listConversations()` / `loadConversation(sessionId)`
+
+Server actions used by the sidebar. Both authenticate via Stack Auth (or fall back to `dev-bypass-user` when `VITE_DEV_BYPASS_AUTH=true`) and scope by `user.id`:
+
+- `listConversations()` → `{ id, agentId, title, updatedAt }[]`, newest first, capped at 200
+- `loadConversation(sessionId)` → returns the deserialized `UnifiedContext` so `ChatInterface` can replay events into the graph + observability panel
 
 ## Graph Extraction
 
@@ -91,7 +106,13 @@ Failures are non-fatal: `simpleLoop` / `actorCritic` catch the throw, log a `rec
 
 ## Session Lifecycle
 
-1. First message: `processMessageStreaming()` creates a new `UnifiedContext` and runs the agent
-2. Subsequent messages: Deserializes the stored context via `continueSession()`
-3. Approval flow: `withApproval()` pattern pauses → `approveAction()`/`rejectAction()` resumes via `resumeHarness()`
-4. Agent change: `clearSession()` removes the stored context
+Sessions are split into two layers:
+
+- **Pattern instances** — non-serializable (BAML clients, tool refs, closures). Cached in-process by `sessionId`; rebuilt from the agent registry on miss.
+- **Serialized `UnifiedContext`** — pure JSON. Persisted in Postgres, scoped by `userId`, so conversations survive restarts and can be listed/resumed.
+
+1. First message: auth → `processMessageStreaming(sessionId, message, agentId)` builds patterns, runs the agent, and `saveSession(sessionId, userId, agentId, serializeContext(ctx))` upserts the row. Title is derived from the first user message and stuck via `COALESCE` on update.
+2. Subsequent messages: `loadSession(sessionId, userId)` reads the row, `deserializeContext()` rehydrates state, `continueSession()` runs the next turn.
+3. Sidebar selection: `loadConversation(sessionId)` returns the rehydrated context; `ChatInterface` replays events into graph + observability via the existing pipeline.
+4. Approval flow: `withApproval()` pauses → `approveAction()` / `rejectAction()` resumes via `resumeHarness()`; the resumed context is re-saved.
+5. Agent change / new chat: `deleteSession()` evicts the pattern cache and removes the row (or simply selects a different `sessionId`).

@@ -15,14 +15,19 @@
  * - Session ID per component instance
  */
 
-import { createSignal, onMount, onCleanup } from 'solid-js'
+import { createSignal, createEffect, onMount } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
-import { ChatSidebar } from './ChatSidebar'
 import { AgentSelector } from './AgentSelector'
 import { LiveProgressBar } from './LiveProgressBar'
 import { createChainProgress } from './useChainProgress'
-import { approveAction, rejectAction, clearSession, extractGraphFromResult, extractGraphElements } from '~/lib/harness-client'
+import {
+  approveAction,
+  rejectAction,
+  loadConversation,
+  extractGraphFromResult,
+  extractGraphElements,
+} from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
 import type { GraphElement } from './SupportPanel'
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
@@ -32,15 +37,28 @@ import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
 // ============================================================================
 
 export interface ChatInterfaceProps {
-  /** Session ID for server-side state (shared with SupportPanel for stash actions) */
+  /** Session ID for server-side state (shared with SupportPanel for stash actions).
+   *  When this changes, ChatInterface hydrates messages from persisted history. */
   sessionId: string
   onGraphUpdate?: (elements: GraphElement[]) => void
   onEventsUpdate?: (events: ContextEvent[]) => void
   onContextUpdate?: (ctx: UnifiedContext) => void
+  /** Called before hydration so the parent can clear graph/event signals for the new thread. */
+  onResetForNewSession?: () => void
+  /** Called when the user changes agent — parent should mint a fresh sessionId so
+   *  the new agent gets its own conversation row rather than overwriting an existing one. */
+  onAgentChangeRequestsNewSession?: () => void
   /** Map of entity/relation names → graph element IDs for interactive highlighting */
   graphEntityNames?: Map<string, string[]>
   /** Callback to highlight specific graph element IDs */
   onHighlightEntities?: (ids: string[]) => void
+}
+
+const WELCOME_MESSAGE: Message = {
+  id: 'welcome',
+  role: 'assistant',
+  content: 'Hello! I\'m your knowledge assistant. I can help you:\n\n- Query and explore your Knowledge Base\n- Create new observations\n- Analyze patterns and connections\n- Use additional tools\n\nSelect an agent from the dropdown above, then ask me anything!',
+  timestamp: new Date(),
 }
 
 // ============================================================================
@@ -48,46 +66,70 @@ export interface ChatInterfaceProps {
 // ============================================================================
 
 export const ChatInterface = (props: ChatInterfaceProps) => {
-  const sessionId = props.sessionId
   const [messages, setMessages] = createSignal<Message[]>([])
   const [isProcessing, setIsProcessing] = createSignal(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
   const [selectedAgent, setSelectedAgent] = createSignal('default')
   const progress = createChainProgress()
   // Cursor into ctx.events — tracks how many events were sent last turn so we
   // emit only the delta (new events) rather than the full accumulated history
   let prevEventCount = 0
 
-  onCleanup(() => {
-    // Clean up session when component unmounts
-    clearSession(sessionId)
+  onMount(() => {
+    setMessages([WELCOME_MESSAGE])
   })
 
-  onMount(() => {
-    // Add welcome message
-    const welcomeMessage: Message = {
-      id: Date.now().toString(),
-      role: 'assistant',
-      content: 'Hello! I\'m your knowledge assistant. I can help you:\n\n- Query and explore your Knowledge Base\n- Create new observations\n- Analyze patterns and connections\n- Use additional tools\n\nSelect an agent from the dropdown above, then ask me anything!',
-      timestamp: new Date()
-    }
-    setMessages([welcomeMessage])
+  // When the parent swaps in a different sessionId (sidebar selection or
+  // "+ New Chat"), reset local state and try to rehydrate from persisted
+  // history. Brand-new sessions throw and we fall through to the welcome msg.
+  createEffect(() => {
+    const sid = props.sessionId
+    setMessages([])
+    prevEventCount = 0
+    props.onResetForNewSession?.()
+
+    loadConversation(sid)
+      .then((loaded) => {
+        setSelectedAgent(loaded.agentId)
+        setMessages(
+          loaded.messages.map((m) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            timestamp: new Date(m.timestamp),
+          }))
+        )
+
+        // Replay events to parent so graph + observability repopulate.
+        try {
+          const ctx = JSON.parse(loaded.serialized) as UnifiedContext
+          const events = ctx.events ?? []
+          prevEventCount = events.length
+          if (props.onEventsUpdate && events.length) {
+            props.onEventsUpdate(events)
+          }
+          if (props.onGraphUpdate) {
+            const toolEvents = events.filter((e) => e.type === 'tool_result')
+            const els = extractGraphElements(toolEvents)
+            if (els.length) props.onGraphUpdate(els)
+          }
+          if (props.onContextUpdate) {
+            props.onContextUpdate(ctx)
+          }
+        } catch (err) {
+          console.warn('[ChatInterface] failed to replay events:', err)
+        }
+      })
+      .catch(() => {
+        // Either a brand-new session id or no row yet — show welcome.
+        setMessages([WELCOME_MESSAGE])
+      })
   })
 
   const handleAgentChange = (agentId: string) => {
-    // Clear session when agent changes
-    clearSession(sessionId)
-    prevEventCount = 0
+    // Switching agent starts a new conversation under the new agent rather
+    // than mutating the existing row's agent_id. Parent mints the new id.
     setSelectedAgent(agentId)
-
-    // Add info message about agent change
-    const infoMessage: Message = {
-      id: Date.now().toString(),
-      role: 'assistant',
-      content: `Switched to **${agentId}** agent. Session cleared.`,
-      timestamp: new Date()
-    }
-    setMessages([infoMessage])
+    props.onAgentChangeRequestsNewSession?.()
   }
 
   const handleSendMessage = async (content: string) => {
@@ -108,7 +150,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sessionId,
+          sessionId: props.sessionId,
           message: content,
           agentId: selectedAgent(),
           settings: getSettings()
@@ -256,7 +298,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
     try {
       // Execute the approved operation
-      const result = await approveAction(sessionId)
+      const result = await approveAction(props.sessionId)
 
       // Extract graph elements from result and update visualization
       const graphElements = extractGraphFromResult(result)
@@ -322,7 +364,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const handleRejectWrite = async (messageId: string) => {
     try {
       // Reject the pending operation
-      const result = await rejectAction(sessionId)
+      const result = await rejectAction(props.sessionId)
 
       // Update the message to show rejection in tool call
       setMessages(messages().map(msg => {
@@ -349,15 +391,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   }
 
   return (
-    <div flex="~" h="full">
-      {/* Sidebar */}
-      <ChatSidebar
-        collapsed={sidebarCollapsed()}
-        onToggle={() => setSidebarCollapsed(!sidebarCollapsed())}
-      />
-
-      {/* Main Chat Area */}
-      <div flex="~ col 1" bg="dark-bg-secondary">
+    <div flex="~ col" h="full" bg="dark-bg-secondary">
         {/* Agent Selector Header */}
         <div
           flex="~ items-center gap-4"
@@ -400,10 +434,9 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           )}
         />
 
-        {/* Input */}
-        <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">
-          <ChatInput onSend={handleSendMessage} disabled={isProcessing()} />
-        </div>
+      {/* Input */}
+      <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">
+        <ChatInput onSend={handleSendMessage} disabled={isProcessing()} />
       </div>
     </div>
   )

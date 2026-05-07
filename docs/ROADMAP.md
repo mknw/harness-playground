@@ -34,6 +34,17 @@ See [ui/ROADMAP.md](../ui/ROADMAP.md) for frontend-specific work: graph editing,
 
 ## Completed
 
+### Conversation Persistence + Functional Sidebar ✅
+Replaced the in-memory session `Map` with a Postgres-backed store; sidebar now shows real threads that survive restarts. Closes #22 (commit `f6b2822`).
+
+- **Schema** — single `conversations(id, user_id, agent_id, title, context jsonb, created_at, updated_at)` table + `(user_id, updated_at DESC)` index. `context` is the full `serializeContext()` blob; no normalization.
+- **Idempotent bootstrap** — `ui/src/lib/db/client.server.ts` lazy `pg.Pool` singleton, schema bootstrapped on first query. `DATABASE_URL` overrides the default `postgresql://postgres:password@localhost:5432/kgagent`.
+- **Repo layer** — `ui/src/lib/db/conversations.server.ts` exposes `loadConversation`, `saveConversation`, `listConversations`, `deleteConversation`, `deriveTitle`. Title is sticky (`COALESCE(conversations.title, EXCLUDED.title)` on update), derived from the first 60 chars of the first user message.
+- **Session layer** — `harness-client/session.server.ts` keeps a process-local pattern cache (BAML clients/closures aren't serializable) and threads `userId` through every load/save. New `loadConversation` + `listConversations` server actions in `actions.server.ts` for the sidebar.
+- **Auth** — every public action and `/api/events` / `/api/stash` route authenticates via Stack Auth (or `VITE_DEV_BYPASS_AUTH=true` → `dev-bypass-user`) and scopes session ops by `user.id`.
+- **Sidebar (`ChatSidebar.tsx`)** — real threads, "+ New Chat" + selection handlers, selected-thread highlight. `index.tsx` lifts `selectedSessionId`, refetches threads after each turn, hydrates `ChatInterface` via `createEffect` on `props.sessionId` (replays events into graph + observability via existing pipeline).
+- **End-to-end resume** — cross-turn data references via `withReferences` / `expandPreviousResult` work after switching threads.
+
 ### Harness Patterns Framework ✅
 Replaced the legacy `baml-agent` system. Functional, composable agent patterns built on `UnifiedContext`.
 

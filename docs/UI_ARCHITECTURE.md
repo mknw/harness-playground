@@ -496,7 +496,33 @@ interface Message {
 
 ---
 
-## 6. UnoCSS Limitations & Workarounds
+## 6. Conversation Persistence
+
+Conversations are persisted to Postgres so they survive process restarts and list per-user in the sidebar. The store is a single `conversations(id, user_id, agent_id, title, context jsonb, created_at, updated_at)` table; the JSONB blob is the full `serializeContext()` output (no normalization). Schema is bootstrapped idempotently on first DB hit — bring-up is just `docker compose up -d`.
+
+### Layers
+
+| Layer | File | Role |
+|-------|------|------|
+| Pool | `lib/db/client.server.ts` | Lazy `pg.Pool` singleton, runs `CREATE TABLE IF NOT EXISTS` once per process |
+| Repo | `lib/db/conversations.server.ts` | Typed CRUD: `loadConversation`, `saveConversation`, `listConversations`, `deleteConversation`, `deriveTitle` |
+| Session | `lib/harness-client/session.server.ts` | In-process pattern cache (non-serializable BAML clients) + Postgres-backed serialized context, scoped by `userId` |
+| Actions | `lib/harness-client/actions.server.ts` | `listConversations()`, `loadConversation()` server actions for the sidebar; auth-gated |
+| Sidebar | `components/ark-ui/ChatSidebar.tsx` | Real thread list + "+ New Chat", selected-thread highlight |
+| Page | `routes/index.tsx` | `selectedSessionId` signal; threads resource refetched after each turn |
+| Hydration | `components/ark-ui/ChatInterface.tsx` | `createEffect` on `props.sessionId` replays events into graph + observability |
+
+### Sticky titles
+
+The first 60 chars of the first `user_message` becomes the conversation title. Once set, it never changes via `saveConversation()` — `COALESCE(conversations.title, EXCLUDED.title)` on update. (A dedicated rename action can override this when shipped.)
+
+### Auth
+
+Every public action and the `/api/events` / `/api/stash` routes authenticate via Stack Auth and scope session ops by `user.id`. When `VITE_DEV_BYPASS_AUTH=true`, the user id falls back to `dev-bypass-user`.
+
+---
+
+## 7. UnoCSS Limitations & Workarounds
 
 ### SVG Elements
 **UnoCSS attributify does NOT work on `<svg>` elements.**
@@ -579,15 +605,11 @@ ui/
 │   └── lib/
 │       ├── auth/                  # Authentication
 │       │   ├── client.ts          # StackClientApp
-│       │   ├── server.ts          # Server auth helpers
+│       │   ├── server.ts          # Server auth helpers (getAuthenticatedUser, dev-bypass)
 │       │   └── allowList.ts       # Email access control
-│       ├── baml-agent/            # Agent implementation
-│       │   ├── server.ts          # Server functions
-│       │   ├── orchestrator.ts    # Client orchestrator
-│       │   ├── state.ts           # Thread state
-│       │   ├── mcp-client.ts      # MCP SDK client
-│       │   ├── telemetry.ts       # Telemetry types
-│       │   └── tool-config.ts     # Tool configuration
+│       ├── db/                    # Postgres-backed persistence
+│       │   ├── client.server.ts        # Lazy pg.Pool singleton + idempotent schema bootstrap
+│       │   └── conversations.server.ts # Conversations repo (load/save/list/delete + deriveTitle)
 │       ├── harness-patterns/      # Composable agent pattern framework
 │       │   ├── index.ts           # Public exports
 │       │   ├── types.ts           # UnifiedContext, PatternScope, ContextEvent, callId, etc.
@@ -620,7 +642,11 @@ ui/
 │       │   ├── queries.ts         # runManualCypher(), getNodeProperties()
 │       │   └── write-action.ts    # executeCypherWrite() — parameterized Cypher writes from graph UI
 │       └── harness-client/        # Pre-built agent server actions
-│           ├── index.ts           # processMessageWithAgent(), extractGraphFromResult()
+│           ├── actions.server.ts  # processMessage(), processMessageStreaming(), listConversations(), loadConversation()
+│           ├── session.server.ts  # In-process pattern cache + Postgres-backed serialized context (per-user)
+│           ├── registry.server.ts # Agent registry (10 examples)
+│           ├── graph-extractor.ts # ContextEvent → GraphElement[]
+│           ├── neo4j-enricher.server.ts # onToolResult recipe (1-hop neighborhood + touched tags)
 │           ├── types.ts           # GraphElement, HarnessData, etc.
 │           └── examples/          # 10 pre-built agent configurations
 ```
