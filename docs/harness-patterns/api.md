@@ -81,10 +81,11 @@ type ScopedPattern<T> = (
 // From baml_client - standardized controller output
 interface ControllerAction {
   reasoning: string
-  tool_name: string           // Tool to call, or 'Return'
-  tool_args: string           // JSON payload
+  tool_name: string           // Tool to call, or 'Return' (exits without calling a tool)
+  tool_args: string           // JSON payload — for 'Return', carries the final answer
   status: string
-  is_final: boolean
+  is_final: boolean           // With a real tool: run the call, then exit the loop.
+                              // With 'Return': the loop exits regardless.
 }
 
 // Critic evaluation result

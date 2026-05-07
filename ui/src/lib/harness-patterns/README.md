@@ -155,10 +155,12 @@ interface ConfiguredPattern<T> {
 // Controller output (standardized across all BAML controllers)
 interface ControllerAction {
   reasoning: string      // Chain-of-thought
-  tool_name: string      // Tool to call or 'Return'
-  tool_args: string      // JSON payload
+  tool_name: string      // Tool to call, or 'Return' to exit without running a tool
+  tool_args: string      // JSON payload — for `Return`, carries the final answer
   status: string         // User-facing message
-  is_final: boolean      // Exit loop flag
+  is_final: boolean      // When true and tool_name is a real tool, run the call
+                         //   *then* exit the loop. `tool_name === 'Return'` exits
+                         //   immediately without running anything.
 }
 
 // Critic result for actor-critic pattern
@@ -329,10 +331,10 @@ The same hook is also wired into `actorCritic`.
 **How it works:**
 1. Extract params from context: `input`, `intent`, `previous_results`, `turn`
 2. Call BAML controller with extracted params (+ optional schema)
-3. Execute returned tool via MCP
-4. Loop until `is_final` or max turns
+3. Execute the returned tool via MCP — unless `tool_name === 'Return'`, which is the explicit no-tool termination signal (its `tool_args` carries the final answer for the synthesizer)
+4. Loop until either `tool_name === 'Return'`, or `is_final=true` paired with a real tool (in which case the call runs, the `tool_call`/`tool_result` events land, and the loop exits *after* the turn is recorded), or max turns
 5. Prior tool results from earlier turns are passed as `turns_previous_runs: PriorResult[]` — a structured array separate from the current task's `turns`. The LLM can reference them with `ref:<ref_id>` in tool args; `resolveRefs()` auto-expands before MCP execution. Controlled by `rememberPriorTurns` (default: true) and `priorTurnCount` (default: 3).
-6. Controller errors are caught per-iteration — loop exits gracefully with partial results; errors are tracked as events and read by downstream patterns via `view.hasErrors()` / `view.lastError()`, scoped by ViewConfig (so they naturally expire with the view window)
+6. Controller errors are caught per-iteration — loop exits gracefully with partial results; errors are tracked as events and read by downstream patterns via `view.hasErrors()` / `view.lastError()`, scoped by ViewConfig (so they naturally expire with the view window). The synthesizer additionally gates stale recoverable errors behind a clean-exit check, so a `Return` (or successful `is_final` real-tool turn) at the end of the loop suppresses an earlier "Loop exhausted" warning that's already been resolved.
 7. After the response reaches the user, `scheduleSummarization()` runs in the background: it summarizes each `tool_result` with a lightweight model (`DescribeFallback`) and stores the summary on the event. These summaries appear as `PriorResult.summary` on subsequent turns.
 
 ### `actorCritic(actor, critic, tools, config?)`
@@ -777,10 +779,11 @@ BAML Inputs:
 
 BAML Return → ControllerAction:
   reasoning : string    → stored as controller_action event
-  tool_name : string    → drives tool_call event
-  tool_args : string    → passed to MCP callTool()
+  tool_name : string    → drives tool_call event ('Return' = no tool, exit immediately)
+  tool_args : string    → passed to MCP callTool() (or read as the final answer for 'Return')
   status    : string    → user-facing status
-  is_final  : bool      → terminates loop
+  is_final  : bool      → with a real tool: run the call, record events, then exit
+                          with 'Return': redundant — Return always exits
 ```
 
 #### actorCritic → `ActorController` + `Critic`
@@ -813,16 +816,22 @@ BAML Return → CriticResult:
 
 ```
 Events read (ViewConfig: typically fromPatterns or fromLast)
-├── tool_call    ──► LoopTurn.tool_call
-├── tool_result  ──► LoopTurn.tool_result
-└── error        ──► hasError / errorMessage (via view.hasErrors() / view.lastError())
+├── controller_action ──► LoopTurn.tool_call (action.tool_args; for `Return`, parsed
+│                                              as the iteration result so the answer
+│                                              isn't lost as `Tool: Return / Result: null`)
+├── tool_call         ──► LoopTurn.tool_call
+├── tool_result       ──► LoopTurn.tool_result.success / .error / .result
+│                         (sourced from the actual event — never hardcoded)
+└── error             ──► hasError / errorMessage, gated by lastActionExitedCleanly()
+                          (a clean Return or successful is_final real-tool turn
+                           suppresses stale recoverable errors like "Loop exhausted")
 
 BAML Inputs:
   user_message : string       ← ctx.input
   intent       : string       ← from data or ctx.input
   turns        : LoopTurn[]   ← assembled from preceding pattern events
-  hasError     : boolean      ← view.hasErrors() — scoped by synthesizer's ViewConfig
-  errorMessage : string?      ← view.lastError() — naturally expires with view window
+  hasError     : boolean      ← view.hasErrors(), suppressed on clean exit
+  errorMessage : string?      ← view.lastError(), suppressed on clean exit
 
 BAML Return → string (assistant response text)
   → stored as assistant_message event
@@ -830,7 +839,10 @@ BAML Return → string (assistant response text)
 
 > **Error scoping**: The synthesizer reads error state from EventView, not from the data stash.
 > This means errors are scoped by the synthesizer's `ViewConfig` (e.g. `fromLastNTurns: 1`) and
-> naturally expire — they don't persist across turns via serialization.
+> naturally expire — they don't persist across turns via serialization. Errors are *additionally*
+> gated by whether the loop exited cleanly: a `Return` (or `is_final` paired with a successful
+> tool call) at the end of the loop tells the synthesizer that earlier "Loop exhausted"-style
+> warnings have been resolved and should be silenced.
 
 #### router() + routes()
 
