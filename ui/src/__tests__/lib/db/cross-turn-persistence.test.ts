@@ -247,4 +247,125 @@ describe('cross-turn persistence after conversation switch', () => {
     const restored = deserializeContext(loaded!.serializedContext)
     expect(restored.events.find((e) => e.id === 'ev-second-turn')).toBeTruthy()
   })
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Issues #43, #45, #37 — multi-turn write-after-search flow (E2E shape)
+  //
+  // Models the exact production sequence that produced the bad PR #41 demo:
+  //   turn 1: web search succeeds → tool_results saved
+  //   user switches conversations and back (save → load round-trip)
+  //   turn 2: neo4j-query loop receives `is_final=true` paired with
+  //           `write_neo4j_cypher` and the call now actually executes,
+  //           emitting matching `tool_call`/`tool_result` events.
+  //
+  // After the fix the synthesizer's view sees a real successful result, not
+  // an un-executed action. We verify that contract here so a future regression
+  // in either simpleLoop's `is_final` handling or persistence's event ordering
+  // would be caught at the integration layer (the dedicated unit tests in
+  // simpleLoop.test.ts and synthesizer.test.ts cover the per-pattern logic).
+  // ──────────────────────────────────────────────────────────────────────────
+  it('post-#43 fix: write_neo4j_cypher executes in turn 2 after a chat-switch round-trip', async () => {
+    if (!dbAvailable) return
+
+    // Turn 1: save a context with a completed web search.
+    const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
+    const ctx = makeConvoWithWebSearch(sessionId)
+    await saveSession(sessionId, TEST_USER, 'default', serializeContext(ctx))
+
+    // …user switches to another chat and back: load the persisted context.
+    const loaded = await loadSession(sessionId, TEST_USER)
+    const restored = deserializeContext(loaded!.serializedContext)
+
+    // Turn 2: append the events simpleLoop now emits when the controller
+    // returns `is_final=true` paired with a real tool. Pre-fix, only the
+    // controller_action landed (no tool_call, no tool_result), so the
+    // synthesizer's view contained an un-executed iteration. Post-fix all
+    // three events are present in this exact order.
+    const t2 = Date.now()
+    restored.events.push(
+      {
+        id: 'ev-write-prompt',
+        type: 'user_message',
+        ts: t2,
+        patternId: 'harness',
+        data: { content: 'add the kubernetes findings to the graph' },
+      },
+      {
+        id: 'ev-neo-enter',
+        type: 'pattern_enter',
+        ts: t2 + 1,
+        patternId: 'neo4j-query',
+        data: { pattern: 'simpleLoop' },
+      },
+      {
+        id: 'ev-write-action',
+        type: 'controller_action',
+        ts: t2 + 2,
+        patternId: 'neo4j-query',
+        data: {
+          action: {
+            tool_name: 'write_neo4j_cypher',
+            tool_args: '{"query":"CREATE (:Concept {name:\\"Kubernetes\\"})"}',
+            reasoning: 'Have the data, write it',
+            status: '',
+            is_final: true,
+          },
+          turn: 0,
+          maxTurns: 5,
+        },
+      },
+      {
+        id: 'ev-write-call',
+        type: 'tool_call',
+        ts: t2 + 3,
+        patternId: 'neo4j-query',
+        data: { callId: 'call-write-1', tool: 'write_neo4j_cypher', args: { query: 'CREATE (:Concept {name:"Kubernetes"})' } },
+      },
+      {
+        id: 'ev-write-result',
+        type: 'tool_result',
+        ts: t2 + 4,
+        patternId: 'neo4j-query',
+        data: {
+          callId: 'call-write-1',
+          tool: 'write_neo4j_cypher',
+          result: { _contains_updates: true, nodes_created: 1, properties_set: 1, labels_added: 1 },
+          success: true,
+        },
+      },
+      {
+        id: 'ev-neo-exit',
+        type: 'pattern_exit',
+        ts: t2 + 5,
+        patternId: 'neo4j-query',
+        data: { status: 'completed' },
+      },
+    )
+    await saveSession(sessionId, TEST_USER, 'default', serializeContext(restored))
+
+    // Reload — full round-trip — and validate the synthesizer-side contract.
+    const loaded2 = await loadSession(sessionId, TEST_USER)
+    const restored2 = deserializeContext(loaded2!.serializedContext)
+    const view = createEventView(restored2)
+
+    // The neo4j-query loop emitted controller_action + tool_call + tool_result
+    // in the persisted log — exactly what was missing pre-fix.
+    const neoEvents = restored2.events.filter((e) => e.patternId === 'neo4j-query')
+    const types = neoEvents.map((e) => e.type)
+    expect(types).toContain('controller_action')
+    expect(types).toContain('tool_call')
+    expect(types).toContain('tool_result')
+    const toolResult = neoEvents.find((e) => e.type === 'tool_result')!
+    expect((toolResult.data as { success: boolean }).success).toBe(true)
+    expect((toolResult.data as { tool: string }).tool).toBe('write_neo4j_cypher')
+
+    // Synthesizer's iteration builder should pair the action with its real
+    // result — so iteration.success is `true` and iteration.result carries
+    // the actual write counters (not `null` from a dropped call).
+    const lastPattern = view.fromAll().get().filter((e) => e.patternId === 'neo4j-query')
+    const action = lastPattern.find((e) => e.type === 'controller_action')!
+    const result = lastPattern.find((e) => e.type === 'tool_result')!
+    expect(action.ts).toBeLessThan(result.ts)
+    expect((result.data as { result: { nodes_created: number } }).result.nodes_created).toBe(1)
+  })
 })

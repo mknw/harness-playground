@@ -370,3 +370,224 @@ describe('synthesizer execution', () => {
     expect(result.data.synthesizedResponse).toContain('Iterations')
   })
 })
+
+// ============================================================================
+// Issue #45 — synthesizer must read real success/error from tool_result events
+// Issue #37 — Return.tool_args must surface as the iteration result, and stale
+//              "loop exhausted" errors must be ignored on a clean exit
+// ============================================================================
+
+describe('synthesizer truthfulness (issues #45, #37)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('propagates real success=false from tool_result events into the LoopTurn (no hardcoded success)', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    let captured: import('../../../../lib/harness-patterns/types').SynthesizerInput | null = null
+    const pattern = synthesizer({
+      mode: 'thread',
+      synthesize: async (input) => {
+        captured = input
+        return 'ok'
+      },
+    })
+
+    const scope = createScope('s', {})
+    const ts = Date.now()
+    const view = createEventView({
+      sessionId: 's', createdAt: ts,
+      events: [
+        { type: 'user_message' as const, ts, patternId: 'harness', data: { content: 'q' } },
+        { type: 'pattern_enter' as const, ts: ts + 1, patternId: 'loop', data: {} },
+        { type: 'controller_action' as const, ts: ts + 2, patternId: 'loop', data: {
+          action: { tool_name: 'write', tool_args: '{}', reasoning: 'r', status: '', is_final: false }
+        }},
+        { type: 'tool_result' as const, ts: ts + 3, patternId: 'loop', data: {
+          tool: 'write', result: { partial: true }, success: false, error: 'cypher syntax'
+        }},
+        { type: 'pattern_exit' as const, ts: ts + 4, patternId: 'loop', data: { status: 'completed' } },
+      ],
+      status: 'running' as const, data: {}, input: 'q',
+    })
+
+    await pattern.fn(scope, view)
+    expect(captured).not.toBeNull()
+    const iterations = captured!.loopHistory?.iterations ?? []
+    expect(iterations).toHaveLength(1)
+    expect(iterations[0].success).toBe(false)
+    expect(iterations[0].error).toBe('cypher syntax')
+  })
+
+  it('surfaces Return.tool_args as the iteration result with success=true', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    let captured: import('../../../../lib/harness-patterns/types').SynthesizerInput | null = null
+    const pattern = synthesizer({
+      mode: 'thread',
+      synthesize: async (input) => {
+        captured = input
+        return 'ok'
+      },
+    })
+
+    const scope = createScope('s', {})
+    const ts = Date.now()
+    const returnArgs = JSON.stringify({ answer: 'sorted: A, B, C' })
+    const view = createEventView({
+      sessionId: 's', createdAt: ts,
+      events: [
+        { type: 'user_message' as const, ts, patternId: 'harness', data: { content: 'rank them' } },
+        { type: 'pattern_enter' as const, ts: ts + 1, patternId: 'loop', data: {} },
+        // First a real tool turn, then a Return — the Return action's tool_args carry the answer.
+        { type: 'controller_action' as const, ts: ts + 2, patternId: 'loop', data: {
+          action: { tool_name: 'read', tool_args: '{}', reasoning: 'fetch', status: '', is_final: false }
+        }},
+        { type: 'tool_result' as const, ts: ts + 3, patternId: 'loop', data: {
+          tool: 'read', result: ['a', 'b'], success: true
+        }},
+        { type: 'controller_action' as const, ts: ts + 4, patternId: 'loop', data: {
+          action: { tool_name: 'Return', tool_args: returnArgs, reasoning: 'have answer', status: '', is_final: true }
+        }},
+        { type: 'pattern_exit' as const, ts: ts + 5, patternId: 'loop', data: { status: 'completed' } },
+      ],
+      status: 'running' as const, data: {}, input: 'rank them',
+    })
+
+    await pattern.fn(scope, view)
+    const iterations = captured!.loopHistory?.iterations ?? []
+    expect(iterations).toHaveLength(2)
+    const last = iterations[iterations.length - 1]
+    expect(last.action.tool_name).toBe('Return')
+    expect(last.success).toBe(true)
+    expect(last.result).toEqual({ answer: 'sorted: A, B, C' })
+  })
+
+  it('ignores stale "Loop exhausted" error when the last action exited via Return', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    let captured: import('../../../../lib/harness-patterns/types').SynthesizerInput | null = null
+    const pattern = synthesizer({
+      mode: 'thread',
+      synthesize: async (input) => {
+        captured = input
+        return 'ok'
+      },
+    })
+
+    const scope = createScope('s', {})
+    const ts = Date.now()
+    const view = createEventView({
+      sessionId: 's', createdAt: ts,
+      events: [
+        { type: 'user_message' as const, ts, patternId: 'harness', data: { content: 'q' } },
+        { type: 'pattern_enter' as const, ts: ts + 1, patternId: 'loop', data: {} },
+        { type: 'controller_action' as const, ts: ts + 2, patternId: 'loop', data: {
+          action: { tool_name: 'read', tool_args: '{}', reasoning: 'r', status: '', is_final: false }
+        }},
+        { type: 'tool_result' as const, ts: ts + 3, patternId: 'loop', data: {
+          tool: 'read', result: { ok: true }, success: true
+        }},
+        // Stale recoverable error from earlier exhaustion-style warning.
+        { type: 'error' as const, ts: ts + 4, patternId: 'loop', data: {
+          error: 'Loop exhausted: reached maxTurns (5) without Return', severity: 'recoverable'
+        }},
+        // Controller eventually issued a clean Return with the answer baked in.
+        { type: 'controller_action' as const, ts: ts + 5, patternId: 'loop', data: {
+          action: { tool_name: 'Return', tool_args: '{"answer":"all good"}', reasoning: 'done', status: '', is_final: true }
+        }},
+        { type: 'pattern_exit' as const, ts: ts + 6, patternId: 'loop', data: { status: 'completed' } },
+      ],
+      status: 'running' as const, data: {}, input: 'q',
+    })
+
+    await pattern.fn(scope, view)
+    expect(captured!.hasError).toBe(false)
+    expect(captured!.errorMessage).toBeUndefined()
+  })
+
+  it('still surfaces errors when the loop did not exit cleanly', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    let captured: import('../../../../lib/harness-patterns/types').SynthesizerInput | null = null
+    const pattern = synthesizer({
+      mode: 'thread',
+      synthesize: async (input) => {
+        captured = input
+        return 'ok'
+      },
+    })
+
+    const scope = createScope('s', {})
+    const ts = Date.now()
+    const view = createEventView({
+      sessionId: 's', createdAt: ts,
+      events: [
+        { type: 'user_message' as const, ts, patternId: 'harness', data: { content: 'q' } },
+        { type: 'pattern_enter' as const, ts: ts + 1, patternId: 'loop', data: {} },
+        { type: 'controller_action' as const, ts: ts + 2, patternId: 'loop', data: {
+          action: { tool_name: 'read', tool_args: '{}', reasoning: 'r', status: '', is_final: false }
+        }},
+        { type: 'error' as const, ts: ts + 3, patternId: 'loop', data: {
+          error: 'Loop exhausted: reached maxTurns', severity: 'recoverable'
+        }},
+        { type: 'pattern_exit' as const, ts: ts + 4, patternId: 'loop', data: { status: 'failed' } },
+      ],
+      status: 'running' as const, data: {}, input: 'q',
+    })
+
+    await pattern.fn(scope, view)
+    expect(captured!.hasError).toBe(true)
+    expect(captured!.errorMessage).toContain('Loop exhausted')
+  })
+
+  it('treats is_final on a real tool as a clean exit only when the tool succeeded', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    let captured: import('../../../../lib/harness-patterns/types').SynthesizerInput | null = null
+    const pattern = synthesizer({
+      mode: 'thread',
+      synthesize: async (input) => {
+        captured = input
+        return 'ok'
+      },
+    })
+
+    const scope = createScope('s', {})
+    const ts = Date.now()
+    // is_final + failed tool → not a clean exit, surface the error.
+    const view = createEventView({
+      sessionId: 's', createdAt: ts,
+      events: [
+        { type: 'user_message' as const, ts, patternId: 'harness', data: { content: 'q' } },
+        { type: 'pattern_enter' as const, ts: ts + 1, patternId: 'loop', data: {} },
+        { type: 'controller_action' as const, ts: ts + 2, patternId: 'loop', data: {
+          action: { tool_name: 'write', tool_args: '{}', reasoning: 'r', status: '', is_final: true }
+        }},
+        { type: 'tool_result' as const, ts: ts + 3, patternId: 'loop', data: {
+          tool: 'write', result: null, success: false, error: 'syntax error'
+        }},
+        { type: 'error' as const, ts: ts + 4, patternId: 'loop', data: {
+          error: 'syntax error', severity: 'recoverable'
+        }},
+        { type: 'pattern_exit' as const, ts: ts + 5, patternId: 'loop', data: { status: 'failed' } },
+      ],
+      status: 'running' as const, data: {}, input: 'q',
+    })
+
+    await pattern.fn(scope, view)
+    expect(captured!.hasError).toBe(true)
+    expect(captured!.errorMessage).toBe('syntax error')
+  })
+})

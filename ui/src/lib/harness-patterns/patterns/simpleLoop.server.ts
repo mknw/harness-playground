@@ -248,8 +248,8 @@ export function simpleLoop<T extends SimpleLoopData>(
           break
         }
 
-        // Check if done (is_final flag OR tool_name === 'Return')
-        if (action.is_final || action.tool_name === 'Return') {
+        // `Return` is the explicit termination signal — no tool runs.
+        if (action.tool_name === 'Return') {
           scope.data = {
             ...scope.data,
             lastAction: action,
@@ -258,6 +258,12 @@ export function simpleLoop<T extends SimpleLoopData>(
           exitedViaReturn = true
           break
         }
+
+        // `is_final=true` paired with a real tool means: run the call, record
+        // its result, *then* exit. Without this, the tool was silently dropped
+        // and the synthesizer narrated a confident success based on an
+        // un-executed action (issue #43).
+        const breakAfterThisTurn = action.is_final === true
 
         // Synthetic tool: `expandPreviousResult` — resolves one or more
         // ref_ids to their prior tool_results and records them as a single
@@ -357,6 +363,10 @@ export function simpleLoop<T extends SimpleLoopData>(
           })
 
           scope.data = { ...scope.data, turn, lastAction: action }
+          if (breakAfterThisTurn) {
+            exitedViaReturn = true
+            break
+          }
           // Continue to next turn — let the controller use the resolved data.
           continue
         }
@@ -470,6 +480,13 @@ export function simpleLoop<T extends SimpleLoopData>(
           ...scope.data,
           turn,
           lastAction: action
+        }
+
+        // is_final paired with a real, successful tool — exit now that the
+        // call has been recorded.
+        if (breakAfterThisTurn) {
+          exitedViaReturn = true
+          break
         }
       }
 
