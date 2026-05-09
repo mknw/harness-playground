@@ -198,15 +198,59 @@ describe('enrichNeo4jResult — writes are sourced from call args', () => {
     expect((runArgs as { names: string[] }).names).toEqual(expect.arrayContaining(['Kafka', 'Brokers']))
   })
 
+  it('resolves parameterized {name: $X} via args.params (the real Neo4j-controller shape)', async () => {
+    const { enrichNeo4jResult } = await import('../../../lib/harness-client/neo4j-enricher.server')
+
+    sessionRun.mockResolvedValueOnce({ records: [] })
+
+    // Mirrors the actual call shape captured in .harness-logs: cypher uses
+    // $placeholder, names live in args.params. Pre-fix this returned undefined
+    // because the literal-only regex never matched, so the panel stayed empty
+    // even though Neo4j accepted the write.
+    await enrichNeo4jResult(
+      'write_neo4j_cypher',
+      {
+        success: true,
+        data: {
+          _contains_updates: true,
+          nodes_created: 2,
+          relationships_created: 1,
+          properties_set: 4,
+        },
+      },
+      {
+        args: {
+          query:
+            'MERGE (p:Concept {name: $pulsarName}) ON CREATE SET p.description = $pulsarDesc ' +
+            'MERGE (s:Concept {name: $platformName}) ON CREATE SET s.description = $platformDesc ' +
+            'MERGE (s)-[:HAS_CONCEPT]->(p)',
+          params: {
+            pulsarName: 'Apache Pulsar',
+            pulsarDesc: 'Cloud-native messaging and streaming platform.',
+            platformName: 'Streaming Platform',
+            platformDesc: 'Real-time data processing systems.',
+          },
+        },
+      },
+    )
+
+    const [, runArgs] = sessionRun.mock.calls[0]
+    const names = (runArgs as { names: string[] }).names
+    expect(names).toEqual(expect.arrayContaining(['Apache Pulsar', 'Streaming Platform']))
+    // Descriptions stay out of _touched: only placeholders that sit in a `name:`
+    // slot get resolved, not every string param. Keeps the panel signal clean.
+    expect(names).not.toContain('Cloud-native messaging and streaming platform.')
+    expect(names).not.toContain('Real-time data processing systems.')
+  })
+
   it('returns undefined when neither result nor args contain a usable name', async () => {
     const { enrichNeo4jResult } = await import('../../../lib/harness-client/neo4j-enricher.server')
 
     const out = await enrichNeo4jResult(
       'write_neo4j_cypher',
       { success: true, data: { _contains_updates: false } },
-      // Cypher with no inline name literals (all parametrized — not supported by
-      // the regex). Accepted limitation; we just decline to enrich rather than
-      // crash.
+      // Parameterized cypher with NO `params` to resolve `$name` against.
+      // Accepted limitation — bail rather than crash.
       { args: { query: 'CREATE (:Concept {name: $name})' } },
     )
 

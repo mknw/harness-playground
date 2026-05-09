@@ -107,34 +107,58 @@ function collectNames(value: unknown): string[] {
   return Array.from(out).slice(0, MAX_TOUCHED_NAMES)
 }
 
-/** Pull `name` literals out of a Cypher string in the call args. Matches the
- *  property-bag form the agent's writes use: `{name: "value"}` or `{ name : 'value' }`.
- *  Writes that use parameters (`{name: $kafka}`) won't match — that's an accepted
- *  limitation for the common case until we wire a proper Cypher parser.
+/** Pull node `name` values out of a Cypher string in the call args. Handles
+ *  both shapes the agent emits:
+ *    - literal:       `{name: "Apache Pulsar"}` / `{ name : 'Pulsar' }`
+ *    - parameterized: `{name: $pulsarName}` resolved via `args.params.pulsarName`
  *
- *  Looks at `args.query` (the canonical shape for `write_neo4j_cypher`) and
- *  falls back to scanning any string fields in args, in case the agent emits
- *  the cypher under a different key. */
+ *  In practice the Neo4j-controller agent almost always emits the parameterized
+ *  form. Resolving the placeholder against the call's params keeps `_touched`
+ *  clean (only true node names, not unrelated string params like descriptions).
+ *  Writes whose params don't include the resolved key will still bail —
+ *  accepted limitation. */
 function collectNamesFromCypher(args: unknown): string[] {
   if (!args || typeof args !== 'object') return []
   const out = new Set<string>()
-  const candidates: string[] = []
   const obj = args as Record<string, unknown>
+
+  const candidates: string[] = []
   if (typeof obj.query === 'string') candidates.push(obj.query)
   for (const v of Object.values(obj)) {
     if (typeof v === 'string' && v !== obj.query) candidates.push(v)
   }
-  // `name` followed by `:` then a single- or double-quoted string. Stops at the
-  // closing quote — does not handle escaped quotes (good enough for our agent).
-  const re = /\bname\s*:\s*(?:"([^"]+)"|'([^']+)')/g
+
+  // Build a flat string-param lookup. Walks one level into nested objects so
+  // both `{params: {pulsarName: "..."}}` (canonical) and a flat
+  // `{pulsarName: "..."}` (defensive) work.
+  const params: Record<string, string> = {}
+  collectStringParams(obj, params)
+
+  // Literal: `name: "value"` / `name: 'value'`. Stops at the closing quote —
+  // does not handle escaped quotes (good enough for our agent).
+  const litRe = /\bname\s*:\s*(?:"([^"]+)"|'([^']+)')/g
+  // Parameterized: `name: $identifier` resolved via the params lookup.
+  const paramRe = /\bname\s*:\s*\$([A-Za-z_][A-Za-z0-9_]*)/g
   for (const cypher of candidates) {
     let m: RegExpExecArray | null
-    while ((m = re.exec(cypher)) !== null) {
+    while ((m = litRe.exec(cypher)) !== null) {
       const name = (m[1] ?? m[2] ?? '').trim()
       if (name) out.add(name)
     }
+    while ((m = paramRe.exec(cypher)) !== null) {
+      const val = params[m[1]]
+      if (typeof val === 'string' && val.trim()) out.add(val.trim())
+    }
   }
   return Array.from(out)
+}
+
+function collectStringParams(value: unknown, out: Record<string, string>): void {
+  if (!value || typeof value !== 'object') return
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === 'string') out[k] = v
+    else if (v && typeof v === 'object') collectStringParams(v, out)
+  }
 }
 
 function dedup(values: string[]): string[] {
