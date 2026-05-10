@@ -1,7 +1,7 @@
 import { Splitter } from '@ark-ui/solid/splitter'
-import { createSignal, createMemo, createResource, createUniqueId } from 'solid-js'
+import { createSignal, createMemo, createResource, createEffect, createUniqueId } from 'solid-js'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
-import { ChatSidebar } from '~/components/ark-ui/ChatSidebar'
+import { ChatSidebar, mergeThreadsWithPlaceholder } from '~/components/ark-ui/ChatSidebar'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
@@ -15,6 +15,11 @@ export default function Home() {
   // sidebar (or "+ New Chat") swaps this signal.
   const [selectedSessionId, setSelectedSessionId] = createSignal(createUniqueId())
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
+
+  // Optimistic placeholder for a freshly-minted "+ New Chat" id that hasn't
+  // been persisted yet (see #44). Cleared once the real row arrives in the
+  // threadsResource refetch, or when the user picks an existing thread.
+  const [placeholderSessionId, setPlaceholderSessionId] = createSignal<string | null>(null)
 
   const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
@@ -60,14 +65,35 @@ export default function Home() {
 
   const handleNewChat = () => {
     resetForNewSession()
-    setSelectedSessionId(createUniqueId())
+    const id = createUniqueId()
+    setSelectedSessionId(id)
+    setPlaceholderSessionId(id)
   }
 
   const handleSelectThread = (threadId: string) => {
     if (threadId === selectedSessionId()) return
     resetForNewSession()
     setSelectedSessionId(threadId)
+    // User picked an existing thread — drop the optimistic row.
+    setPlaceholderSessionId(null)
   }
+
+  // Once the persisted row for the placeholder lands in the threadsResource,
+  // drop the optimistic row so the real one (with its sticky title) takes over.
+  createEffect(() => {
+    const ph = placeholderSessionId()
+    if (!ph) return
+    const list = threads() ?? []
+    if (list.some(t => t.id === ph)) {
+      setPlaceholderSessionId(null)
+    }
+  })
+
+  // Display threads = optimistic placeholder (if any) on top, then persisted
+  // rows, deduped by id. See `mergeThreadsWithPlaceholder` for the rule.
+  const displayThreads = createMemo(() =>
+    mergeThreadsWithPlaceholder(threads() ?? [], placeholderSessionId())
+  )
 
   // Wrap the supplied unified-context setter so each save also refreshes the
   // sidebar list (titles update once the first user_message lands).
@@ -151,7 +177,7 @@ export default function Home() {
             <ChatSidebar
               collapsed={sidebarCollapsed()}
               onToggle={() => setSidebarCollapsed(!sidebarCollapsed())}
-              threads={threads() ?? []}
+              threads={displayThreads()}
               selectedId={selectedSessionId()}
               onSelectThread={handleSelectThread}
               onNewChat={handleNewChat}

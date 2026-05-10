@@ -6,6 +6,37 @@ export interface ChatThreadSummary {
   title: string | null
   /** ISO 8601 timestamp from the server. */
   updatedAt: string
+  /** Optimistic client-side row for a brand-new chat that hasn't been
+   *  persisted yet. Replaced in place once the real row appears in the
+   *  threadsResource refetch. */
+  isPlaceholder?: boolean
+}
+
+const PLACEHOLDER_TITLE = 'description will appear here'
+
+/**
+ * Merge the optimistic "+ New Chat" placeholder with the persisted thread
+ * list. When the persisted list already contains a row with the placeholder's
+ * id (the conversation has been saved), the placeholder is dropped — the real
+ * row takes over with its sticky title and timestamp. See #44.
+ *
+ * Pure: no Solid signals, no DOM — straightforward to unit test.
+ */
+export function mergeThreadsWithPlaceholder(
+  threads: ChatThreadSummary[],
+  placeholderId: string | null,
+  /** Defaults to `Date.now()` — overrideable for deterministic tests. */
+  nowIso: () => string = () => new Date().toISOString(),
+): ChatThreadSummary[] {
+  if (!placeholderId) return threads
+  if (threads.some(t => t.id === placeholderId)) return threads
+  const placeholder: ChatThreadSummary = {
+    id: placeholderId,
+    title: null,
+    updatedAt: nowIso(),
+    isPlaceholder: true,
+  }
+  return [placeholder, ...threads]
 }
 
 const formatTimestamp = (iso: string): string => {
@@ -103,9 +134,16 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         transition="all"
                         border={isSelected() ? '1 neon-cyan/40' : '1 transparent hover:neon-cyan/30'}
                         cursor="pointer"
+                        data-placeholder={thread.isPlaceholder ? '' : undefined}
                       >
-                        <div text="sm dark-text-primary" font="medium" truncate>
-                          {thread.title ?? '(untitled)'}
+                        <div
+                          text={thread.isPlaceholder ? 'sm dark-text-tertiary' : 'sm dark-text-primary'}
+                          font={thread.isPlaceholder ? 'normal italic' : 'medium'}
+                          truncate
+                        >
+                          {thread.isPlaceholder
+                            ? PLACEHOLDER_TITLE
+                            : thread.title ?? '(untitled)'}
                         </div>
                         <div text="xs dark-text-tertiary" m="t-1">
                           {formatTimestamp(thread.updatedAt)}

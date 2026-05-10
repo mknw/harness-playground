@@ -281,12 +281,13 @@ Main container combining sidebar and chat area:
 ```
 
 #### 2. ChatSidebar.tsx
-**Props:** `collapsed: boolean`, `onToggle: () => void`
+**Props:** `collapsed: boolean`, `onToggle: () => void`, `threads`, `selectedId`, `onSelectThread`, `onNewChat`
 - Width: `3rem` (collapsed) → `16rem` (expanded)
 - Smooth inline style transition
 - Thread history with relative timestamps
 - Settings gear icon (opens `SettingsPanel` FloatingPanel) + New Chat button in footer
 - Content hidden when collapsed (toggle button only)
+- **Optimistic "+ New Chat" placeholder (#44):** Clicking *+ New Chat* immediately prepends a placeholder row keyed by the new `selectedSessionId` (`title: null`, `isPlaceholder: true`, muted italic *"description will appear here"*). Once the first user message persists and the `threadsResource` refetch returns the real row, the merger (`mergeThreadsWithPlaceholder` in `ChatSidebar.tsx`) drops the placeholder by id. No DB writes for the placeholder — purely client-side. Switching to an existing thread clears it.
 
 #### 3. ChatMessages.tsx
 - **ScrollArea.Root** - Custom scrollable message container
