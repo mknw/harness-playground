@@ -33,11 +33,21 @@ const NEIGHBORHOOD_QUERY =
   'OPTIONAL MATCH (n)-[r]-(m) ' +
   `RETURN n, r, m LIMIT ${NEIGHBORHOOD_LIMIT}`
 
-export const enrichNeo4jResult: OnToolResult = async (toolName, result, _ctx) => {
+export const enrichNeo4jResult: OnToolResult = async (toolName, result, ctx) => {
   if (!result.success || !ENRICHABLE_TOOLS.has(toolName)) return
-  if (result.data === null || result.data === undefined) return
 
-  const names = collectNames(result.data)
+  // Reads return node objects we can walk for `name`. Writes return only
+  // counters (`{nodes_created, properties_set, ...}`) — no node objects, so
+  // we fall back to parsing the Cypher in the call args for `{name: "..."}`
+  // literals. Without this, successful writes never light up the panel
+  // even though the data is sitting in Neo4j (issue #46).
+  const resultNames = result.data === null || result.data === undefined
+    ? []
+    : collectNames(result.data)
+  const argsNames = toolName === 'write_neo4j_cypher'
+    ? collectNamesFromCypher(ctx?.args)
+    : []
+  const names = dedup([...resultNames, ...argsNames]).slice(0, MAX_TOUCHED_NAMES)
   if (names.length === 0) return
 
   const driver = getNeo4jDriver()
@@ -95,6 +105,64 @@ function collectNames(value: unknown): string[] {
   const out = new Set<string>()
   walk(value, out)
   return Array.from(out).slice(0, MAX_TOUCHED_NAMES)
+}
+
+/** Pull node `name` values out of a Cypher string in the call args. Handles
+ *  both shapes the agent emits:
+ *    - literal:       `{name: "Apache Pulsar"}` / `{ name : 'Pulsar' }`
+ *    - parameterized: `{name: $pulsarName}` resolved via `args.params.pulsarName`
+ *
+ *  In practice the Neo4j-controller agent almost always emits the parameterized
+ *  form. Resolving the placeholder against the call's params keeps `_touched`
+ *  clean (only true node names, not unrelated string params like descriptions).
+ *  Writes whose params don't include the resolved key will still bail —
+ *  accepted limitation. */
+function collectNamesFromCypher(args: unknown): string[] {
+  if (!args || typeof args !== 'object') return []
+  const out = new Set<string>()
+  const obj = args as Record<string, unknown>
+
+  const candidates: string[] = []
+  if (typeof obj.query === 'string') candidates.push(obj.query)
+  for (const v of Object.values(obj)) {
+    if (typeof v === 'string' && v !== obj.query) candidates.push(v)
+  }
+
+  // Build a flat string-param lookup. Walks one level into nested objects so
+  // both `{params: {pulsarName: "..."}}` (canonical) and a flat
+  // `{pulsarName: "..."}` (defensive) work.
+  const params: Record<string, string> = {}
+  collectStringParams(obj, params)
+
+  // Literal: `name: "value"` / `name: 'value'`. Stops at the closing quote —
+  // does not handle escaped quotes (good enough for our agent).
+  const litRe = /\bname\s*:\s*(?:"([^"]+)"|'([^']+)')/g
+  // Parameterized: `name: $identifier` resolved via the params lookup.
+  const paramRe = /\bname\s*:\s*\$([A-Za-z_][A-Za-z0-9_]*)/g
+  for (const cypher of candidates) {
+    let m: RegExpExecArray | null
+    while ((m = litRe.exec(cypher)) !== null) {
+      const name = (m[1] ?? m[2] ?? '').trim()
+      if (name) out.add(name)
+    }
+    while ((m = paramRe.exec(cypher)) !== null) {
+      const val = params[m[1]]
+      if (typeof val === 'string' && val.trim()) out.add(val.trim())
+    }
+  }
+  return Array.from(out)
+}
+
+function collectStringParams(value: unknown, out: Record<string, string>): void {
+  if (!value || typeof value !== 'object') return
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === 'string') out[k] = v
+    else if (v && typeof v === 'object') collectStringParams(v, out)
+  }
+}
+
+function dedup(values: string[]): string[] {
+  return Array.from(new Set(values))
 }
 
 function walk(value: unknown, out: Set<string>): void {
