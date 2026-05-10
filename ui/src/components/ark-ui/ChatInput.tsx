@@ -1,9 +1,14 @@
 import { Field } from '@ark-ui/solid/field'
-import { createSignal } from 'solid-js'
+import { Show, createSignal } from 'solid-js'
 
 interface ChatInputProps {
   onSend: (message: string) => void
+  /** Submit is blocked (e.g. a chain is in flight on this session). The
+   *  textarea stays editable so the user's draft survives — see #47. */
   disabled?: boolean
+  /** Inline guard message shown above the composer when submit is blocked,
+   *  e.g. "Waiting for `web_search` to complete. Try later." */
+  blockedMessage?: string
 }
 
 export const ChatInput = (props: ChatInputProps) => {
@@ -26,13 +31,28 @@ export const ChatInput = (props: ChatInputProps) => {
 
   return (
     <Field.Root w="full">
+      <Show when={props.disabled && props.blockedMessage}>
+        <div
+          data-role="composer-guard"
+          flex="~ items-center gap-2"
+          p="2"
+          m="b-2"
+          rounded="md"
+          border="1 neon-cyan/30"
+          bg="cyber-700/15"
+          text="xs dark-text-secondary"
+        >
+          <span w="1.5" h="1.5" rounded="full" bg="neon-cyan" class="animate-pulse" style={{ 'flex-shrink': 0 }} />
+          <span>{props.blockedMessage}</span>
+        </div>
+      </Show>
       <Field.Textarea
         value={value()}
         onInput={(e) => setValue(e.currentTarget.value)}
         onKeyDown={handleKeyDown}
         autoresize
         placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
-        disabled={props.disabled}
+        aria-disabled={props.disabled ? 'true' : undefined}
         border="1 dark-border-secondary focus:neon-cyan"
         rounded="lg"
         p="3"
@@ -42,8 +62,6 @@ export const ChatInput = (props: ChatInputProps) => {
         w="full"
         text="sm dark-text-primary"
         bg="dark-bg-tertiary"
-        disabled:opacity="50"
-        disabled:cursor="not-allowed"
         outline="none"
         ring="2 transparent focus:neon-cyan/20"
         transition="all"

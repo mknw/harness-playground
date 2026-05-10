@@ -12,15 +12,17 @@
  * Architecture:
  * - Uses harness-client server actions
  * - ContextEvents streamed to parent for observability
- * - Session ID per component instance
+ * - Per-session progress + run state lives in the parent route — see #47.
+ *   The fetch loop captures `runSessionId` at submit time and routes ingest
+ *   calls into the correct controller even after the user switches threads.
  */
 
-import { createSignal, createEffect, onMount } from 'solid-js'
+import { createSignal, createEffect, createMemo, onMount } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
 import { LiveProgressBar } from './LiveProgressBar'
-import { createChainProgress } from './useChainProgress'
+import type { ChainProgressController } from './useChainProgress'
 import {
   approveAction,
   rejectAction,
@@ -30,11 +32,23 @@ import {
 } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
 import type { GraphElement } from './SupportPanel'
-import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns'
+import type { ContextEvent, UnifiedContext, ControllerActionEventData } from '~/lib/harness-patterns'
 
 // ============================================================================
 // Types
 // ============================================================================
+
+/**
+ * Per-session UI run state. Lives at the route so progress and the submit
+ * guard survive sidebar switches — see #47.
+ */
+export interface SessionRunState {
+  /** A submit for this session is in flight (SSE stream open). */
+  isProcessing: boolean
+  /** Tool name from the latest `controller_action` event of the active loop.
+   *  Drives the composer guard banner ("Waiting for `<tool>`…"). */
+  runningTool: string | null
+}
 
 export interface ChatInterfaceProps {
   /** Session ID for server-side state (shared with SupportPanel for stash actions).
@@ -52,6 +66,12 @@ export interface ChatInterfaceProps {
   graphEntityNames?: Map<string, string[]>
   /** Callback to highlight specific graph element IDs */
   onHighlightEntities?: (ids: string[]) => void
+  // ---- Per-session progress + run state (lives in the route, see #47) ----
+  getProgress: (sessionId: string) => ChainProgressController
+  getRunState: (sessionId: string) => SessionRunState
+  updateRunState: (sessionId: string, patch: Partial<SessionRunState>) => void
+  registerAbortController: (sessionId: string, ac: AbortController) => void
+  unregisterAbortController: (sessionId: string) => void
 }
 
 const WELCOME_MESSAGE: Message = {
@@ -67,12 +87,19 @@ const WELCOME_MESSAGE: Message = {
 
 export const ChatInterface = (props: ChatInterfaceProps) => {
   const [messages, setMessages] = createSignal<Message[]>([])
-  const [isProcessing, setIsProcessing] = createSignal(false)
   const [selectedAgent, setSelectedAgent] = createSignal('default')
-  const progress = createChainProgress()
   // Cursor into ctx.events — tracks how many events were sent last turn so we
   // emit only the delta (new events) rather than the full accumulated history
   let prevEventCount = 0
+
+  // Reactive accessors into the per-session registries owned by the route.
+  // Re-reading `props.sessionId` inside the memo means snapshot/run-state
+  // tracking automatically swaps when the user picks a different thread.
+  const currentProgress = createMemo(() => props.getProgress(props.sessionId))
+  const currentSnapshot = () => currentProgress().snapshot()
+  const currentRunState = () => props.getRunState(props.sessionId)
+  const isProcessing = () => currentRunState().isProcessing
+  const runningTool = () => currentRunState().runningTool
 
   onMount(() => {
     setMessages([WELCOME_MESSAGE])
@@ -133,16 +160,32 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   }
 
   const handleSendMessage = async (content: string) => {
-    // Add user message
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content,
-      timestamp: new Date()
-    }
-    setMessages([...messages(), userMessage])
-    setIsProcessing(true)
+    // Snapshot the active sessionId at submit time. The user may switch
+    // threads mid-stream; without this, late-arriving events would corrupt
+    // whichever thread happens to be in view (#47).
+    const runSessionId = props.sessionId
+
+    // Per-session progress controller — owned by the route registry so it
+    // survives the user navigating away to a different chat.
+    const progress = props.getProgress(runSessionId)
     progress.reset()
+    props.updateRunState(runSessionId, { isProcessing: true, runningTool: null })
+
+    // Add user message — only if we're still on this thread. (If the user
+    // submits, then immediately switches, the local view belongs to the new
+    // thread and we should not pollute it with the old message.)
+    if (runSessionId === props.sessionId) {
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        content,
+        timestamp: new Date()
+      }
+      setMessages([...messages(), userMessage])
+    }
+
+    const abortController = new AbortController()
+    props.registerAbortController(runSessionId, abortController)
 
     try {
       // Stream events via SSE endpoint for real-time updates
@@ -150,11 +193,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sessionId: props.sessionId,
+          sessionId: runSessionId,
           message: content,
           agentId: selectedAgent(),
           settings: getSettings()
-        })
+        }),
+        signal: abortController.signal,
       })
 
       if (!response.ok) {
@@ -202,8 +246,32 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
             } else if (eventType === 'error') {
               throw new Error(parsed.error)
             } else if (parsed.type) {
-              // Regular event — stream to UI
+              // Regular event — stream to UI. The SSE envelope carries
+              // sessionId (#47); ignore it before treating the body as a
+              // ContextEvent.
               const evt = parsed as ContextEvent
+
+              // Progress is always routed into the captured run session's
+              // controller, even if the user has navigated away.
+              progress.ingest(evt)
+
+              // Surface the currently-running tool for the composer guard.
+              if (evt.type === 'controller_action') {
+                const data = evt.data as ControllerActionEventData
+                const toolName = data.action?.tool_name
+                if (toolName && toolName !== 'Return') {
+                  props.updateRunState(runSessionId, { runningTool: toolName })
+                } else if (data.action?.is_final) {
+                  props.updateRunState(runSessionId, { runningTool: null })
+                }
+              }
+
+              // The remaining route-level state (events, graph, messages) is
+              // only owned by the actively-displayed session — drop events
+              // from a backgrounded stream rather than corrupt the view. The
+              // server-side persistence catches everything up on rehydrate.
+              if (runSessionId !== props.sessionId) continue
+
               if (props.onEventsUpdate) {
                 props.onEventsUpdate([evt])
               }
@@ -215,10 +283,6 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
                   props.onGraphUpdate(graphElements)
                 }
               }
-
-              // Feed every event into the chain-progress hook — it derives
-              // running current/total/status across the whole chain.
-              progress.ingest(evt)
 
               // Convert error events to inline chat messages
               if (evt.type === 'error') {
@@ -250,18 +314,20 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       // Mark progress complete — bar fills, fades, and unmounts.
       progress.finish()
 
-      // Update event count cursor and emit final context
+      // Update event count cursor and emit final context — but only if the
+      // user is still looking at this thread.
       if (finalResult?.context) {
         prevEventCount = finalResult.context.events?.length ?? 0
-        if (props.onContextUpdate) {
+        if (runSessionId === props.sessionId && props.onContextUpdate) {
           props.onContextUpdate(finalResult.context as UnifiedContext)
         }
       }
 
       // Build assistant message from final result — only if there's a real response
-      // (not an error status with empty/stale response)
+      // (not an error status with empty/stale response). Drop it silently if the
+      // user has switched away; the persisted row will surface it on reload.
       const finalResponse = finalResult?.response ?? ''
-      if (finalResponse && finalResult?.status !== 'error') {
+      if (runSessionId === props.sessionId && finalResponse && finalResult?.status !== 'error') {
         const assistantMessage: Message = {
           id: Date.now().toString(),
           role: 'assistant',
@@ -278,23 +344,29 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         setMessages([...messages(), assistantMessage])
       }
     } catch (error) {
-      console.error('Error processing message:', error)
-
-      const errorMessage: Message = {
-        id: Date.now().toString(),
-        role: 'error',
-        content: error instanceof Error ? error.message : 'Unknown error',
-        timestamp: new Date()
+      // Suppress the noisy AbortError that fires on page-unload teardown.
+      const aborted = error instanceof DOMException && error.name === 'AbortError'
+      if (!aborted) {
+        console.error('Error processing message:', error)
+        if (runSessionId === props.sessionId) {
+          const errorMessage: Message = {
+            id: Date.now().toString(),
+            role: 'error',
+            content: error instanceof Error ? error.message : 'Unknown error',
+            timestamp: new Date()
+          }
+          setMessages([...messages(), errorMessage])
+        }
       }
       progress.finish()
-      setMessages([...messages(), errorMessage])
     } finally {
-      setIsProcessing(false)
+      props.updateRunState(runSessionId, { isProcessing: false, runningTool: null })
+      props.unregisterAbortController(runSessionId)
     }
   }
 
   const handleApproveWrite = async (messageId: string) => {
-    setIsProcessing(true)
+    props.updateRunState(props.sessionId, { isProcessing: true })
 
     try {
       // Execute the approved operation
@@ -357,7 +429,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       }
       setMessages([...messages(), errorMessage])
     } finally {
-      setIsProcessing(false)
+      props.updateRunState(props.sessionId, { isProcessing: false })
     }
   }
 
@@ -388,6 +460,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     } catch (error) {
       console.error('Error rejecting write:', error)
     }
+  }
+
+  // Composer guard banner — set when the active session has a tool in flight.
+  const blockedMessage = () => {
+    const tool = runningTool()
+    if (!isProcessing() || !tool) return undefined
+    return `Waiting for \`${tool}\` to complete. Try later.`
   }
 
   return (
@@ -421,14 +500,14 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           onHighlightEntities={props.onHighlightEntities}
           trailing={() => (
             <LiveProgressBar
-              status={progress.snapshot().status}
-              current={progress.snapshot().currentTurn}
-              pathProjection={progress.snapshot().pathProjection}
-              maxProjection={progress.snapshot().maxProjection}
+              status={currentSnapshot().status}
+              current={currentSnapshot().currentTurn}
+              pathProjection={currentSnapshot().pathProjection}
+              maxProjection={currentSnapshot().maxProjection}
               visible={
                 isProcessing() &&
-                !progress.snapshot().done &&
-                progress.snapshot().maxProjection > 0
+                !currentSnapshot().done &&
+                currentSnapshot().maxProjection > 0
               }
             />
           )}
@@ -436,7 +515,11 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
 
       {/* Input */}
       <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">
-        <ChatInput onSend={handleSendMessage} disabled={isProcessing()} />
+        <ChatInput
+          onSend={handleSendMessage}
+          disabled={isProcessing()}
+          blockedMessage={blockedMessage()}
+        />
       </div>
     </div>
   )

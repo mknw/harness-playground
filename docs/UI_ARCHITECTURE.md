@@ -308,7 +308,7 @@ Main container combining sidebar and chat area:
 - **Keyboard shortcuts:**
   - Enter → Send message
   - Shift+Enter → New line
-- **States:** Disabled during AI processing
+- **Submit guard (#47):** When `disabled` is true, the textarea **stays editable** so the user's draft survives, but Enter no-ops. If `blockedMessage` is provided, an inline banner ("Waiting for `<tool>` to complete. Try later.") renders above the input — driven by the currently-running tool from the active session's `controller_action` events.
 - **Styling:** Neon cyan border on focus
 
 #### 5. AgentSelector.tsx
@@ -520,6 +520,48 @@ The first 60 chars of the first `user_message` becomes the conversation title. O
 ### Auth
 
 Every public action and the `/api/events` / `/api/stash` routes authenticate via Stack Auth and scope session ops by `user.id`. When `VITE_DEV_BYPASS_AUTH=true`, the user id falls back to `dev-bypass-user`.
+
+---
+
+## 6a. Per-Session Progress & Submit Guard (#47)
+
+The live progress bar and "Waiting for `<tool>`…" composer guard are scoped to a conversation, not to the `ChatInterface` instance. Switching threads while a chain is running leaves the streamed loop running on the server — progress keeps accumulating in the originating session's controller, and the bar restores on return.
+
+### State location
+
+`routes/index.tsx` owns two parallel per-session registries:
+
+| Registry | Shape | Purpose |
+|----------|-------|---------|
+| `progressBySession` | `Map<sessionId, ChainProgressController>` | One progress controller per session. Lazily created on first read. |
+| `runStates` signal | `Record<sessionId, SessionRunState>` | Reactive `{ isProcessing, runningTool }` per session — drives the composer guard banner and the bar's `visible` flag. |
+| `abortControllers` | `Map<sessionId, AbortController>` | One in-flight SSE stream per session. Aborted only on page unload (not on chat switch). |
+
+`ChatInterface` receives `getProgress`, `getRunState`, `updateRunState`, `registerAbortController`, `unregisterAbortController` as props. Inside `handleSendMessage` the active `props.sessionId` is captured as `runSessionId` at submit time — all subsequent state mutations are keyed on that captured id, not the live prop, so events that arrive after a chat switch don't pollute the wrong view.
+
+### Event routing
+
+- **Progress is always routed** into `getProgress(runSessionId)` regardless of which chat the user is viewing.
+- **Tool name** is extracted from `controller_action.action.tool_name` and pushed via `updateRunState(runSessionId, { runningTool })`. When `is_final` is true the field clears.
+- **Graph, events, messages, context** are dropped when `runSessionId !== props.sessionId` — the active view owns those signals, and the persisted row will surface anything missed on the next hydration.
+
+### SSE envelope
+
+`api/events.ts` now spreads `sessionId` into every emitted JSON object (the `event: done` payload too). It's not part of the typed `ContextEvent` shape — it's an envelope-only field consumed by the client.
+
+### Submit guard
+
+`ChatInput` now keeps the textarea editable while `disabled` is true. The Enter handler still no-ops, but the user's draft survives. A `blockedMessage` prop renders an inline banner above the input; it's set by `ChatInterface` to `` `Waiting for \`<tool>\` to complete. Try later.` `` whenever the active session has both `isProcessing` and a `runningTool`.
+
+### Lifecycle
+
+| Event | Behavior |
+|-------|----------|
+| Submit on a non-running chat | `getProgress(sid).reset()`; `updateRunState(sid, { isProcessing: true })`; SSE opens; per-session `AbortController` registered. |
+| Switch chats mid-stream | Nothing aborts. `selectedSessionId` swaps; `ChatInterface`'s reactive memos pick up the new session's controller (idle → bar hides). |
+| Switch back to the running chat | The original controller's snapshot signal is still live; the bar re-renders with the current `currentTurn` and `status`. |
+| Stream completes | `progress.finish()`; `updateRunState(sid, { isProcessing: false, runningTool: null })`; `AbortController` unregistered. |
+| Tab close / `beforeunload` | Route iterates `abortControllers.values()` and aborts each → no zombie fetches in DevTools. |
 
 ---
 

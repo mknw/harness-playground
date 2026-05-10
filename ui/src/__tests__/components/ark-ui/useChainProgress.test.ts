@@ -147,6 +147,43 @@ describe('createChainProgress', () => {
     })
   })
 
+  describe('per-session isolation (#47)', () => {
+    it('two controllers ingest independently — switching active session does not bleed state', () => {
+      createRoot(() => {
+        // Models the route-level registry: one controller per sessionId.
+        // Streaming events for session A must not affect session B's bar.
+        const a = createChainProgress()
+        const b = createChainProgress()
+
+        a.ingest(ev('user_message', 'harness', { content: 'A', chainTurnEstimate: 5 }))
+        a.ingest(ev('pattern_enter', 'a-loop', { pattern: 'simpleLoop', maxTurns: 5 }))
+        a.ingest(ev('controller_action', 'a-loop', { action: { status: 'a step 1' }, turn: 0, maxTurns: 5 }))
+        a.ingest(ev('controller_action', 'a-loop', { action: { status: 'a step 2' }, turn: 1, maxTurns: 5 }))
+
+        // B receives nothing — it's idle.
+        expect(b.snapshot()).toEqual({
+          currentTurn: 0,
+          maxProjection: 0,
+          pathProjection: 0,
+          status: null,
+          done: false,
+        })
+
+        // A has advanced and carries its own status.
+        expect(a.snapshot().currentTurn).toBe(2)
+        expect(a.snapshot().maxProjection).toBe(5)
+        expect(a.snapshot().status).toBe('a step 2')
+
+        // Now B starts its own run — A's still-in-flight state is untouched.
+        b.ingest(ev('user_message', 'harness', { content: 'B', chainTurnEstimate: 2 }))
+        b.ingest(ev('controller_action', 'b-router', { action: { status: 'b step 1' }, turn: 0, maxTurns: 2 }))
+        expect(b.snapshot().status).toBe('b step 1')
+        expect(a.snapshot().status).toBe('a step 2')
+        expect(a.snapshot().currentTurn).toBe(2)
+      })
+    })
+  })
+
   describe('fallback (no seed)', () => {
     it('grows pathProjection from pattern_enter events', () => {
       createRoot(() => {

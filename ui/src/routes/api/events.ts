@@ -55,7 +55,11 @@ export async function POST(event: APIEvent) {
           message,
           resolvedAgentId,
           (evt) => {
-            const data = JSON.stringify(evt);
+            // `sessionId` rides on every envelope so the client can route the
+            // event to the right per-session progress controller (#47). Events
+            // themselves don't carry sessionId in their typed shape — it's an
+            // envelope-only field.
+            const data = JSON.stringify({ ...evt, sessionId });
             controller.enqueue(encoder.encode(`data: ${data}\n\n`));
           },
           settings,
@@ -63,6 +67,7 @@ export async function POST(event: APIEvent) {
 
         // Send final result as a named event
         const doneData = JSON.stringify({
+          sessionId,
           response: result.response,
           data: result.data,
           status: result.status,
@@ -90,7 +95,7 @@ export async function POST(event: APIEvent) {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         controller.enqueue(
-          encoder.encode(`event: error\ndata: ${JSON.stringify({ error: msg })}\n\n`),
+          encoder.encode(`event: error\ndata: ${JSON.stringify({ sessionId, error: msg })}\n\n`),
         );
         controller.close();
       }

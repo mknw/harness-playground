@@ -1,6 +1,6 @@
 import { Splitter } from '@ark-ui/solid/splitter'
-import { createSignal, createMemo, createResource, createEffect, createUniqueId } from 'solid-js'
-import { ChatInterface } from '~/components/ark-ui/ChatInterface'
+import { createSignal, createMemo, createResource, createEffect, createUniqueId, onCleanup, onMount } from 'solid-js'
+import { ChatInterface, type SessionRunState } from '~/components/ark-ui/ChatInterface'
 import { ChatSidebar, mergeThreadsWithPlaceholder } from '~/components/ark-ui/ChatSidebar'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
@@ -8,6 +8,9 @@ import { executeCypherWrite } from '~/lib/neo4j/write-action'
 import { mergeGraphElements } from '~/lib/graph-merge'
 import { listConversations } from '~/lib/harness-client'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
+import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
+
+const DEFAULT_RUN_STATE: SessionRunState = { isProcessing: false, runningTool: null }
 
 export default function Home() {
   // Conversation a user is currently viewing. Initial value is a fresh id so
@@ -28,6 +31,58 @@ export default function Home() {
 
   // Sidebar threads — refetched after each turn completes (see onContextUpdate).
   const [threads, { refetch: refetchThreads }] = createResource(() => listConversations())
+
+  // ===========================================================================
+  // Per-session progress + run state (#47)
+  // ===========================================================================
+  // ChainProgressController instances are owned by the route so the live bar
+  // and submit guard persist across sidebar switches. ChatInterface reads its
+  // session's controller via `getProgress(sid)` and routes ingest calls into
+  // the controller for the captured run sessionId — events arriving for the
+  // unfocused chat keep flowing into its own bar.
+
+  const progressBySession = new Map<string, ChainProgressController>()
+  const getProgress = (sid: string): ChainProgressController => {
+    let p = progressBySession.get(sid)
+    if (!p) {
+      p = createChainProgress()
+      progressBySession.set(sid, p)
+    }
+    return p
+  }
+
+  // Reactive run-state map (`isProcessing`, `runningTool`). Kept as a plain
+  // object so Solid can diff equality on the whole record without Map identity.
+  const [runStates, setRunStates] = createSignal<Record<string, SessionRunState>>({})
+  const getRunState = (sid: string): SessionRunState => runStates()[sid] ?? DEFAULT_RUN_STATE
+  const updateRunState = (sid: string, patch: Partial<SessionRunState>) => {
+    setRunStates(prev => ({
+      ...prev,
+      [sid]: { ...DEFAULT_RUN_STATE, ...prev[sid], ...patch },
+    }))
+  }
+
+  // AbortControllers for in-flight SSE streams. Switching sessions does NOT
+  // abort — only an explicit cancel or page unload does (acceptance: "Streams
+  // survive chat switches").
+  const abortControllers = new Map<string, AbortController>()
+  const registerAbortController = (sid: string, ac: AbortController) => {
+    abortControllers.set(sid, ac)
+  }
+  const unregisterAbortController = (sid: string) => {
+    abortControllers.delete(sid)
+  }
+
+  onMount(() => {
+    const onUnload = () => {
+      for (const ac of abortControllers.values()) {
+        try { ac.abort() } catch { /* ignore */ }
+      }
+      abortControllers.clear()
+    }
+    window.addEventListener('beforeunload', onUnload)
+    onCleanup(() => window.removeEventListener('beforeunload', onUnload))
+  })
 
   // Accumulate graph elements across calls. Dedup + touched-flag refresh logic
   // lives in `mergeGraphElements` so it can be unit-tested in isolation.
@@ -57,7 +112,9 @@ export default function Home() {
 
   // Wipe per-conversation state. Called by ChatInterface before it hydrates a
   // newly selected sessionId so the graph + observability tabs don't keep
-  // showing stale data from the previous thread.
+  // showing stale data from the previous thread. Progress state is NOT cleared
+  // here — it belongs to the per-session registry, so a still-running stream
+  // for the previous thread keeps populating its own controller.
   const resetForNewSession = () => {
     clearGraph()
     clearEvents()
@@ -192,6 +249,11 @@ export default function Home() {
                 onAgentChangeRequestsNewSession={handleNewChat}
                 graphEntityNames={graphEntityNames()}
                 onHighlightEntities={setHighlightedIds}
+                getProgress={getProgress}
+                getRunState={getRunState}
+                updateRunState={updateRunState}
+                registerAbortController={registerAbortController}
+                unregisterAbortController={unregisterAbortController}
               />
             </div>
           </div>
