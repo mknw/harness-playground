@@ -515,7 +515,11 @@ Conversations are persisted to Postgres so they survive process restarts and lis
 
 ### Sticky titles
 
-The first 60 chars of the first `user_message` becomes the conversation title. Once set, it never changes via `saveConversation()` — `COALESCE(conversations.title, EXCLUDED.title)` on update. (A dedicated rename action can override this when shipped.)
+The first 60 chars of the first `user_message` becomes the conversation title. Once set, it never changes via `saveConversation()` — `COALESCE(conversations.title, EXCLUDED.title)` on update. A dedicated `updateConversationTitle(id, userId, title)` action bypasses the COALESCE rule and is used by the LLM title generator (see §6b below) to replace the heuristic title once the model resolves. A future user-rename UI can use the same action.
+
+### LLM-generated titles (§6b)
+
+Once the first turn completes, a minimal one-pattern harness agent in `lib/harness-client/examples/title-generator.server.ts` calls a single BAML function (`GenerateConversationTitle`, using the `DescribeFallback` chain) and writes the result via `updateConversationTitle()`. The result is pushed to the client over the existing `/api/events` SSE stream as an `event: title_updated` frame before the stream closes (capped at 3s so a slow LLM never wedges the response). The client patches the threads cache in-place — no refetch. See §6b for the full architecture.
 
 ### Auth
 
@@ -562,6 +566,110 @@ The live progress bar and "Waiting for `<tool>`…" composer guard are scoped to
 | Switch back to the running chat | The original controller's snapshot signal is still live; the bar re-renders with the current `currentTurn` and `status`. |
 | Stream completes | `progress.finish()`; `updateRunState(sid, { isProcessing: false, runningTool: null })`; `AbortController` unregistered. |
 | Tab close / `beforeunload` | Route iterates `abortControllers.values()` and aborts each → no zombie fetches in DevTools. |
+
+---
+
+## 6b. LLM-Generated Conversation Titles
+
+Once the first user turn completes, a minimal harness agent generates a 3–5 word title and replaces the heuristic placeholder. The result is pushed to the client on the same SSE channel the turn was streamed over.
+
+### Why a harness agent for one BAML call?
+
+The `harness-patterns/` library is the testbed for an eventual standalone npm package. Its current example catalog (`harness-client/examples/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, `guardrail`, and a full ontology-builder pipeline — but had no *minimum-rung* example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
+
+```ts
+// ui/src/lib/harness-client/examples/title-generator.server.ts
+export const titleAgent = harness<TitleAgentData>(
+  synthesizer<TitleAgentData>({
+    patternId: 'title-gen',
+    mode: 'message',
+    synthesize: async ({ userMessage }) => sanitizeTitle(await b.GenerateConversationTitle(userMessage)) ?? '',
+  }),
+)
+```
+
+One pattern (`synthesizer`), one BAML call, no tools, no router. `mode: 'message'` makes the synthesizer a thin shell around the custom `synthesize` fn: it pulls the latest `user_message` from the view and feeds it as the function's input.
+
+### The BAML function
+
+`ui/baml_src/title.baml` — `GenerateConversationTitle(user_message: string) -> string`, wired to `DescribeFallback` (`[GroqFast, OpenRouterGemma4, OpenAIGPT5, AnthropicHaiku45]`). Reuses the same lightweight client chain the background tool-result summarizer uses; both are "tiny async post-process" jobs.
+
+### When it runs
+
+| Trigger | Path |
+|---------|------|
+| **First turn of a conversation** | `api/events.ts` calls `runFirstTurnTitleGen(ctx, sessionId, userId)` after the SSE `done` frame, before close. Hard 3s timeout. |
+| **On-demand from the sidebar** | Hover-reveal `↻` icon on each row → calls the `regenerateConversationTitle(sessionId)` server action → loads context → calls `runRegenerateTitle()` (no first-turn gate, uses the latest user message). |
+
+`runFirstTurnTitleGen` is the one with the gate: it skips when `ctx.events.filter(e => e.type === 'user_message').length !== 1`. Titles stay stable across turns; users learn to recognize them.
+
+### How the title reaches the sidebar
+
+The integrated SSE event approach — no new endpoint, no long-lived connection, no polling.
+
+```
+POST /api/events
+  ◀── event: <ContextEvent>      (user_message)
+  ◀── event: <ContextEvent>      (…)
+  ◀── event: done {response, …}  ← user already sees the response
+  ░░░ runFirstTurnTitleGen() runs (≤ 3s) ░░░
+  ◀── event: title_updated {sessionId, title}    ← server pushes
+                                                    stream closes
+```
+
+Server-side (`api/events.ts:78-95`):
+
+```ts
+controller.enqueue(`event: done\ndata: ${doneData}\n\n`)
+await Promise.race([
+  runFirstTurnTitleGen(result.context, sessionId, userId).then(title => {
+    if (!title) return
+    controller.enqueue(`event: title_updated\ndata: ${JSON.stringify({ sessionId, title })}\n\n`)
+  }),
+  new Promise(resolve => setTimeout(resolve, 3000)),
+]).catch(err => console.error('[title-gen] failed:', err))
+controller.close()
+```
+
+Client-side: the typed SSE parser yields `{ event: 'title_updated', data: { sessionId, title } }` and `ChatInterface` invokes `props.onTitleUpdated?.(sessionId, title)`. `routes/index.tsx` patches the threads cache via `mutateThreads()` — no `listConversations()` round-trip.
+
+### Bypassing the COALESCE-sticky upsert
+
+`saveConversation()`'s `COALESCE(conversations.title, EXCLUDED.title)` keeps a once-set title forever. For the LLM title we need authoritative replacement, so `lib/db/conversations.server.ts` exposes a dedicated `updateConversationTitle(id, userId, title)` that does a direct `UPDATE … SET title = $1` scoped by `user_id`. The upsert path retains its sticky semantics for everything else.
+
+### Failure handling
+
+All failures (LLM throws, returns empty, sanitizer rejects, 3s timeout fires) are caught silently. The heuristic title (`deriveTitle()`) remains in place. No retry, no error event to the user.
+
+### Sidebar regenerate (`↻` button)
+
+`ChatSidebar.tsx` renders a hover-reveal `↻` icon on each non-placeholder row. Click → calls `regenerateConversationTitle(threadId)` server action → forwards the returned title to `onTitleRegenerated`, which routes through the same `handleTitleUpdated` patcher used by the SSE event. Inline spinner while in flight. Pending state is tracked per row in a `Set<sessionId>`.
+
+### Replay correctness — `final?` discriminator
+
+Restoring a conversation no longer surfaces residual router status messages ("Let me look into that…") as if they were assistant responses. `AssistantMessageEventData.final?: boolean` distinguishes the synthesizer's user-facing emit (and the router's direct-response branch) from intermediate routing status. `replayMessages` in `lib/harness-client/replay.ts` filters on it. The live stream is unaffected — the live UI only paints `finalResult.response` anyway.
+
+---
+
+## 6c. Typed SSE Parser
+
+`ui/src/lib/sse-client.ts` exposes a single function:
+
+```ts
+parseChatStream(response: Response): AsyncGenerator<ChatStreamEvent>
+```
+
+Wraps the `/api/events` response body and yields a discriminated union over event kinds:
+
+```ts
+type ChatStreamEvent =
+  | { event: 'message';       data: ContextEvent & { sessionId?: string } }
+  | { event: 'done';          data: DoneEventData }
+  | { event: 'error';         data: { sessionId?: string; error: string } }
+  | { event: 'title_updated'; data: TitleUpdatedEventData }
+```
+
+`ChatInterface.handleSendMessage` consumes it with `for await … switch (evt.event)`. Adding a new event type is a one-line union extension; TS surfaces every consumer that doesn't handle it. Frame buffering, partial reads, malformed JSON, multi-line `data:` payloads, and comment lines (`: keepalive`) are all handled inside the parser. Unknown event names still come through at runtime (so a future server-side addition doesn't crash an older client) but aren't part of the static type — consumers should treat them as no-ops via `default` branch.
 
 ---
 

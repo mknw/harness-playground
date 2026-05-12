@@ -256,3 +256,28 @@ export async function loadConversation(
   };
 }
 
+/**
+ * Regenerate the LLM-authored title for an existing conversation. Bound
+ * to the sidebar's hover-reveal ↻ button. Loads the session's stored
+ * context, runs the minimal title-generator harness agent against the
+ * most recent user message, and persists the result via
+ * `updateConversationTitle()` (bypasses the COALESCE-sticky upsert).
+ *
+ * Returns the new title on success, or null when the conversation has
+ * no user messages, isn't found, or the LLM call fails — silent failure
+ * leaves the existing title in place.
+ */
+export async function regenerateConversationTitle(
+  sessionId: string,
+): Promise<string | null> {
+  const user = await requireUser();
+  const loaded = await loadSession(sessionId, user.id);
+  if (!loaded) return null;
+  const { deserializeContext } = await import("../harness-patterns");
+  const { runRegenerateTitle } = await import(
+    "./examples/title-generator.server"
+  );
+  const ctx = deserializeContext(loaded.serializedContext);
+  return runRegenerateTitle(ctx, sessionId, user.id);
+}
+

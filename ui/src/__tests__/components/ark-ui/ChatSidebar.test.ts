@@ -8,11 +8,21 @@
  *  - no placeholder when `placeholderId` is null
  */
 
-import { describe, it, expect } from 'vitest'
-import {
-  mergeThreadsWithPlaceholder,
-  type ChatThreadSummary,
-} from '../../../components/ark-ui/ChatSidebar'
+import { describe, it, expect, vi } from 'vitest'
+
+// ChatSidebar.tsx now imports `regenerateConversationTitle` from the
+// server-only `harness-client` module. The transitive import chain
+// (`harness-patterns` → `assert.server.ts`) self-asserts at import time
+// and throws under jsdom. Stub both before pulling in the SUT.
+vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+  assertServerOnImport: vi.fn(),
+}))
+vi.mock('../../../lib/harness-client', () => ({
+  regenerateConversationTitle: vi.fn(async () => null),
+}))
+
+const { mergeThreadsWithPlaceholder } = await import('../../../components/ark-ui/ChatSidebar')
+type ChatThreadSummary = import('../../../components/ark-ui/ChatSidebar').ChatThreadSummary
 
 const persisted: ChatThreadSummary[] = [
   { id: 'a', title: 'Alpha', updatedAt: '2026-05-10T00:00:00Z' },

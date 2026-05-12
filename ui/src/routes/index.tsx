@@ -30,7 +30,17 @@ export default function Home() {
   const [unifiedContext, setUnifiedContext] = createSignal<UnifiedContext | undefined>(undefined)
 
   // Sidebar threads — refetched after each turn completes (see onContextUpdate).
-  const [threads, { refetch: refetchThreads }] = createResource(() => listConversations())
+  // `mutate` is exposed so the `title_updated` SSE event can patch a single
+  // row's title in-place without re-querying the full list (the server already
+  // gave us the new title in the event payload).
+  const [threads, { refetch: refetchThreads, mutate: mutateThreads }] = createResource(() => listConversations())
+
+  // Push-driven title update from the SSE stream — the server emits a
+  // `title_updated` event after the LLM title generator resolves. We splice
+  // the new title into the threads cache; no refetch needed.
+  const handleTitleUpdated = (sid: string, title: string) => {
+    mutateThreads(list => (list ?? []).map(t => (t.id === sid ? { ...t, title } : t)))
+  }
 
   // ===========================================================================
   // Per-session progress + run state (#47)
@@ -238,6 +248,7 @@ export default function Home() {
               selectedId={selectedSessionId()}
               onSelectThread={handleSelectThread}
               onNewChat={handleNewChat}
+              onTitleRegenerated={handleTitleUpdated}
             />
             <div flex="1" overflow="hidden">
               <ChatInterface
@@ -254,6 +265,7 @@ export default function Home() {
                 updateRunState={updateRunState}
                 registerAbortController={registerAbortController}
                 unregisterAbortController={unregisterAbortController}
+                onTitleUpdated={handleTitleUpdated}
               />
             </div>
           </div>

@@ -73,6 +73,10 @@ export interface ChatInterfaceProps {
   updateRunState: (sessionId: string, patch: Partial<SessionRunState>) => void
   registerAbortController: (sessionId: string, ac: AbortController) => void
   unregisterAbortController: (sessionId: string) => void
+  /** Push-driven sidebar title update — fired when the server emits a
+   *  `title_updated` SSE event after the first-turn LLM title resolves.
+   *  Route patches its threads cache in-place; no refetch required. */
+  onTitleUpdated?: (sessionId: string, title: string) => void
 }
 
 const WELCOME_MESSAGE: Message = {
@@ -217,6 +221,14 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         }
         if (sseEvt.event === 'error') {
           throw new Error((sseEvt.data as { error: string }).error)
+        }
+        if (sseEvt.event === 'title_updated') {
+          // Server pushed the LLM-generated title for this conversation —
+          // patch the sidebar's threads cache in place. Lands regardless of
+          // which thread the user is currently viewing.
+          const { sessionId: sid, title } = sseEvt.data
+          props.onTitleUpdated?.(sid, title)
+          continue
         }
         if (sseEvt.event !== 'message') continue // Forward-compat: ignore unknown event names
 
