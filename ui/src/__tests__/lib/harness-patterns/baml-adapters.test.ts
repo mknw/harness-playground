@@ -774,3 +774,245 @@ describe('annotateExpansions', () => {
     expect('expanded_in_turn' in out[0]).toBe(true)
   })
 })
+
+// ============================================================================
+// Failed LLM call capture (#31): adapters must wrap final-propagating
+// failures in LLMCallError carrying promptTemplate, variables, and the
+// best-effort HTTP body so the panel can render the same Prompt drill-down
+// for failures as for successes.
+// ============================================================================
+
+describe('LLMCallError — failed LLM call capture', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('throws LLMCallError carrying promptTemplate and variables when LoopController fails', async () => {
+    const { createLoopControllerAdapter, LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    // Non-BamlValidationError fails on first attempt (no adapter retry):
+    // adapter must wrap in LLMCallError with the captured context. The
+    // mock receives a fake collector — we simulate BAML populating it
+    // before throwing (typical of parse failures arriving after the HTTP
+    // response). httpRequest body mirrors the HttpBody class shape.
+    // Note: the real `Collector.last` is a getter, so the test uses a
+    // plain object that satisfies the structural shape.
+    const bodyText = '{"messages":[{"role":"user","content":"INTENT: do thing"}]}'
+    const httpBody = Object.create({ text: () => bodyText })
+    const fakeCollector = {
+      last: undefined as unknown as Record<string, unknown> | undefined
+    }
+    mockLoopController.mockImplementation(async (..._args: unknown[]) => {
+      const options = _args[_args.length - 1] as { collector?: typeof fakeCollector } | undefined
+      if (options?.collector) {
+        options.collector.last = {
+          rawLlmResponse: 'malformed-json-from-llm',
+          calls: [{
+            httpRequest: { body: httpBody },
+            provider: 'groq',
+            clientName: 'GroqGPT120B'
+          }]
+        }
+      }
+      throw new Error('Network down')
+    })
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    let caught: unknown
+    try {
+      await controller('do thing', 'do thing', '[]', 0, undefined, fakeCollector as never)
+    } catch (e) {
+      caught = e
+    }
+
+    expect(caught).toBeInstanceOf(LLMCallError)
+    const err = caught as InstanceType<typeof LLMCallError>
+    expect(err.message).toBe('Network down')
+    expect(err.llmCall).toBeDefined()
+    expect(err.llmCall.functionName).toBe('LoopController')
+    expect(err.llmCall.variables).toEqual(expect.objectContaining({
+      user_message: 'do thing',
+      intent: 'do thing'
+    }))
+    // promptTemplate must be populated from inlined BAML
+    expect(err.llmCall.promptTemplate).toBeDefined()
+    expect(err.llmCall.promptTemplate).toMatch(/\{\{\s*intent\s*\}\}/)
+    // HTTP body captured before the failure
+    expect(err.llmCall.rawInput).toBe('{"messages":[{"role":"user","content":"INTENT: do thing"}]}')
+    // rawOutput captured (the malformed response) — equivalent to httpResponse
+    expect(err.llmCall.rawOutput).toBe('malformed-json-from-llm')
+    expect(err.llmCall.provider).toBe('groq')
+    expect(err.llmCall.clientName).toBe('GroqGPT120B')
+    // The original error is preserved as cause
+    expect(err.cause).toBeInstanceOf(Error)
+  })
+
+  it('LLMCallError omits rawInput when the failure is pre-call (collector never recorded a call)', async () => {
+    const { createLoopControllerAdapter, LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    // Pre-call failure: collector stays empty (no last entry). Adapter
+    // should still throw LLMCallError with promptTemplate + variables;
+    // rawInput / rawOutput are undefined.
+    mockLoopController.mockRejectedValue(new Error('DNS lookup failed'))
+
+    const controller = createLoopControllerAdapter(['Return'])
+    const { Collector } = await import('@boundaryml/baml')
+    const collector = new Collector('test')
+
+    let caught: unknown
+    try {
+      await controller('msg', 'intent', '[]', 0, undefined, collector)
+    } catch (e) {
+      caught = e
+    }
+
+    expect(caught).toBeInstanceOf(LLMCallError)
+    const err = caught as InstanceType<typeof LLMCallError>
+    expect(err.message).toBe('DNS lookup failed')
+    expect(err.llmCall.functionName).toBe('LoopController')
+    expect(err.llmCall.variables).toEqual(expect.objectContaining({ intent: 'intent' }))
+    expect(err.llmCall.promptTemplate).toBeDefined()
+    expect(err.llmCall.rawInput).toBeUndefined()
+    expect(err.llmCall.rawOutput).toBeUndefined()
+  })
+
+  it('does NOT throw LLMCallError when a recovered fallback attempt succeeds', async () => {
+    // The fallback chain only emits a propagating error on the final
+    // failure. When attempt 1 fails with BamlValidationError but attempt
+    // 2 (GroqGPT120B) succeeds, the adapter returns the success — no
+    // LLMCallError is thrown and the recovered attempts don't surface
+    // as red error events in the panel.
+    const { createLoopControllerAdapter, LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockLoopController
+      .mockRejectedValueOnce(new BamlValidationError('Invalid JSON', 'raw', 'msg', 'detailed'))
+      .mockResolvedValueOnce(mockFinalAction('Recovered on attempt 2'))
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    // Should NOT throw: the recovered attempt produces a normal return.
+    const result = await controller('user message', 'intent', '[]', 0)
+    expect(result.action).toBeDefined()
+    expect(result.action.is_final).toBe(true)
+    // And just to assert the type: an LLMCallError did not slip through
+    expect(result instanceof LLMCallError).toBe(false)
+  })
+
+  it('throws LLMCallError when ALL fallbacks (primary + GroqGPT120B + GroqFast) fail', async () => {
+    // Only the final, propagating failure should produce an LLMCallError.
+    // Here every fallback throws BamlValidationError, so the adapter
+    // exhausts the chain and the propagating error from the last attempt
+    // is wrapped.
+    const { createLoopControllerAdapter, LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockLoopController
+      .mockRejectedValueOnce(new BamlValidationError('attempt 1 invalid', 'r1', 'm1', 'd1'))
+      .mockRejectedValueOnce(new BamlValidationError('attempt 2 invalid', 'r2', 'm2', 'd2'))
+      .mockRejectedValueOnce(new BamlValidationError('attempt 3 invalid', 'r3', 'm3', 'd3'))
+
+    const controller = createLoopControllerAdapter(['Return'])
+
+    let caught: unknown
+    try {
+      await controller('msg', 'intent', '[]', 0)
+    } catch (e) { caught = e }
+
+    expect(caught).toBeInstanceOf(LLMCallError)
+    // BamlValidationError's .message is empty (constructor stashes args on
+    // .prompt / .raw_output instead), so we just assert the wrapper class
+    // and the call count rather than asserting on message content.
+    expect((caught as InstanceType<typeof LLMCallError>).cause).toBeDefined()
+    // All three attempts ran
+    expect(mockLoopController).toHaveBeenCalledTimes(3)
+  })
+
+  it('throws LLMCallError from ActorController on BAML failure', async () => {
+    const { createActorControllerAdapter, LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    mockActorController.mockRejectedValue(new Error('Provider 5xx'))
+
+    const actor = createActorControllerAdapter(['code-mode'])
+    const { Collector } = await import('@boundaryml/baml')
+
+    let caught: unknown
+    try {
+      await actor('msg', 'intent', ['code-mode'], [], new Collector('test'))
+    } catch (e) { caught = e }
+
+    expect(caught).toBeInstanceOf(LLMCallError)
+    const err = caught as InstanceType<typeof LLMCallError>
+    expect(err.llmCall.functionName).toBe('ActorController')
+    expect(err.llmCall.promptTemplate).toBeDefined()
+  })
+
+  it('throws LLMCallError from Critic on BAML failure', async () => {
+    const { createCriticAdapter, LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    mockCritic.mockRejectedValue(new Error('Critic timed out'))
+
+    const critic = createCriticAdapter()
+    const { Collector } = await import('@boundaryml/baml')
+
+    let caught: unknown
+    try {
+      await critic('intent', [], new Collector('test'))
+    } catch (e) { caught = e }
+
+    expect(caught).toBeInstanceOf(LLMCallError)
+    const err = caught as InstanceType<typeof LLMCallError>
+    expect(err.llmCall.functionName).toBe('Critic')
+    expect(err.llmCall.variables).toEqual(expect.objectContaining({ intent: 'intent' }))
+  })
+})
+
+describe('extractFailureLLMCallData', () => {
+  it('returns LLMCallData with promptTemplate and variables when collector is empty', async () => {
+    const { extractFailureLLMCallData } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const result = extractFailureLLMCallData(
+      undefined,
+      'LoopController',
+      { user_message: 'hi', intent: 'hi' },
+      Date.now() - 50
+    )
+
+    expect(result).toBeDefined()
+    expect(result.functionName).toBe('LoopController')
+    expect(result.variables).toEqual({ user_message: 'hi', intent: 'hi' })
+    expect(result.promptTemplate).toBeDefined()
+    expect(result.rawInput).toBeUndefined()
+    expect(result.rawOutput).toBeUndefined()
+    expect(result.durationMs).toBeGreaterThanOrEqual(0)
+  })
+
+  it('returns the same shape as success when collector has captured a call', async () => {
+    const { extractFailureLLMCallData } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const bodyText = '{"messages":[{"role":"user","content":"hello"}]}'
+    const httpBody = Object.create({ text: () => bodyText })
+    const collector = {
+      last: {
+        rawLlmResponse: 'partial-or-malformed',
+        calls: [{ httpRequest: { body: httpBody }, provider: 'openai', clientName: 'OpenAIGPT5' }]
+      }
+    }
+
+    const result = extractFailureLLMCallData(
+      collector as never,
+      'Synthesize',
+      { userMessage: 'hello' },
+      Date.now() - 100
+    )
+
+    expect(result.functionName).toBe('Synthesize')
+    expect(result.rawInput).toBe(bodyText)
+    expect(result.rawOutput).toBe('partial-or-malformed')
+    expect(result.provider).toBe('openai')
+    expect(result.clientName).toBe('OpenAIGPT5')
+    // parsedOutput is intentionally omitted on failures
+    expect(result.parsedOutput).toBeUndefined()
+  })
+})

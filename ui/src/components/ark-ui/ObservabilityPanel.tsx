@@ -783,6 +783,53 @@ const ActionDetail = (props: { data: ControllerActionEventData }) => (
   </div>
 )
 
+const ErrorDetail = (props: { data: ErrorEventData }) => (
+  <div flex="~ col" gap="3">
+    <div>
+      <div text="xs dark-text-tertiary" m="b-1">Error</div>
+      <div
+        text="sm red-400"
+        bg="red-500/5"
+        border="1 red-500/20"
+        p="3"
+        rounded="md"
+        font="mono"
+        style={{ 'white-space': 'pre-wrap', 'word-break': 'break-word' }}
+      >
+        {props.data.error}
+      </div>
+    </div>
+    <div flex="~ wrap" gap="4">
+      <Show when={props.data.severity}>
+        <div>
+          <div text="xs dark-text-tertiary" m="b-1">Severity</div>
+          <div text={`sm ${props.data.severity === 'irrecoverable' ? 'red-400' : 'amber-400'}`} font="mono">
+            {props.data.severity}
+          </div>
+        </div>
+      </Show>
+      <Show when={props.data.turn !== undefined}>
+        <div>
+          <div text="xs dark-text-tertiary" m="b-1">Turn</div>
+          <div text="sm dark-text-primary" font="mono">{props.data.turn}</div>
+        </div>
+      </Show>
+      <Show when={props.data.iteration !== undefined}>
+        <div>
+          <div text="xs dark-text-tertiary" m="b-1">Iteration</div>
+          <div text="sm dark-text-primary" font="mono">{props.data.iteration}</div>
+        </div>
+      </Show>
+    </div>
+    <Show when={props.data.hint}>
+      <div>
+        <div text="xs dark-text-tertiary" m="b-1">Hint</div>
+        <div text="sm dark-text-secondary" style={{ 'white-space': 'pre-wrap' }}>{props.data.hint}</div>
+      </div>
+    </Show>
+  </div>
+)
+
 const MessageDetail = (props: { data: { content: string }, role: 'user' | 'assistant' }) => (
   <div flex="~ col" gap="3">
     <div>
@@ -1297,6 +1344,9 @@ const EventDetailPanel = (props: { event: ContextEvent, onClose: () => void }) =
             </Match>
             <Match when={type === 'assistant_message'}>
               <MessageDetail data={data as AssistantMessageEventData} role="assistant" />
+            </Match>
+            <Match when={type === 'error'}>
+              <ErrorDetail data={data as ErrorEventData} />
             </Match>
           </Switch>
         </Show>

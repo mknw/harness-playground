@@ -27,7 +27,8 @@ import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
-import { dedupByRefId, annotateExpansions } from '../baml-adapters.server'
+import { dedupByRefId, annotateExpansions, LLMCallError } from '../baml-adapters.server'
+import type { LLMCallData } from '../types'
 
 assertServerOnImport()
 
@@ -155,6 +156,7 @@ export function simpleLoop<T extends SimpleLoopData>(
     let hasError = false
     let errorMessage: string | undefined
     let errorTurn: number | undefined
+    let errorLlmCall: LLMCallData | undefined
     let exitedViaReturn = false
 
     // Build structured references to tool results from previous tasks.
@@ -245,6 +247,13 @@ export function simpleLoop<T extends SimpleLoopData>(
           hasError = true
           errorMessage = msg
           errorTurn = turn
+          // Carry LLM call data from the failed BAML call through to the
+          // error event so the panel can render the same Prompt/Output
+          // drill-down as a successful call. Adapters wrap final propagating
+          // failures in LLMCallError specifically for this purpose.
+          if (controllerError instanceof LLMCallError) {
+            errorLlmCall = controllerError.llmCall
+          }
           break
         }
 
@@ -474,13 +483,17 @@ export function simpleLoop<T extends SimpleLoopData>(
       }
 
       if (hasError) {
-        // Track error event — downstream patterns read errors via view.errors()
+        // Track error event — downstream patterns read errors via view.errors().
+        // When the error originated from a failed BAML call, attach the captured
+        // LLM call data so the Observability panel can render the same
+        // Prompt/Output drill-down as a successful call.
         trackEvent(scope, 'error', {
           error: errorMessage,
           severity: resolved.errorSeverity,
           hint: getErrorHint(errorMessage ?? ''),
           turn: errorTurn,
-        } as ErrorEventData, true)
+          ...(errorLlmCall ? { kind: 'llm_call' as const } : {}),
+        } as ErrorEventData, true, errorLlmCall)
       } else if (!exitedViaReturn && turns.length > 0) {
         // Loop exhausted maxTurns without controller signaling completion.
         // Surface as a recoverable error so the synthesizer can warn the user;
