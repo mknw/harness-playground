@@ -166,6 +166,52 @@ const { user, loading, refetch, signOut } = useAuth();
 2. Unauthenticated user on protected route → redirect to `/auth/signin`
 3. User email not in allowlist → sign out + redirect to `/auth/access-denied`
 
+### Sign-in providers
+
+**File:** `ui/src/routes/auth/signin.tsx` — hand-rolled UI (not Stack Auth's
+built-in components). Renders:
+
+- Email + password form (`signInWithCredential`)
+- "Sign in with Google" button (`signInWithOAuth('google')`)
+- "Sign in with Microsoft" button (`signInWithOAuth('microsoft')`) — backed by
+  Microsoft Entra ID; the provider must be enabled in the Stack Auth dashboard.
+
+Stack Auth's SDK supports a wider set of providers (`github`, `apple`,
+`linkedin`, etc. — see `allProviders` in `@stackframe/stack-shared`); to
+expose a new one, enable it in the Stack dashboard and add a button calling
+`signInWithOAuth(<provider>)` in `signin.tsx`.
+
+### Dev Bypass (#42)
+
+**File:** `ui/src/lib/auth/dev-bypass.ts` — single source of truth.
+
+```typescript
+isBypassEnabled(): boolean   // import.meta.env.DEV  &&  VITE_DEV_BYPASS_AUTH === 'true'
+BYPASS_USER                  // { id: 'dev-bypass-user', email: 'dev@local' }
+```
+
+Both gates must pass. The `import.meta.env.DEV` half is the **production
+guard**: Vite statically replaces `DEV` with `false` in production builds,
+so the bypass is structurally impossible to honor in a prod bundle no
+matter what `VITE_DEV_BYPASS_AUTH` is set to. If the env var leaks into a
+prod build, the module logs a one-shot warning at load so the
+misconfiguration is visible — but the bypass still does not activate.
+
+`BYPASS_USER.id` is the shared literal used by both the client
+(`AuthProvider.tsx` mock user) and the server (`actions.server.ts`,
+`/api/events`, `/api/stash` `requireUserId`). Before #42 the frontend used
+`dev-user` while the backend used `dev-bypass-user`, so `useAuth().user().id`
+did not match the `user_id` Postgres rows were written under.
+
+**To enable real auth locally** (e.g. to test the Stack Auth flow), set
+`VITE_DEV_BYPASS_AUTH='false'` in `ui/.env` and sign in with an email in
+`VITE_ALLOWED_EMAILS`. See `ui/.env.example` for the canonical layout.
+
+**Known footgun (out of scope for #42):** because `BYPASS_USER.id` is a
+single literal, all devs running against shared Postgres share one
+conversation namespace. Per-dev seeding (e.g. from `git config user.email`)
+remains tracked on #42.
+
 ---
 
 ## 4. User Avatar & Actions
@@ -524,7 +570,7 @@ Once the first turn completes, a minimal one-pattern harness agent in `lib/harne
 
 ### Auth
 
-Every public action and the `/api/events` / `/api/stash` routes authenticate via Stack Auth and scope session ops by `user.id`. When `VITE_DEV_BYPASS_AUTH=true`, the user id falls back to `dev-bypass-user`.
+Every public action and the `/api/events` / `/api/stash` routes authenticate via Stack Auth and scope session ops by `user.id`. In dev with the bypass enabled (`isBypassEnabled()` from `lib/auth/dev-bypass.ts`), the user id falls back to `BYPASS_USER.id` (`'dev-bypass-user'`) — the same literal the client-side `AuthProvider` mock user uses, so `useAuth().user().id` matches the `conversations.user_id` rows. See §3 *Dev Bypass* for the gate and the production guard.
 
 ---
 

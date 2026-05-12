@@ -75,6 +75,9 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 | `ANTHROPIC_API_KEY` | Anthropic models (Opus 4, Sonnet 4, Haiku) |
 | `VITE_STACK_PROJECT_ID` | Stack Auth project |
 | `VITE_STACK_PUBLISHABLE_CLIENT_KEY` | Stack Auth client key |
+| `STACK_SECRET_SERVER_KEY` | Stack Auth server key (used by `lib/auth/session.ts` to resolve users on the server) |
+| `VITE_ALLOWED_EMAILS` | Comma-separated allow-list; supports `*@domain.com` wildcards |
+| `VITE_DEV_BYPASS_AUTH` | `'true'` to skip auth in dev (gated on `import.meta.env.DEV`; ignored in prod builds). See `ui/.env.example` and `lib/auth/dev-bypass.ts` |
 
 ---
 

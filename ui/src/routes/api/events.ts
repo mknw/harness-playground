@@ -10,6 +10,7 @@ import { saveSession } from "../../lib/harness-client/session.server";
 import { scheduleSummarization, serializeContext } from "../../lib/harness-patterns";
 import { runFirstTurnTitleGen } from "../../lib/harness-client/examples/title-generator.server";
 import { getAuthenticatedUser } from "../../lib/auth/server";
+import { BYPASS_USER, isBypassEnabled } from "../../lib/auth/dev-bypass";
 import type { HarnessSettings } from "../../lib/settings";
 
 /** Hard cap on how long the SSE stream stays open after `done` waiting for
@@ -18,7 +19,7 @@ import type { HarnessSettings } from "../../lib/settings";
 const TITLE_GEN_TIMEOUT_MS = 3000;
 
 async function requireUserId(): Promise<string> {
-  if (import.meta.env.VITE_DEV_BYPASS_AUTH === "true") return "dev-bypass-user";
+  if (isBypassEnabled()) return BYPASS_USER.id;
   return (await getAuthenticatedUser()).id;
 }
 
