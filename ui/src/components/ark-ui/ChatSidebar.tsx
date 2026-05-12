@@ -12,7 +12,7 @@ export interface ChatThreadSummary {
   isPlaceholder?: boolean
 }
 
-const PLACEHOLDER_TITLE = 'description will appear here'
+const PLACEHOLDER_TITLE = 'new chat'
 
 /**
  * Merge the optimistic "+ New Chat" placeholder with the persisted thread
