@@ -22,6 +22,7 @@ import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, Cr
 import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot } from '../../../baml_client/types'
 import { listTools as mcpListTools } from './mcp-client.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
+import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 
 assertServerOnImport()
 
@@ -71,17 +72,37 @@ export function extractLLMCallData(
   const last = collector.last
   if (!last) return undefined
 
-  // Extract raw input from HTTP request body
+  // Prefer the call BAML actually selected (handles fallbacks); fall back to the last attempted call
+  const calls = (last.calls ?? []) as Array<{
+    selected?: boolean
+    provider?: string
+    clientName?: string
+    httpRequest?: { body?: unknown }
+  }>
+  const selectedCall = calls.find((c) => c.selected) ?? calls[calls.length - 1]
+
+  // BAML's httpRequest.body is an HttpBody class instance with .text()/.json()/.raw() methods.
+  // JSON.stringify on the class returns "{}" because it has no enumerable own properties.
   let rawInput: string | undefined
-  const lastCall = last.calls?.[last.calls.length - 1]
-  if (lastCall?.httpRequest?.body) {
-    const body = lastCall.httpRequest.body
-    rawInput = typeof body === 'string' ? body : JSON.stringify(body, null, 2)
+  const body = selectedCall?.httpRequest?.body as
+    | { text?: () => string }
+    | string
+    | Record<string, unknown>
+    | undefined
+  if (typeof body === 'string') {
+    rawInput = body
+  } else if (body && typeof (body as { text?: () => string }).text === 'function') {
+    try {
+      rawInput = (body as { text: () => string }).text()
+    } catch {
+      // body.text() may throw on malformed bodies — leave undefined
+    }
+  } else if (body && typeof body === 'object') {
+    rawInput = JSON.stringify(body, null, 2)
   }
 
-  // Extract provider and client info from the selected call
-  const provider = lastCall && 'provider' in lastCall ? (lastCall as { provider: string }).provider : undefined
-  const clientName = lastCall && 'clientName' in lastCall ? (lastCall as { clientName: string }).clientName : undefined
+  const provider = selectedCall?.provider
+  const clientName = selectedCall?.clientName
 
   return {
     functionName,
@@ -109,22 +130,47 @@ export function extractLLMCallData(
 /** Cache for extracted prompt templates keyed by function name */
 let promptTemplateCache: Record<string, string> | null = null
 
-/** Extract prompt template for a BAML function from inlined source */
+/** Extract prompt template for a BAML function. Reads from inlinedbaml when
+ * available (production builds), and falls back to the on-disk baml_src/
+ * directory (dev environments without a generated baml_client). */
 function getPromptTemplate(functionName: string): string | undefined {
   if (!promptTemplateCache) {
     promptTemplateCache = {}
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { getBamlFiles } = require('../../../baml_client/inlinedbaml')
-      const files = getBamlFiles() as Record<string, string>
-      for (const source of Object.values(files)) {
-        extractPromptTemplates(source, promptTemplateCache)
-      }
-    } catch {
-      // If inlined BAML not available, return undefined
+    loadTemplatesFromInlinedBaml(promptTemplateCache)
+    if (Object.keys(promptTemplateCache).length === 0) {
+      loadTemplatesFromDisk(promptTemplateCache)
     }
   }
   return promptTemplateCache[functionName]
+}
+
+function loadTemplatesFromInlinedBaml(cache: Record<string, string>): void {
+  try {
+    const files = getBamlFiles() as Record<string, string>
+    for (const source of Object.values(files)) {
+      extractPromptTemplates(source, cache)
+    }
+  } catch {
+    // baml_client not generated — caller falls back to disk
+  }
+}
+
+function loadTemplatesFromDisk(cache: Record<string, string>): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('node:fs') as typeof import('node:fs')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path') as typeof import('node:path')
+    const bamlSrc = path.resolve(process.cwd(), 'baml_src')
+    if (!fs.existsSync(bamlSrc)) return
+    for (const entry of fs.readdirSync(bamlSrc)) {
+      if (!entry.endsWith('.baml')) continue
+      const source = fs.readFileSync(path.join(bamlSrc, entry), 'utf8')
+      extractPromptTemplates(source, cache)
+    }
+  } catch {
+    // filesystem unavailable — templates remain unset
+  }
 }
 
 /** Parse BAML source to extract function prompt blocks */

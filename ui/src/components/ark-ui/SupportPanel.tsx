@@ -2,7 +2,7 @@
  * Support Panel Component
  *
  * Tabbed interface for knowledge graph visualization and observability tools
- * Tabs: Neo4j Graph | Memory Graph | All (Turn Explorer) | Observability | Data | Actions | Documents | Tools
+ * Tabs: Neo4j Graph | Memory Graph | All (Turn Explorer) | Context manager | Data | Actions | Documents | Tools
  */
 
 import { Tabs } from '@ark-ui/solid/tabs';
@@ -164,7 +164,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
               "color": selectedTab() === 'stats' ? '#f59e0b' : '#a1a1aa'
             }}
           >
-            Observability
+            Context manager
           </Tabs.Trigger>
 
           <Tabs.Trigger
@@ -263,7 +263,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
             />
           </Tabs.Content>
 
-          {/* Observability Tab - ContextEvents based */}
+          {/* Context manager Tab - ContextEvents based */}
           <Tabs.Content value="stats" h="full">
             <ObservabilityPanel
               events={props.contextEvents ?? []}

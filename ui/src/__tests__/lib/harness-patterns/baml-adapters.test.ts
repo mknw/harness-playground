@@ -459,6 +459,89 @@ describe('extractLLMCallData', () => {
     expect(result!.provider).toBeUndefined()
     expect(result!.clientName).toBeUndefined()
   })
+
+  it('should call body.text() when httpRequest.body is an HttpBody class instance', async () => {
+    const { extractLLMCallData } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    // Mirrors @boundaryml/baml's HttpBody: class instance with no enumerable own
+    // props — JSON.stringify would yield "{}", which is the regression we're guarding against
+    const bodyText = '{"messages":[{"role":"user","content":"hello"}]}'
+    const httpBody = Object.create({ text: () => bodyText, json: () => JSON.parse(bodyText) })
+
+    const collector = {
+      last: {
+        rawLlmResponse: 'output',
+        calls: [{ httpRequest: { body: httpBody }, selected: true, provider: 'openrouter', clientName: 'OpenRouterNemotron120B' }]
+      }
+    }
+
+    const result = extractLLMCallData(
+      collector as never,
+      'LoopController',
+      {},
+      Date.now()
+    )
+
+    expect(result).toBeDefined()
+    expect(result!.rawInput).toBe(bodyText)
+    expect(result!.rawInput).not.toBe('{}')
+    expect(result!.provider).toBe('openrouter')
+    expect(result!.clientName).toBe('OpenRouterNemotron120B')
+  })
+
+  it('should prefer the selected call when fallbacks produce multiple entries', async () => {
+    const { extractLLMCallData } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const failedBody = Object.create({ text: () => 'FAILED_BODY' })
+    const goodBody = Object.create({ text: () => 'GOOD_BODY' })
+
+    const collector = {
+      last: {
+        rawLlmResponse: 'output',
+        calls: [
+          { httpRequest: { body: failedBody }, selected: false, provider: 'groq', clientName: 'GroqFast' },
+          { httpRequest: { body: goodBody }, selected: true, provider: 'openai', clientName: 'OpenAIGPT5' }
+        ]
+      }
+    }
+
+    const result = extractLLMCallData(
+      collector as never,
+      'LoopController',
+      {},
+      Date.now()
+    )
+
+    expect(result!.rawInput).toBe('GOOD_BODY')
+    expect(result!.clientName).toBe('OpenAIGPT5')
+  })
+
+  it('should populate promptTemplate with the Jinja template (placeholders intact)', async () => {
+    const { extractLLMCallData } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const collector = {
+      last: {
+        rawLlmResponse: 'output',
+        calls: [{ httpRequest: { body: '{"messages":[{"role":"user","content":"INTENT: hello"}]}' } }]
+      }
+    }
+
+    const result = extractLLMCallData(
+      collector as never,
+      'LoopController',
+      { user_message: 'hello' },
+      Date.now()
+    )
+
+    expect(result).toBeDefined()
+    // Raw prompt = the BAML template with placeholders intact
+    expect(result!.promptTemplate).toBeDefined()
+    expect(result!.promptTemplate).toMatch(/\{\{\s*intent\s*\}\}/)
+    // Parsed prompt = the rendered HTTP body containing substituted content
+    expect(result!.rawInput).toContain('INTENT: hello')
+    // The two must not be the same string
+    expect(result!.promptTemplate).not.toBe(result!.rawInput)
+  })
 })
 
 describe('describeToolResultOp', () => {

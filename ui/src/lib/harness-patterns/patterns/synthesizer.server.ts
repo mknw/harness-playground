@@ -108,11 +108,25 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
   let llmCall: LLMCallData | undefined
   if (collector?.last) {
     const last = collector.last
+    const calls = (last.calls ?? []) as Array<{
+      selected?: boolean
+      httpRequest?: { body?: unknown }
+    }>
+    const selectedCall = calls.find((c) => c.selected) ?? calls[calls.length - 1]
     let rawInput: string | undefined
-    const lastCall = last.calls?.[last.calls.length - 1]
-    if (lastCall?.httpRequest?.body) {
-      const body = lastCall.httpRequest.body
-      rawInput = typeof body === 'string' ? body : JSON.stringify(body, null, 2)
+    const body = selectedCall?.httpRequest?.body as
+      | { text?: () => string }
+      | string
+      | Record<string, unknown>
+      | undefined
+    if (typeof body === 'string') {
+      rawInput = body
+    } else if (body && typeof (body as { text?: () => string }).text === 'function') {
+      try {
+        rawInput = (body as { text: () => string }).text()
+      } catch { /* body.text() may throw — leave undefined */ }
+    } else if (body && typeof body === 'object') {
+      rawInput = JSON.stringify(body, null, 2)
     }
 
     // Extract prompt template from inlined BAML source
@@ -130,8 +144,8 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
     } catch { /* inlined BAML not available */ }
 
     // Extract provider and client info from the selected call
-    const provider = lastCall && 'provider' in lastCall ? (lastCall as { provider: string }).provider : undefined
-    const clientName = lastCall && 'clientName' in lastCall ? (lastCall as { clientName: string }).clientName : undefined
+    const provider = selectedCall && 'provider' in selectedCall ? (selectedCall as { provider: string }).provider : undefined
+    const clientName = selectedCall && 'clientName' in selectedCall ? (selectedCall as { clientName: string }).clientName : undefined
 
     llmCall = {
       functionName: 'Synthesize',
