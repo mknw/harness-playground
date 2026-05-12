@@ -9,6 +9,7 @@
 
 import { For, Show, createSignal, createMemo, Switch, Match } from 'solid-js'
 import { Tooltip } from '@ark-ui/solid/tooltip'
+import { Accordion } from '@ark-ui/solid/accordion'
 import type {
   ContextEvent,
   EventType,
@@ -976,7 +977,7 @@ const ParsedPromptView = (props: { rawInput: string }) => {
 // LLM Call Tabs Component
 // ============================================================================
 
-type LLMTab = 'rawPrompt' | 'parsedPrompt' | 'rawOutput' | 'parsedOutput'
+type LLMTab = 'prompt' | 'output'
 
 const TabButton = (props: { active: boolean; label: string; onClick: () => void }) => (
   <button
@@ -1056,8 +1057,117 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
   </div>
 )
 
+/** One section inside the Prompt accordion. */
+const PromptAccordionItem = (props: {
+  value: string
+  label: string
+  hint?: string
+  children: import('solid-js').JSX.Element
+}) => (
+  <Accordion.Item
+    value={props.value}
+    border="1 dark-border-secondary/40"
+    rounded="md"
+    overflow="hidden"
+  >
+    <Accordion.ItemTrigger
+      w="full"
+      p="x-3 y-2"
+      flex="~"
+      items="center"
+      justify="between"
+      gap="3"
+      bg="dark-bg-tertiary hover:dark-bg-hover"
+      cursor="pointer"
+      text="left"
+      style={{ border: 'none' }}
+    >
+      <div flex="~" items="center" gap="2">
+        <span text="xs neon-cyan" font="mono medium">{props.label}</span>
+        <Show when={props.hint}>
+          <span text="xs dark-text-tertiary">{props.hint}</span>
+        </Show>
+      </div>
+      <Accordion.ItemIndicator
+        text="xs dark-text-secondary"
+        style={{ transition: 'transform 150ms', 'transform-origin': 'center' }}
+      >
+        ▼
+      </Accordion.ItemIndicator>
+    </Accordion.ItemTrigger>
+    <Accordion.ItemContent p="3" bg="dark-bg-secondary">
+      {props.children}
+    </Accordion.ItemContent>
+  </Accordion.Item>
+)
+
+const PromptAccordion = (props: { llmCall: LLMCallData }) => {
+  const hasTemplate = () => Boolean(props.llmCall.promptTemplate)
+  const hasMessages = () => Boolean(props.llmCall.rawInput)
+  const variableKeys = () => Object.keys(props.llmCall.variables ?? {})
+
+  // Default-open the most informative section that has data
+  const defaultValue = () => {
+    if (hasTemplate()) return ['template']
+    if (hasMessages()) return ['messages']
+    return ['variables']
+  }
+
+  return (
+    <Accordion.Root multiple defaultValue={defaultValue()} flex="~ col" gap="2">
+      <PromptAccordionItem
+        value="template"
+        label="Template"
+        hint={hasTemplate() ? 'Jinja source with {{ vars }} and conditionals' : 'not captured'}
+      >
+        <Show
+          when={hasTemplate()}
+          fallback={
+            <div text="xs dark-text-tertiary">
+              BAML prompt template not captured. Run <code>pnpm baml-generate</code> or verify
+              the function name <code>{props.llmCall.functionName}</code> exists in <code>baml_src/</code>.
+            </div>
+          }
+        >
+          <CodeBlock content={props.llmCall.promptTemplate} />
+        </Show>
+      </PromptAccordionItem>
+
+      <PromptAccordionItem
+        value="variables"
+        label="Variables"
+        hint={`${variableKeys().length} input${variableKeys().length === 1 ? '' : 's'}`}
+      >
+        <Show
+          when={variableKeys().length > 0}
+          fallback={<div text="xs dark-text-tertiary">No variables passed to this function.</div>}
+        >
+          <CodeBlock content={JSON.stringify(props.llmCall.variables, null, 2)} />
+        </Show>
+      </PromptAccordionItem>
+
+      <PromptAccordionItem
+        value="messages"
+        label="Rendered messages"
+        hint={hasMessages() ? 'what actually went to the LLM' : 'not captured'}
+      >
+        <Show
+          when={hasMessages()}
+          fallback={
+            <div text="xs dark-text-tertiary">
+              HTTP request body not captured by the BAML collector.
+            </div>
+          }
+        >
+          <ParsedPromptView rawInput={props.llmCall.rawInput!} />
+        </Show>
+      </PromptAccordionItem>
+    </Accordion.Root>
+  )
+}
+
 const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
-  const [activeTab, setActiveTab] = createSignal<LLMTab>('rawPrompt')
+  const [activeTab, setActiveTab] = createSignal<LLMTab>('prompt')
 
   return (
     <div border="b dark-border-primary" m="b-4" p="b-4">
@@ -1067,54 +1177,23 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
       {/* Tab buttons */}
       <div flex="~ wrap" gap="2" m="b-3">
         <TabButton
-          active={activeTab() === 'rawPrompt'}
-          label="Raw Prompt"
-          onClick={() => setActiveTab('rawPrompt')}
+          active={activeTab() === 'prompt'}
+          label="Prompt"
+          onClick={() => setActiveTab('prompt')}
         />
         <TabButton
-          active={activeTab() === 'parsedPrompt'}
-          label="Parsed Prompt"
-          onClick={() => setActiveTab('parsedPrompt')}
-        />
-        <TabButton
-          active={activeTab() === 'rawOutput'}
-          label="Raw Output"
-          onClick={() => setActiveTab('rawOutput')}
-        />
-        <TabButton
-          active={activeTab() === 'parsedOutput'}
-          label="Parsed Output"
-          onClick={() => setActiveTab('parsedOutput')}
+          active={activeTab() === 'output'}
+          label="Output"
+          onClick={() => setActiveTab('output')}
         />
       </div>
 
       {/* Tab content */}
       <Switch>
-        <Match when={activeTab() === 'rawPrompt'}>
-          <Show
-            when={props.llmCall.promptTemplate}
-            fallback={
-              <div flex="~ col" gap="2">
-                <div text="xs dark-text-tertiary" m="b-1">Variables</div>
-                <CodeBlock content={JSON.stringify(props.llmCall.variables, null, 2)} />
-              </div>
-            }
-          >
-            <CodeBlock content={props.llmCall.promptTemplate} placeholder="Template not captured" />
-          </Show>
+        <Match when={activeTab() === 'prompt'}>
+          <PromptAccordion llmCall={props.llmCall} />
         </Match>
-        <Match when={activeTab() === 'parsedPrompt'}>
-          <Show
-            when={props.llmCall.rawInput}
-            fallback={<CodeBlock content={undefined} placeholder="Parsed prompt not captured" />}
-          >
-            <ParsedPromptView rawInput={props.llmCall.rawInput!} />
-          </Show>
-        </Match>
-        <Match when={activeTab() === 'rawOutput'}>
-          <CodeBlock content={props.llmCall.rawOutput} placeholder="Raw output not captured" />
-        </Match>
-        <Match when={activeTab() === 'parsedOutput'}>
+        <Match when={activeTab() === 'output'}>
           <CodeBlock
             content={
               props.llmCall.parsedOutput != null
@@ -1123,7 +1202,7 @@ const LLMCallTabs = (props: { llmCall: LLMCallData }) => {
                     : JSON.stringify(props.llmCall.parsedOutput, null, 2))
                 : undefined
             }
-            placeholder="Parsed output not captured"
+            placeholder="Output not captured"
           />
         </Match>
       </Switch>

@@ -316,14 +316,14 @@ Main container combining sidebar and chat area:
 - Clearing the session on agent switch
 
 #### 6. SupportPanel.tsx
-Tabbed right panel. **Observability is the default tab.** Uses `lazyMount` + `unmountOnExit` so inactive tabs don't hold Cytoscape instances in memory.
+Tabbed right panel. **Context manager is the default tab.** Uses `lazyMount` + `unmountOnExit` so inactive tabs don't hold Cytoscape instances in memory.
 
 | Tab | Content |
 |-----|---------|
 | Neo4j | Graph visualization for Neo4j query results (accumulated, live sync) |
 | Memory | Graph visualization for Memory MCP entities |
 | All (Turn Explorer) | Turn-based graph explorer — select specific turns, color-coded |
-| **Observability** *(default)* | Event timeline + LLM call detail |
+| **Context manager** *(default)* | Event timeline + LLM call detail |
 | Data | Data Stash — tool result icons, hide/archive controls |
 | Tools | MCP tool configuration via `ToolsPanel` |
 
@@ -377,6 +377,7 @@ Cytoscape.js graph component with dark futuristic theme.
 Displays the full agent event timeline:
 - Events are merged into `TimelineItem[]` via `buildTimelineItems()`: `tool_call` + `tool_result` pairs sharing the same `callId` appear as a single merged row
 - Click any row → detail overlay with args / result / LLM call data
+- **LLM call detail** (events with `llmCall`): two-tab layout — **Prompt** | **Output**. The Prompt tab uses an Ark UI Accordion with three sections: *Template* (Jinja source with `{{ vars }}` and `{% if %}` / `{% for %}` blocks, sourced from `baml_src/`), *Variables* (function inputs), *Rendered messages* (HTTP body parsed into role/content bubbles via `ParsedPromptView`). Sourced from `LLMCallData` in `baml-adapters.server.ts` — `httpRequest.body` is read via `body.text()` because BAML returns an `HttpBody` class instance, not a plain object.
 - **Save button** (floating, bottom-right): calls `showSaveFilePicker()` to save the full `UnifiedContext` as a named JSON file; falls back to `<a download>` on browsers without File System Access API
 - Requires `context?: UnifiedContext` prop threaded down from `index.tsx` → `SupportPanel` → `ObservabilityPanel`
 

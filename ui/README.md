@@ -22,7 +22,7 @@ src/
 │   ├── ChatInterface.tsx      # Sends messages, streams SSE, entity highlighting
 │   ├── ChatMessages.tsx       # Markdown rendering with interactive graph entity spans
 │   ├── GraphVisualization.tsx  # Cytoscape.js graph with controls, editing, extraStyles
-│   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, All, Observability, Tools
+│   ├── SupportPanel.tsx       # Tabbed panel (lazyMount): Neo4j, Memory, All, Context manager, Tools
 │   ├── AllGraphTab.tsx        # Turn-based graph explorer (FloatingPanel + color-coded Cytoscape)
 │   ├── SettingsPanel.tsx      # Harness settings FloatingPanel (sliders, number inputs)
 │   └── ObservabilityPanel.tsx  # Event timeline + LLM call detail
