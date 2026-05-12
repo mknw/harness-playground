@@ -137,6 +137,79 @@ describe('mcp-client', () => {
       expect(result.data).toBeNull()
       expect(result.error).toBe('Connection failed')
     })
+
+    // Issue #50: mcp-neo4j-cypher's `write_neo4j_cypher` returns Neo4j errors
+    // as a plain text result instead of failing the call, so callTool's text
+    // path used to return `{ success: true, data: "Neo4j Error: ..." }` and
+    // downstream gating (view.hasErrors, enricher's success check, the
+    // synthesizer) couldn't tell a real failure from a real success.
+    it('demotes "Neo4j Error:" text results to success:false (issue #50)', async () => {
+      const neo4jErrorText =
+        'Neo4j Error: {neo4j_code: Neo.ClientError.Statement.ParameterMissing} ' +
+        '{message: Expected parameter(s): pulsarName, pulsarDesc, platformName, platformDesc} ' +
+        '{gql_status: 50N42}'
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: neo4jErrorText }]
+      })
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('write_neo4j_cypher', { query: 'MERGE ...' })
+
+      expect(result.success).toBe(false)
+      expect(result.data).toBeNull()
+      expect(result.error).toBe(neo4jErrorText)
+    })
+
+    it('demotes any "<ToolName> Error:" prefixed text result', async () => {
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: 'Redis Error: WRONGTYPE Operation against a key…' }]
+      })
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('some_redis_tool', {})
+
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/^Redis Error:/)
+    })
+
+    it('preserves success:true for normal Neo4j write results (regression)', async () => {
+      // Real shape returned by a successful write_neo4j_cypher call.
+      mockCallTool.mockResolvedValue({
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            _contains_updates: true,
+            nodes_created: 2,
+            relationships_created: 1,
+            properties_set: 4,
+            labels_added: 2
+          })
+        }]
+      })
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('write_neo4j_cypher', { query: 'MERGE ...' })
+
+      expect(result.success).toBe(true)
+      expect(result.data).toMatchObject({ nodes_created: 2, relationships_created: 1 })
+    })
+
+    it('does not demote unrelated text starting with a capital word', async () => {
+      // "Error: foo" alone (no preceding tool-name token) should not match.
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: 'Hello world — nothing wrong here.' }]
+      })
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('test_tool', {})
+
+      expect(result.success).toBe(true)
+      expect(result.data).toBe('Hello world — nothing wrong here.')
+    })
   })
 
   describe('listTools', () => {

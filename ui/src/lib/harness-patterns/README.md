@@ -998,7 +998,7 @@ harness-patterns/
 ├── tools.server.ts         # Tools() — groups MCP tools by namespace
 ├── harness.server.ts       # harness(), resumeHarness(), continueSession() — all accept onEvent? callback
 ├── routing.server.ts       # BAML router integration (routeMessageOp)
-├── mcp-client.server.ts    # callTool(), listTools()
+├── mcp-client.server.ts    # callTool(), listTools(); demotes `"<ToolName> Error:"` text results to `success:false` (issue #50)
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter, createNeo4jController, createActorControllerAdapter, createCriticAdapter, describeToolResultOp, etc.
 ├── summarize.server.ts     # scheduleSummarization() — background tool result summarization via DescribeFallback
 ├── token-budget.server.ts  # trimToFit(), getContextWindow(), estimateTokens() — rolling context window
