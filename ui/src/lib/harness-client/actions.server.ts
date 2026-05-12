@@ -17,8 +17,6 @@ import {
   continueSession,
   type HarnessResultScoped,
   type ContextEvent,
-  type UserMessageEventData,
-  type AssistantMessageEventData,
 } from "../harness-patterns";
 import {
   getOrBuildPatterns,
@@ -222,13 +220,10 @@ export async function listConversations(): Promise<ConversationSummary[]> {
   }));
 }
 
-export interface ReplayedMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  /** Epoch ms — convert to Date on the client. */
-  timestamp: number;
-}
+// Replay helper extracted to a dependency-free module so it can be unit-tested
+// without dragging in the auth/DB import graph. Re-export the type for callers.
+import { replayMessages, type ReplayedMessage } from "./replay";
+export type { ReplayedMessage };
 
 export interface LoadedConversation {
   id: string;
@@ -261,33 +256,3 @@ export async function loadConversation(
   };
 }
 
-function replayMessages(serializedContext: string): ReplayedMessage[] {
-  let parsed: { events?: ContextEvent[] };
-  try {
-    parsed = JSON.parse(serializedContext) as { events?: ContextEvent[] };
-  } catch {
-    return [];
-  }
-  const events = parsed.events ?? [];
-  const out: ReplayedMessage[] = [];
-  for (const ev of events) {
-    if (ev.type === "user_message") {
-      const data = ev.data as UserMessageEventData;
-      out.push({
-        id: ev.id ?? `replay-${out.length}`,
-        role: "user",
-        content: data.content ?? "",
-        timestamp: ev.ts,
-      });
-    } else if (ev.type === "assistant_message") {
-      const data = ev.data as AssistantMessageEventData;
-      out.push({
-        id: ev.id ?? `replay-${out.length}`,
-        role: "assistant",
-        content: data.content ?? "",
-        timestamp: ev.ts,
-      });
-    }
-  }
-  return out;
-}
