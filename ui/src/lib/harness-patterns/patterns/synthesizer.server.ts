@@ -313,11 +313,14 @@ export function synthesizer<T extends SynthesizerData>(
         llmCall = result.llmCall
       }
 
-      // Track assistant message event with LLM call data
+      // Track assistant message event with LLM call data. `final: true`
+      // distinguishes the synthesizer's user-facing response from router
+      // status messages that share the same event type — chat-history
+      // replay reads this flag to skip intermediate emits.
       trackEvent(
         scope,
         'assistant_message',
-        { content: synthesizedResponse } as AssistantMessageEventData,
+        { content: synthesizedResponse, final: true } as AssistantMessageEventData,
         resolved.trackHistory,
         llmCall
       )

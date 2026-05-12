@@ -1,13 +1,16 @@
 import { Splitter } from '@ark-ui/solid/splitter'
-import { createSignal, createMemo, createResource, createUniqueId } from 'solid-js'
-import { ChatInterface } from '~/components/ark-ui/ChatInterface'
-import { ChatSidebar } from '~/components/ark-ui/ChatSidebar'
+import { createSignal, createMemo, createResource, createEffect, createUniqueId, onCleanup, onMount } from 'solid-js'
+import { ChatInterface, type SessionRunState } from '~/components/ark-ui/ChatInterface'
+import { ChatSidebar, mergeThreadsWithPlaceholder } from '~/components/ark-ui/ChatSidebar'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
 import { mergeGraphElements } from '~/lib/graph-merge'
 import { listConversations } from '~/lib/harness-client'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
+import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
+
+const DEFAULT_RUN_STATE: SessionRunState = { isProcessing: false, runningTool: null }
 
 export default function Home() {
   // Conversation a user is currently viewing. Initial value is a fresh id so
@@ -16,13 +19,80 @@ export default function Home() {
   const [selectedSessionId, setSelectedSessionId] = createSignal(createUniqueId())
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
 
+  // Optimistic placeholder for a freshly-minted "+ New Chat" id that hasn't
+  // been persisted yet (see #44). Cleared once the real row arrives in the
+  // threadsResource refetch, or when the user picks an existing thread.
+  const [placeholderSessionId, setPlaceholderSessionId] = createSignal<string | null>(null)
+
   const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
   const [contextEvents, setContextEvents] = createSignal<ContextEvent[]>([])
   const [unifiedContext, setUnifiedContext] = createSignal<UnifiedContext | undefined>(undefined)
 
   // Sidebar threads — refetched after each turn completes (see onContextUpdate).
-  const [threads, { refetch: refetchThreads }] = createResource(() => listConversations())
+  // `mutate` is exposed so the `title_updated` SSE event can patch a single
+  // row's title in-place without re-querying the full list (the server already
+  // gave us the new title in the event payload).
+  const [threads, { refetch: refetchThreads, mutate: mutateThreads }] = createResource(() => listConversations())
+
+  // Push-driven title update from the SSE stream — the server emits a
+  // `title_updated` event after the LLM title generator resolves. We splice
+  // the new title into the threads cache; no refetch needed.
+  const handleTitleUpdated = (sid: string, title: string) => {
+    mutateThreads(list => (list ?? []).map(t => (t.id === sid ? { ...t, title } : t)))
+  }
+
+  // ===========================================================================
+  // Per-session progress + run state (#47)
+  // ===========================================================================
+  // ChainProgressController instances are owned by the route so the live bar
+  // and submit guard persist across sidebar switches. ChatInterface reads its
+  // session's controller via `getProgress(sid)` and routes ingest calls into
+  // the controller for the captured run sessionId — events arriving for the
+  // unfocused chat keep flowing into its own bar.
+
+  const progressBySession = new Map<string, ChainProgressController>()
+  const getProgress = (sid: string): ChainProgressController => {
+    let p = progressBySession.get(sid)
+    if (!p) {
+      p = createChainProgress()
+      progressBySession.set(sid, p)
+    }
+    return p
+  }
+
+  // Reactive run-state map (`isProcessing`, `runningTool`). Kept as a plain
+  // object so Solid can diff equality on the whole record without Map identity.
+  const [runStates, setRunStates] = createSignal<Record<string, SessionRunState>>({})
+  const getRunState = (sid: string): SessionRunState => runStates()[sid] ?? DEFAULT_RUN_STATE
+  const updateRunState = (sid: string, patch: Partial<SessionRunState>) => {
+    setRunStates(prev => ({
+      ...prev,
+      [sid]: { ...DEFAULT_RUN_STATE, ...prev[sid], ...patch },
+    }))
+  }
+
+  // AbortControllers for in-flight SSE streams. Switching sessions does NOT
+  // abort — only an explicit cancel or page unload does (acceptance: "Streams
+  // survive chat switches").
+  const abortControllers = new Map<string, AbortController>()
+  const registerAbortController = (sid: string, ac: AbortController) => {
+    abortControllers.set(sid, ac)
+  }
+  const unregisterAbortController = (sid: string) => {
+    abortControllers.delete(sid)
+  }
+
+  onMount(() => {
+    const onUnload = () => {
+      for (const ac of abortControllers.values()) {
+        try { ac.abort() } catch { /* ignore */ }
+      }
+      abortControllers.clear()
+    }
+    window.addEventListener('beforeunload', onUnload)
+    onCleanup(() => window.removeEventListener('beforeunload', onUnload))
+  })
 
   // Accumulate graph elements across calls. Dedup + touched-flag refresh logic
   // lives in `mergeGraphElements` so it can be unit-tested in isolation.
@@ -52,7 +122,9 @@ export default function Home() {
 
   // Wipe per-conversation state. Called by ChatInterface before it hydrates a
   // newly selected sessionId so the graph + observability tabs don't keep
-  // showing stale data from the previous thread.
+  // showing stale data from the previous thread. Progress state is NOT cleared
+  // here — it belongs to the per-session registry, so a still-running stream
+  // for the previous thread keeps populating its own controller.
   const resetForNewSession = () => {
     clearGraph()
     clearEvents()
@@ -60,14 +132,35 @@ export default function Home() {
 
   const handleNewChat = () => {
     resetForNewSession()
-    setSelectedSessionId(createUniqueId())
+    const id = createUniqueId()
+    setSelectedSessionId(id)
+    setPlaceholderSessionId(id)
   }
 
   const handleSelectThread = (threadId: string) => {
     if (threadId === selectedSessionId()) return
     resetForNewSession()
     setSelectedSessionId(threadId)
+    // User picked an existing thread — drop the optimistic row.
+    setPlaceholderSessionId(null)
   }
+
+  // Once the persisted row for the placeholder lands in the threadsResource,
+  // drop the optimistic row so the real one (with its sticky title) takes over.
+  createEffect(() => {
+    const ph = placeholderSessionId()
+    if (!ph) return
+    const list = threads() ?? []
+    if (list.some(t => t.id === ph)) {
+      setPlaceholderSessionId(null)
+    }
+  })
+
+  // Display threads = optimistic placeholder (if any) on top, then persisted
+  // rows, deduped by id. See `mergeThreadsWithPlaceholder` for the rule.
+  const displayThreads = createMemo(() =>
+    mergeThreadsWithPlaceholder(threads() ?? [], placeholderSessionId())
+  )
 
   // Wrap the supplied unified-context setter so each save also refreshes the
   // sidebar list (titles update once the first user_message lands).
@@ -151,10 +244,11 @@ export default function Home() {
             <ChatSidebar
               collapsed={sidebarCollapsed()}
               onToggle={() => setSidebarCollapsed(!sidebarCollapsed())}
-              threads={threads() ?? []}
+              threads={displayThreads()}
               selectedId={selectedSessionId()}
               onSelectThread={handleSelectThread}
               onNewChat={handleNewChat}
+              onTitleRegenerated={handleTitleUpdated}
             />
             <div flex="1" overflow="hidden">
               <ChatInterface
@@ -166,6 +260,12 @@ export default function Home() {
                 onAgentChangeRequestsNewSession={handleNewChat}
                 graphEntityNames={graphEntityNames()}
                 onHighlightEntities={setHighlightedIds}
+                getProgress={getProgress}
+                getRunState={getRunState}
+                updateRunState={updateRunState}
+                registerAbortController={registerAbortController}
+                unregisterAbortController={unregisterAbortController}
+                onTitleUpdated={handleTitleUpdated}
               />
             </div>
           </div>

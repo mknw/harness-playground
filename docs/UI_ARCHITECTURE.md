@@ -281,12 +281,13 @@ Main container combining sidebar and chat area:
 ```
 
 #### 2. ChatSidebar.tsx
-**Props:** `collapsed: boolean`, `onToggle: () => void`
+**Props:** `collapsed: boolean`, `onToggle: () => void`, `threads`, `selectedId`, `onSelectThread`, `onNewChat`
 - Width: `3rem` (collapsed) → `16rem` (expanded)
 - Smooth inline style transition
 - Thread history with relative timestamps
 - Settings gear icon (opens `SettingsPanel` FloatingPanel) + New Chat button in footer
 - Content hidden when collapsed (toggle button only)
+- **Optimistic "+ New Chat" placeholder (#44):** Clicking *+ New Chat* immediately prepends a placeholder row keyed by the new `selectedSessionId` (`title: null`, `isPlaceholder: true`, muted italic *"description will appear here"*). Once the first user message persists and the `threadsResource` refetch returns the real row, the merger (`mergeThreadsWithPlaceholder` in `ChatSidebar.tsx`) drops the placeholder by id. No DB writes for the placeholder — purely client-side. Switching to an existing thread clears it.
 
 #### 3. ChatMessages.tsx
 - **ScrollArea.Root** - Custom scrollable message container
@@ -307,7 +308,7 @@ Main container combining sidebar and chat area:
 - **Keyboard shortcuts:**
   - Enter → Send message
   - Shift+Enter → New line
-- **States:** Disabled during AI processing
+- **Submit guard (#47):** When `disabled` is true, the textarea **stays editable** so the user's draft survives, but Enter no-ops. If `blockedMessage` is provided, an inline banner ("Waiting for `<tool>` to complete. Try later.") renders above the input — driven by the currently-running tool from the active session's `controller_action` events.
 - **Styling:** Neon cyan border on focus
 
 #### 5. AgentSelector.tsx
@@ -515,11 +516,161 @@ Conversations are persisted to Postgres so they survive process restarts and lis
 
 ### Sticky titles
 
-The first 60 chars of the first `user_message` becomes the conversation title. Once set, it never changes via `saveConversation()` — `COALESCE(conversations.title, EXCLUDED.title)` on update. (A dedicated rename action can override this when shipped.)
+The first 60 chars of the first `user_message` becomes the conversation title. Once set, it never changes via `saveConversation()` — `COALESCE(conversations.title, EXCLUDED.title)` on update. A dedicated `updateConversationTitle(id, userId, title)` action bypasses the COALESCE rule and is used by the LLM title generator (see §6b below) to replace the heuristic title once the model resolves. A future user-rename UI can use the same action.
+
+### LLM-generated titles (§6b)
+
+Once the first turn completes, a minimal one-pattern harness agent in `lib/harness-client/examples/title-generator.server.ts` calls a single BAML function (`GenerateConversationTitle`, using the `DescribeFallback` chain) and writes the result via `updateConversationTitle()`. The result is pushed to the client over the existing `/api/events` SSE stream as an `event: title_updated` frame before the stream closes (capped at 3s so a slow LLM never wedges the response). The client patches the threads cache in-place — no refetch. See §6b for the full architecture.
 
 ### Auth
 
 Every public action and the `/api/events` / `/api/stash` routes authenticate via Stack Auth and scope session ops by `user.id`. When `VITE_DEV_BYPASS_AUTH=true`, the user id falls back to `dev-bypass-user`.
+
+---
+
+## 6a. Per-Session Progress & Submit Guard (#47)
+
+The live progress bar and "Waiting for `<tool>`…" composer guard are scoped to a conversation, not to the `ChatInterface` instance. Switching threads while a chain is running leaves the streamed loop running on the server — progress keeps accumulating in the originating session's controller, and the bar restores on return.
+
+### State location
+
+`routes/index.tsx` owns two parallel per-session registries:
+
+| Registry | Shape | Purpose |
+|----------|-------|---------|
+| `progressBySession` | `Map<sessionId, ChainProgressController>` | One progress controller per session. Lazily created on first read. |
+| `runStates` signal | `Record<sessionId, SessionRunState>` | Reactive `{ isProcessing, runningTool }` per session — drives the composer guard banner and the bar's `visible` flag. |
+| `abortControllers` | `Map<sessionId, AbortController>` | One in-flight SSE stream per session. Aborted only on page unload (not on chat switch). |
+
+`ChatInterface` receives `getProgress`, `getRunState`, `updateRunState`, `registerAbortController`, `unregisterAbortController` as props. Inside `handleSendMessage` the active `props.sessionId` is captured as `runSessionId` at submit time — all subsequent state mutations are keyed on that captured id, not the live prop, so events that arrive after a chat switch don't pollute the wrong view.
+
+### Event routing
+
+- **Progress is always routed** into `getProgress(runSessionId)` regardless of which chat the user is viewing.
+- **Tool name** is extracted from `controller_action.action.tool_name` and pushed via `updateRunState(runSessionId, { runningTool })`. When `is_final` is true the field clears.
+- **Graph, events, messages, context** are dropped when `runSessionId !== props.sessionId` — the active view owns those signals, and the persisted row will surface anything missed on the next hydration.
+
+### SSE envelope
+
+`api/events.ts` now spreads `sessionId` into every emitted JSON object (the `event: done` payload too). It's not part of the typed `ContextEvent` shape — it's an envelope-only field consumed by the client.
+
+### Submit guard
+
+`ChatInput` now keeps the textarea editable while `disabled` is true. The Enter handler still no-ops, but the user's draft survives. A `blockedMessage` prop renders an inline banner above the input; it's set by `ChatInterface` to `` `Waiting for \`<tool>\` to complete. Try later.` `` whenever the active session has both `isProcessing` and a `runningTool`.
+
+### Lifecycle
+
+| Event | Behavior |
+|-------|----------|
+| Submit on a non-running chat | `getProgress(sid).reset()`; `updateRunState(sid, { isProcessing: true })`; SSE opens; per-session `AbortController` registered. |
+| Switch chats mid-stream | Nothing aborts. `selectedSessionId` swaps; `ChatInterface`'s reactive memos pick up the new session's controller (idle → bar hides). |
+| Switch back to the running chat | The original controller's snapshot signal is still live; the bar re-renders with the current `currentTurn` and `status`. |
+| Stream completes | `progress.finish()`; `updateRunState(sid, { isProcessing: false, runningTool: null })`; `AbortController` unregistered. |
+| Tab close / `beforeunload` | Route iterates `abortControllers.values()` and aborts each → no zombie fetches in DevTools. |
+
+---
+
+## 6b. LLM-Generated Conversation Titles
+
+Once the first user turn completes, a minimal harness agent generates a 3–5 word title and replaces the heuristic placeholder. The result is pushed to the client on the same SSE channel the turn was streamed over.
+
+### Why a harness agent for one BAML call?
+
+The `harness-patterns/` library is the testbed for an eventual standalone npm package. Its current example catalog (`harness-client/examples/`) ranges from `simpleLoop` through `actorCritic`, `parallel`, `guardrail`, and a full ontology-builder pipeline — but had no *minimum-rung* example showing the library handles one-shot LLM jobs too. The title generator fills that gap with what is genuinely the smallest legal composition:
+
+```ts
+// ui/src/lib/harness-client/examples/title-generator.server.ts
+export const titleAgent = harness<TitleAgentData>(
+  synthesizer<TitleAgentData>({
+    patternId: 'title-gen',
+    mode: 'message',
+    synthesize: async ({ userMessage }) => sanitizeTitle(await b.GenerateConversationTitle(userMessage)) ?? '',
+  }),
+)
+```
+
+One pattern (`synthesizer`), one BAML call, no tools, no router. `mode: 'message'` makes the synthesizer a thin shell around the custom `synthesize` fn: it pulls the latest `user_message` from the view and feeds it as the function's input.
+
+### The BAML function
+
+`ui/baml_src/title.baml` — `GenerateConversationTitle(user_message: string) -> string`, wired to `DescribeFallback` (`[GroqFast, OpenRouterGemma4, OpenAIGPT5, AnthropicHaiku45]`). Reuses the same lightweight client chain the background tool-result summarizer uses; both are "tiny async post-process" jobs.
+
+### When it runs
+
+| Trigger | Path |
+|---------|------|
+| **First turn of a conversation** | `api/events.ts` calls `runFirstTurnTitleGen(ctx, sessionId, userId)` after the SSE `done` frame, before close. Hard 3s timeout. |
+| **On-demand from the sidebar** | Hover-reveal `↻` icon on each row → calls the `regenerateConversationTitle(sessionId)` server action → loads context → calls `runRegenerateTitle()` (no first-turn gate, uses the latest user message). |
+
+`runFirstTurnTitleGen` is the one with the gate: it skips when `ctx.events.filter(e => e.type === 'user_message').length !== 1`. Titles stay stable across turns; users learn to recognize them.
+
+### How the title reaches the sidebar
+
+The integrated SSE event approach — no new endpoint, no long-lived connection, no polling.
+
+```
+POST /api/events
+  ◀── event: <ContextEvent>      (user_message)
+  ◀── event: <ContextEvent>      (…)
+  ◀── event: done {response, …}  ← user already sees the response
+  ░░░ runFirstTurnTitleGen() runs (≤ 3s) ░░░
+  ◀── event: title_updated {sessionId, title}    ← server pushes
+                                                    stream closes
+```
+
+Server-side (`api/events.ts:78-95`):
+
+```ts
+controller.enqueue(`event: done\ndata: ${doneData}\n\n`)
+await Promise.race([
+  runFirstTurnTitleGen(result.context, sessionId, userId).then(title => {
+    if (!title) return
+    controller.enqueue(`event: title_updated\ndata: ${JSON.stringify({ sessionId, title })}\n\n`)
+  }),
+  new Promise(resolve => setTimeout(resolve, 3000)),
+]).catch(err => console.error('[title-gen] failed:', err))
+controller.close()
+```
+
+Client-side: the typed SSE parser yields `{ event: 'title_updated', data: { sessionId, title } }` and `ChatInterface` invokes `props.onTitleUpdated?.(sessionId, title)`. `routes/index.tsx` patches the threads cache via `mutateThreads()` — no `listConversations()` round-trip.
+
+### Bypassing the COALESCE-sticky upsert
+
+`saveConversation()`'s `COALESCE(conversations.title, EXCLUDED.title)` keeps a once-set title forever. For the LLM title we need authoritative replacement, so `lib/db/conversations.server.ts` exposes a dedicated `updateConversationTitle(id, userId, title)` that does a direct `UPDATE … SET title = $1` scoped by `user_id`. The upsert path retains its sticky semantics for everything else.
+
+### Failure handling
+
+All failures (LLM throws, returns empty, sanitizer rejects, 3s timeout fires) are caught silently. The heuristic title (`deriveTitle()`) remains in place. No retry, no error event to the user.
+
+### Sidebar regenerate (`↻` button)
+
+`ChatSidebar.tsx` renders a hover-reveal `↻` icon on each non-placeholder row. Click → calls `regenerateConversationTitle(threadId)` server action → forwards the returned title to `onTitleRegenerated`, which routes through the same `handleTitleUpdated` patcher used by the SSE event. Inline spinner while in flight. Pending state is tracked per row in a `Set<sessionId>`.
+
+### Replay correctness — `final?` discriminator
+
+Restoring a conversation no longer surfaces residual router status messages ("Let me look into that…") as if they were assistant responses. `AssistantMessageEventData.final?: boolean` distinguishes the synthesizer's user-facing emit (and the router's direct-response branch) from intermediate routing status. `replayMessages` in `lib/harness-client/replay.ts` filters on it. The live stream is unaffected — the live UI only paints `finalResult.response` anyway.
+
+---
+
+## 6c. Typed SSE Parser
+
+`ui/src/lib/sse-client.ts` exposes a single function:
+
+```ts
+parseChatStream(response: Response): AsyncGenerator<ChatStreamEvent>
+```
+
+Wraps the `/api/events` response body and yields a discriminated union over event kinds:
+
+```ts
+type ChatStreamEvent =
+  | { event: 'message';       data: ContextEvent & { sessionId?: string } }
+  | { event: 'done';          data: DoneEventData }
+  | { event: 'error';         data: { sessionId?: string; error: string } }
+  | { event: 'title_updated'; data: TitleUpdatedEventData }
+```
+
+`ChatInterface.handleSendMessage` consumes it with `for await … switch (evt.event)`. Adding a new event type is a one-line union extension; TS surfaces every consumer that doesn't handle it. Frame buffering, partial reads, malformed JSON, multi-line `data:` payloads, and comment lines (`: keepalive`) are all handled inside the parser. Unknown event names still come through at runtime (so a future server-side addition doesn't crash an older client) but aren't part of the static type — consumers should treat them as no-ops via `default` branch.
 
 ---
 

@@ -134,11 +134,13 @@ export function router<T extends RouterData>(
           response: responseText
         }
 
-        // Track assistant message with LLM call data
+        // Track assistant message with LLM call data. `final: true` because
+        // on the conversational route the router IS the final responder —
+        // the downstream synthesizer skips BAML in this case.
         trackEvent(
           scope,
           'assistant_message',
-          { content: responseText } as AssistantMessageEventData,
+          { content: responseText, final: true } as AssistantMessageEventData,
           resolved.trackHistory,
           result.llmCall
         )
@@ -153,7 +155,10 @@ export function router<T extends RouterData>(
         return scope
       }
 
-      // Track the routing decision as an assistant message with LLM data
+      // Track the routing decision as an assistant message with LLM data.
+      // No `final` flag — this is an intermediate "Looking into that…"
+      // status that the synthesizer will later supersede with the real
+      // response. Chat-history replay filters these out.
       const statusText = result.response_text || ''
       if (statusText) {
         trackEvent(

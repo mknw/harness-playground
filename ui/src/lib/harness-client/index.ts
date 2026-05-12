@@ -15,6 +15,7 @@ export {
   getAgentList,
   listConversations,
   loadConversation,
+  regenerateConversationTitle,
   type ConversationSummary,
   type LoadedConversation,
   type ReplayedMessage

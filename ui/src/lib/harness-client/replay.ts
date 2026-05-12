@@ -1,0 +1,65 @@
+/**
+ * Chat-history replay — convert a serialized `UnifiedContext` back into the
+ * minimal `{ id, role, content, timestamp }[]` list the UI paints when a
+ * conversation is restored from the sidebar.
+ *
+ * Pure data transformation — no server-only dependencies, no DB, no auth.
+ * Lives outside `actions.server.ts` so it can be unit-tested directly
+ * without dragging in the auth/DB import graph.
+ *
+ * Key rule (issue: residual "Let me look into that…" on hydration):
+ * router emits `assistant_message` events for intermediate routing status
+ * AND the synthesizer (or direct-response router) emits one for the
+ * user-facing final response. We discriminate via
+ * `AssistantMessageEventData.final === true` — only `final` emits become
+ * chat bubbles on replay.
+ */
+import type {
+  ContextEvent,
+  AssistantMessageEventData,
+  UserMessageEventData,
+} from '../harness-patterns'
+
+export interface ReplayedMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  /** Epoch ms — convert to Date on the client. */
+  timestamp: number
+}
+
+export function replayMessages(serializedContext: string): ReplayedMessage[] {
+  let parsed: { events?: ContextEvent[] }
+  try {
+    parsed = JSON.parse(serializedContext) as { events?: ContextEvent[] }
+  } catch {
+    return []
+  }
+  const events = parsed.events ?? []
+  const out: ReplayedMessage[] = []
+  for (const ev of events) {
+    if (ev.type === 'user_message') {
+      const data = ev.data as UserMessageEventData
+      out.push({
+        id: ev.id ?? `replay-${out.length}`,
+        role: 'user',
+        content: data.content ?? '',
+        timestamp: ev.ts,
+      })
+    } else if (ev.type === 'assistant_message') {
+      const data = ev.data as AssistantMessageEventData
+      // Skip intermediate router status messages ("Let me look into that…").
+      // Only the synthesizer's (or direct-response router's) final emit
+      // carries `final: true` and should surface as a chat bubble on replay.
+      // The live UI handles this implicitly by only painting `finalResult.response`.
+      if (!data.final) continue
+      out.push({
+        id: ev.id ?? `replay-${out.length}`,
+        role: 'assistant',
+        content: data.content ?? '',
+        timestamp: ev.ts,
+      })
+    }
+  }
+  return out
+}

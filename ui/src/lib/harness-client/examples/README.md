@@ -42,6 +42,32 @@ compositions across all available MCP servers.
 
 ## Examples
 
+### 0. Title Generator — minimum-rung example
+
+**Servers**: none (no MCP)
+**Patterns**: `synthesizer({ mode: 'message', synthesize })`
+**Use case**: Generate a 3-5 word conversation title from the user's first message.
+
+The smallest legal harness composition — one pattern, one BAML call, ~20 LoC. Demonstrates that the library is appropriate for one-shot LLM jobs, not just multi-pattern agentic workflows. Used in production by `/api/events` post-stream to title new conversations as soon as the first response lands.
+
+```typescript
+// ui/src/lib/harness-client/examples/title-generator.server.ts
+export const titleAgent = harness<TitleAgentData>(
+  synthesizer<TitleAgentData>({
+    patternId: 'title-gen',
+    mode: 'message',
+    synthesize: async ({ userMessage }) => {
+      const raw = await b.GenerateConversationTitle(userMessage)
+      return sanitizeTitle(raw) ?? ''
+    },
+  }),
+)
+```
+
+`mode: 'message'` makes the synthesizer a thin shell around the custom `synthesize` fn — it pulls the latest `user_message` from the view and hands it to the function as `input.userMessage`. No router, no tools, no loop.
+
+---
+
 ### 1. Documentation Assistant
 
 **Servers**: context7, memory

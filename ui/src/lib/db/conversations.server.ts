@@ -141,6 +141,27 @@ export async function deleteConversation(
 }
 
 /**
+ * Authoritative title override. Bypasses the COALESCE-sticky rule that
+ * `saveConversation` applies on upsert — used by the LLM title generator
+ * to replace the heuristic title with a model-authored one once it lands.
+ *
+ * Safe by construction: the WHERE clause includes `user_id`, so a wrong
+ * userId silently no-ops (zero rows affected) rather than overwriting
+ * another user's title.
+ */
+export async function updateConversationTitle(
+  id: string,
+  userId: string,
+  title: string,
+): Promise<void> {
+  await query(
+    `UPDATE conversations SET title = $1, updated_at = NOW()
+     WHERE id = $2 AND user_id = $3`,
+    [title, id, userId],
+  )
+}
+
+/**
  * Derive a sticky title from the first user message: trimmed, single-line,
  * capped at 60 chars. Returns null if the input is empty.
  */

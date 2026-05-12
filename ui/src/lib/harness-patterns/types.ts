@@ -465,6 +465,11 @@ export interface UserMessageEventData {
 /** Data payload for assistant_message event */
 export interface AssistantMessageEventData {
   content: string
+  /** Set to true on the synthesizer's user-facing final response. Used by
+   *  chat-history replay to filter out intermediate router status messages
+   *  (e.g. "Let me look into that…") that share the same event type.
+   *  Absent / false on router/intermediate emits. */
+  final?: boolean
 }
 
 /** Data payload for tool_call event */
