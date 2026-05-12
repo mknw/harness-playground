@@ -31,6 +31,7 @@ import {
   extractGraphElements,
 } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
+import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
 import type { GraphElement } from './SupportPanel'
 import type { ContextEvent, UnifiedContext, ControllerActionEventData } from '~/lib/harness-patterns'
 
@@ -205,109 +206,73 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         throw new Error(`Server error: ${response.status}`)
       }
 
-      const reader = response.body?.getReader()
-      if (!reader) throw new Error('No response stream')
+      let finalResult: DoneEventData | null = null
 
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let finalResult: { response: string; data: Record<string, unknown>; status: string; context: UnifiedContext } | null = null
+      // Typed SSE iteration — the parser handles frame buffering, malformed
+      // JSON, partial reads, and yields discriminated `ChatStreamEvent`s.
+      for await (const sseEvt of parseChatStream(response)) {
+        if (sseEvt.event === 'done') {
+          finalResult = sseEvt.data as DoneEventData
+          continue
+        }
+        if (sseEvt.event === 'error') {
+          throw new Error((sseEvt.data as { error: string }).error)
+        }
+        if (sseEvt.event !== 'message') continue // Forward-compat: ignore unknown event names
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+        const evt = sseEvt.data as ContextEvent
 
-        buffer += decoder.decode(value, { stream: true })
+        // Progress is always routed into the captured run session's
+        // controller, even if the user has navigated away.
+        progress.ingest(evt)
 
-        // SSE frames are delimited by double newlines
-        const frames = buffer.split('\n\n')
-        buffer = frames.pop() ?? '' // Keep incomplete frame in buffer
-
-        for (const frame of frames) {
-          if (!frame.trim()) continue
-
-          let eventType = 'message'
-          let dataStr = ''
-
-          for (const line of frame.split('\n')) {
-            if (line.startsWith('event: ')) {
-              eventType = line.slice(7).trim()
-            } else if (line.startsWith('data: ')) {
-              dataStr += line.slice(6)
-            }
+        // Surface the currently-running tool for the composer guard.
+        if (evt.type === 'controller_action') {
+          const data = evt.data as ControllerActionEventData
+          const toolName = data.action?.tool_name
+          if (toolName && toolName !== 'Return') {
+            props.updateRunState(runSessionId, { runningTool: toolName })
+          } else if (data.action?.is_final) {
+            props.updateRunState(runSessionId, { runningTool: null })
           }
+        }
 
-          if (!dataStr) continue
+        // The remaining route-level state (events, graph, messages) is
+        // only owned by the actively-displayed session — drop events
+        // from a backgrounded stream rather than corrupt the view. The
+        // server-side persistence catches everything up on rehydrate.
+        if (runSessionId !== props.sessionId) continue
 
-          try {
-            const parsed = JSON.parse(dataStr)
+        if (props.onEventsUpdate) {
+          props.onEventsUpdate([evt])
+        }
 
-            if (eventType === 'done') {
-              finalResult = parsed
-            } else if (eventType === 'error') {
-              throw new Error(parsed.error)
-            } else if (parsed.type) {
-              // Regular event — stream to UI. The SSE envelope carries
-              // sessionId (#47); ignore it before treating the body as a
-              // ContextEvent.
-              const evt = parsed as ContextEvent
-
-              // Progress is always routed into the captured run session's
-              // controller, even if the user has navigated away.
-              progress.ingest(evt)
-
-              // Surface the currently-running tool for the composer guard.
-              if (evt.type === 'controller_action') {
-                const data = evt.data as ControllerActionEventData
-                const toolName = data.action?.tool_name
-                if (toolName && toolName !== 'Return') {
-                  props.updateRunState(runSessionId, { runningTool: toolName })
-                } else if (data.action?.is_final) {
-                  props.updateRunState(runSessionId, { runningTool: null })
-                }
-              }
-
-              // The remaining route-level state (events, graph, messages) is
-              // only owned by the actively-displayed session — drop events
-              // from a backgrounded stream rather than corrupt the view. The
-              // server-side persistence catches everything up on rehydrate.
-              if (runSessionId !== props.sessionId) continue
-
-              if (props.onEventsUpdate) {
-                props.onEventsUpdate([evt])
-              }
-
-              // Reactive graph update on tool_result events
-              if (evt.type === 'tool_result' && props.onGraphUpdate) {
-                const graphElements = extractGraphElements([evt])
-                if (graphElements.length > 0) {
-                  props.onGraphUpdate(graphElements)
-                }
-              }
-
-              // Convert error events to inline chat messages
-              if (evt.type === 'error') {
-                const errorData = evt.data as { error: string; severity?: string; hint?: string; turn?: number; iteration?: number }
-                // Build context string (e.g., "(turn 3, attempt 2)")
-                const parts: string[] = []
-                if (errorData.turn !== undefined) parts.push(`turn ${errorData.turn + 1}`)
-                if (errorData.iteration !== undefined) parts.push(`attempt ${errorData.iteration + 1}`)
-                const turnInfo = parts.length > 0 ? `(${parts.join(', ')})` : undefined
-                const errorMsg: Message = {
-                  id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                  role: errorData.severity === 'recoverable' ? 'warning' : 'error',
-                  content: errorData.error,
-                  timestamp: new Date(),
-                  hint: errorData.hint,
-                  patternId: evt.patternId,
-                  turnInfo,
-                }
-                setMessages([...messages(), errorMsg])
-              }
-            }
-          } catch (e) {
-            if (e instanceof SyntaxError) continue // Skip malformed JSON
-            throw e
+        // Reactive graph update on tool_result events
+        if (evt.type === 'tool_result' && props.onGraphUpdate) {
+          const graphElements = extractGraphElements([evt])
+          if (graphElements.length > 0) {
+            props.onGraphUpdate(graphElements)
           }
+        }
+
+        // Convert error events to inline chat messages
+        if (evt.type === 'error') {
+          const errorData = evt.data as { error: string; severity?: string; hint?: string; turn?: number; iteration?: number }
+          // Build context string (e.g., "(turn 3, attempt 2)")
+          const parts: string[] = []
+          if (errorData.turn !== undefined) parts.push(`turn ${errorData.turn + 1}`)
+          if (errorData.iteration !== undefined) parts.push(`attempt ${errorData.iteration + 1}`)
+          const turnInfo = parts.length > 0 ? `(${parts.join(', ')})` : undefined
+          const errorMsg: Message = {
+            id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            role: errorData.severity === 'recoverable' ? 'warning' : 'error',
+            content: errorData.error,
+            timestamp: new Date(),
+            hint: errorData.hint,
+            patternId: evt.patternId,
+            turnInfo,
+          }
+          setMessages([...messages(), errorMsg])
         }
       }
 
