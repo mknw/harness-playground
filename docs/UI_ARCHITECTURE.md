@@ -347,7 +347,7 @@ The All tab does not use the accumulated `graphElements` signal. Instead, it der
 #### 7. GraphVisualization.tsx
 Cytoscape.js graph component with dark futuristic theme.
 
-**Rendering lifecycle:** With `unmountOnExit` on `Tabs.Root`, Cytoscape instances are fully created/destroyed when switching tabs. A `ResizeObserver` on `containerRef` drives a `visible()` signal to defer layout until the container has non-zero dimensions.
+**Rendering lifecycle:** With `unmountOnExit` on `Tabs.Root`, Cytoscape instances are fully created/destroyed when switching tabs. A `ResizeObserver` on `containerRef` drives a `visible()` signal to defer layout until the container has non-zero dimensions. The observer callback guards against a detached `containerRef` and defers `setVisible` + `cy.resize()` to `requestAnimationFrame` so that a notify-during-layout firing after the tab unmounts doesn't surface as the `ResizeObserver loop completed with undelivered notifications` warning (issue #38). The component-scoped `resizeObserver` and `resizeRafId` are torn down explicitly in `onCleanup` alongside `cy.destroy()`.
 
 **Base styles** are extracted to a module-level `BASE_STYLES` constant. The `extraStyles` prop appends additional stylesheets (e.g. per-turn color rules) — a reactive `createEffect` re-applies `cy.style([...BASE_STYLES, ...extraStyles])` when they change.
 
