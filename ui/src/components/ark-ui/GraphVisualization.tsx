@@ -146,6 +146,8 @@ type LayoutName = 'cose' | 'cola' | 'dagre' | 'circle' | 'grid' | 'breadthfirst'
 export const GraphVisualization = (props: GraphVisualizationProps) => {
   let containerRef: HTMLDivElement | undefined;
   let cy: Core | null = null;
+  let resizeObserver: ResizeObserver | undefined;
+  let resizeRafId: number | undefined;
 
   // eslint-disable-next-line solid/reactivity
   const [selectedLayout, setSelectedLayout] = createSignal<LayoutName>(props.layout ?? 'cose');
@@ -294,13 +296,24 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
       });
     });
 
-    // Track container visibility via ResizeObserver (for deferred rendering)
-    const observer = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect;
-      setVisible(width > 0 && height > 0);
+    // Track container visibility via ResizeObserver (for deferred rendering).
+    // Guard against detached container + defer to rAF so a notify-during-layout
+    // doesn't surface as "ResizeObserver loop completed with undelivered notifications"
+    // when the tab unmounts mid-layout. See issue #38.
+    resizeObserver = new ResizeObserver((entries) => {
+      if (!containerRef?.isConnected) return;
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      if (resizeRafId !== undefined) cancelAnimationFrame(resizeRafId);
+      resizeRafId = requestAnimationFrame(() => {
+        resizeRafId = undefined;
+        if (!containerRef?.isConnected) return;
+        setVisible(width > 0 && height > 0);
+        cy?.resize();
+      });
     });
-    observer.observe(containerRef);
-    onCleanup(() => observer.disconnect());
+    resizeObserver.observe(containerRef);
 
     setIsLoading(false);
   });
@@ -542,7 +555,14 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
   // ========================================
 
   onCleanup(() => {
+    if (resizeRafId !== undefined) {
+      cancelAnimationFrame(resizeRafId);
+      resizeRafId = undefined;
+    }
+    resizeObserver?.disconnect();
+    resizeObserver = undefined;
     cy?.destroy();
+    cy = null;
   });
 
   // ========================================
