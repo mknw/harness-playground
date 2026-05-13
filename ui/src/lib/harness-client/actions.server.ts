@@ -30,19 +30,20 @@ import { listConversations as dbListConversations } from "../db/conversations.se
 import type { HarnessSettings } from "../settings";
 import { runWithSettings } from "../settings-context.server";
 import { getAuthenticatedUser } from "../auth/server";
+import { BYPASS_USER, isBypassEnabled } from "../auth/dev-bypass";
 
 // ============================================================================
 // Auth helper
 // ============================================================================
 
 /**
- * Resolve the current user. Honors `VITE_DEV_BYPASS_AUTH=true` for local dev
- * (matches the existing AuthProvider convention) by yielding a stable literal
- * user id so persistence still works without a real Stack Auth session.
+ * Resolve the current user. In dev with the bypass enabled, returns the
+ * shared `BYPASS_USER` so persistence works without a real Stack Auth session.
+ * See `lib/auth/dev-bypass.ts` for the gate.
  */
 async function requireUser(): Promise<{ id: string; email: string }> {
-  if (import.meta.env.VITE_DEV_BYPASS_AUTH === "true") {
-    return { id: "dev-bypass-user", email: "dev@local" };
+  if (isBypassEnabled()) {
+    return { id: BYPASS_USER.id, email: BYPASS_USER.email };
   }
   const u = await getAuthenticatedUser();
   return { id: u.id, email: u.email };

@@ -16,11 +16,12 @@ import {
   serializeContext,
 } from "../../lib/harness-patterns";
 import { getAuthenticatedUser } from "../../lib/auth/server";
+import { BYPASS_USER, isBypassEnabled } from "../../lib/auth/dev-bypass";
 
 type StashAction = "hide" | "unhide" | "archive" | "unarchive";
 
 async function requireUserId(): Promise<string> {
-  if (import.meta.env.VITE_DEV_BYPASS_AUTH === "true") return "dev-bypass-user";
+  if (isBypassEnabled()) return BYPASS_USER.id;
   return (await getAuthenticatedUser()).id;
 }
 

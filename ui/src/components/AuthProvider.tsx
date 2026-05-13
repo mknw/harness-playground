@@ -4,6 +4,7 @@ import { isServer } from "solid-js/web";
 import { getStackClientApp } from "~/lib/auth/client";
 import type { User } from "@stackframe/js";
 import { isEmailAllowed } from "~/lib/auth/allowList";
+import { BYPASS_USER, isBypassEnabled } from "~/lib/auth/dev-bypass";
 
 // Auth context type
 interface AuthContextType {
@@ -29,12 +30,9 @@ interface AuthProviderProps {
   children: JSX.Element;
 }
 
-// Dev bypass: set VITE_DEV_BYPASS_AUTH=true in .env to skip auth for testing
-const DEV_BYPASS_AUTH = import.meta.env.VITE_DEV_BYPASS_AUTH === 'true';
-
 const DEV_MOCK_USER = {
-  id: 'dev-user',
-  primaryEmail: 'dev@localhost',
+  id: BYPASS_USER.id,
+  primaryEmail: BYPASS_USER.email,
   displayName: 'Dev User',
   signOut: async () => { /* no-op */ }
 } as unknown as User;
@@ -62,7 +60,7 @@ export function AuthProvider(props: AuthProviderProps) {
       }
 
       // Dev bypass: return mock user immediately
-      if (DEV_BYPASS_AUTH) {
+      if (isBypassEnabled()) {
         setAuthChecked(true);
         return DEV_MOCK_USER;
       }
@@ -92,7 +90,7 @@ export function AuthProvider(props: AuthProviderProps) {
       const isAccessDeniedRoute = pathname === '/auth/access-denied';
 
       // Check if authenticated user's email is allowed (skip in dev bypass mode)
-      if (currentUser && !isAccessDeniedRoute && !DEV_BYPASS_AUTH) {
+      if (currentUser && !isAccessDeniedRoute && !isBypassEnabled()) {
         const userEmail = currentUser.primaryEmail;
 
         if (!isEmailAllowed(userEmail)) {
