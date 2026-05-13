@@ -77,6 +77,9 @@ export interface ChatInterfaceProps {
    *  `title_updated` SSE event after the first-turn LLM title resolves.
    *  Route patches its threads cache in-place; no refetch required. */
   onTitleUpdated?: (sessionId: string, title: string) => void
+  /** Monotonic token forwarded to ChatInput — every change focuses the
+   *  composer textarea (used to land focus there after `+ New Chat`). */
+  focusInputToken?: number
 }
 
 const WELCOME_MESSAGE: Message = {
@@ -496,6 +499,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           onSend={handleSendMessage}
           disabled={isProcessing()}
           blockedMessage={blockedMessage()}
+          focusToken={props.focusInputToken}
         />
       </div>
     </div>

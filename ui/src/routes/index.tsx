@@ -1,5 +1,5 @@
 import { Splitter } from '@ark-ui/solid/splitter'
-import { createSignal, createMemo, createResource, createEffect, createUniqueId, onCleanup, onMount } from 'solid-js'
+import { createSignal, createMemo, createResource, createEffect, onCleanup, onMount } from 'solid-js'
 import { ChatInterface, type SessionRunState } from '~/components/ark-ui/ChatInterface'
 import { ChatSidebar, mergeThreadsWithPlaceholder } from '~/components/ark-ui/ChatSidebar'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
@@ -7,6 +7,7 @@ import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/ha
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
 import { mergeGraphElements } from '~/lib/graph-merge'
 import { listConversations } from '~/lib/harness-client'
+import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
 
@@ -16,13 +17,17 @@ export default function Home() {
   // Conversation a user is currently viewing. Initial value is a fresh id so
   // the first message creates a new persisted row; switching threads via the
   // sidebar (or "+ New Chat") swaps this signal.
-  const [selectedSessionId, setSelectedSessionId] = createSignal(createUniqueId())
+  const [selectedSessionId, setSelectedSessionId] = createSignal(newSessionId())
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
 
   // Optimistic placeholder for a freshly-minted "+ New Chat" id that hasn't
   // been persisted yet (see #44). Cleared once the real row arrives in the
   // threadsResource refetch, or when the user picks an existing thread.
   const [placeholderSessionId, setPlaceholderSessionId] = createSignal<string | null>(null)
+
+  // Monotonic token: each `+ New Chat` click bumps it, the ChatInput effect
+  // focuses the textarea so the user can start typing without an extra click.
+  const [focusInputToken, setFocusInputToken] = createSignal(0)
 
   const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
@@ -132,9 +137,10 @@ export default function Home() {
 
   const handleNewChat = () => {
     resetForNewSession()
-    const id = createUniqueId()
+    const id = newSessionId()
     setSelectedSessionId(id)
     setPlaceholderSessionId(id)
+    setFocusInputToken(t => t + 1)
   }
 
   const handleSelectThread = (threadId: string) => {
@@ -266,6 +272,7 @@ export default function Home() {
                 registerAbortController={registerAbortController}
                 unregisterAbortController={unregisterAbortController}
                 onTitleUpdated={handleTitleUpdated}
+                focusInputToken={focusInputToken()}
               />
             </div>
           </div>

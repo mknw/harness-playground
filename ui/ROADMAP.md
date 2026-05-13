@@ -26,6 +26,12 @@
 - [x] Graph renders correctly when tab is inactive during a query (ResizeObserver-based deferred rendering)
 - [x] "Conversation Sync" toggle button (⏸/▶) next to "Clear Graph" — pauses live graph updates, freezing the current snapshot
 
+### Session ID — UUIDs + composer auto-focus (closes #52) ✅
+- [x] `routes/index.tsx` no longer mints session ids with Solid's `createUniqueId()`. The helper produced `cl-${counter++}` that reset to `0` on every page load, so once any conversations existed in Postgres a fresh load or `+ New Chat` click could collide with an already-persisted row and silently hydrate the old chat.
+- [x] New `ui/src/lib/session-id.ts` exports `newSessionId()`. It calls `crypto.randomUUID()` when available and falls back to a manual RFC 4122 v4 build from `crypto.getRandomValues` (with a `Math.random` last-resort) so dev access over a non-secure context — LAN IP, `host.docker.internal` — still works.
+- [x] `+ New Chat` now lands focus in the composer textarea: a monotonic `focusInputToken` signal in `routes/index.tsx` increments on `handleNewChat`, threads through `ChatInterface` → `ChatInput`, and a `createEffect(on(... , { defer: true }))` calls `.focus()` on the textarea ref. `defer: true` skips the initial mount so navigating to an existing thread doesn't steal focus.
+- [x] Tests: `__tests__/lib/session-id.test.ts` (1000-call uniqueness, no collision with `cl-{0..100}`, RFC-4122-v4 shape, and a regression that strips `crypto.randomUUID` to exercise the fallback). `ChatSidebar.test.ts` extended with a UUID-placeholder-vs-`cl-*`-threads invariant for `mergeThreadsWithPlaceholder`.
+
 ## Deferred
 
 ### Graph-to-Chat Linking (reverse direction)

@@ -1,5 +1,5 @@
 import { Field } from '@ark-ui/solid/field'
-import { Show, createSignal } from 'solid-js'
+import { Show, createEffect, createSignal, on } from 'solid-js'
 
 interface ChatInputProps {
   onSend: (message: string) => void
@@ -9,10 +9,24 @@ interface ChatInputProps {
   /** Inline guard message shown above the composer when submit is blocked,
    *  e.g. "Waiting for `web_search` to complete. Try later." */
   blockedMessage?: string
+  /** Monotonic token: every time it changes the textarea is focused. Used by
+   *  the route to drop the cursor into the composer after `+ New Chat`. */
+  focusToken?: number
 }
 
 export const ChatInput = (props: ChatInputProps) => {
   const [value, setValue] = createSignal('')
+  let textareaRef: HTMLTextAreaElement | undefined
+
+  // `defer: true` skips the initial fire — we only focus when the token
+  // *changes*, so initial mount of an existing chat doesn't steal focus.
+  createEffect(
+    on(
+      () => props.focusToken,
+      () => textareaRef?.focus(),
+      { defer: true },
+    ),
+  )
 
   const handleSend = () => {
     const message = value().trim()
@@ -47,6 +61,7 @@ export const ChatInput = (props: ChatInputProps) => {
         </div>
       </Show>
       <Field.Textarea
+        ref={textareaRef}
         value={value()}
         onInput={(e) => setValue(e.currentTarget.value)}
         onKeyDown={handleKeyDown}

@@ -66,4 +66,28 @@ describe('mergeThreadsWithPlaceholder', () => {
     const ids = merged.map((t) => t.id)
     expect(new Set(ids).size).toBe(ids.length)
   })
+
+  // Regression for #52: when the placeholder is a UUID (post-fix) and the
+  // persisted list contains legacy `cl-{n}` ids, the placeholder must be kept
+  // — under the old `createUniqueId()` scheme the counter could mint a value
+  // that collided with one of these rows and the placeholder would silently
+  // vanish.
+  it('keeps a UUID placeholder when threads contain legacy cl-{n} ids', () => {
+    const legacy: ChatThreadSummary[] = Array.from({ length: 20 }, (_, i) => ({
+      id: `cl-${i}`,
+      title: `Conversation ${i}`,
+      updatedAt: '2026-05-10T00:00:00Z',
+    }))
+    const uuid = '550e8400-e29b-41d4-a716-446655440000'
+    const merged = mergeThreadsWithPlaceholder(
+      legacy,
+      uuid,
+      () => '2026-05-10T12:00:00Z',
+    )
+    expect(merged).toHaveLength(legacy.length + 1)
+    expect(merged[0].id).toBe(uuid)
+    expect(merged[0].isPlaceholder).toBe(true)
+    // Legacy rows still flow through unchanged, in order.
+    expect(merged.slice(1).map((t) => t.id)).toEqual(legacy.map((t) => t.id))
+  })
 })
