@@ -27,6 +27,7 @@ import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
+import { LLMCallError } from '../baml-adapters.server'
 
 assertServerOnImport()
 
@@ -248,11 +249,15 @@ export function actorCritic<T extends ActorCriticData>(
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
+      // Preserve LLM call data through to the error event so the panel can
+      // show the prompt drill-down for failed BAML calls (actor or critic).
+      const llmCall = error instanceof LLMCallError ? error.llmCall : undefined
       trackEvent(scope, 'error', {
         error: msg,
         severity: resolved.errorSeverity,
         hint: getErrorHint(msg),
-      } as ErrorEventData, true)
+        ...(llmCall ? { kind: 'llm_call' as const } : {}),
+      } as ErrorEventData, true, llmCall)
       return scope
     }
   }

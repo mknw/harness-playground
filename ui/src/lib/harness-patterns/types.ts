@@ -550,6 +550,11 @@ export interface ErrorEventData {
   turn?: number
   /** Retry iteration (for actorCritic, 0-indexed) */
   iteration?: number
+  /** Origin of the error. `llm_call` means a BAML call failed (parse error,
+   *  fallback exhausted, network) and the event carries LLM observability
+   *  data on `ContextEvent.llmCall` for the failed call. Absent for non-LLM
+   *  errors (MCP failures, tool errors, etc.). */
+  kind?: 'llm_call'
 }
 
 /** Data payload for reference_attached event — emitted by `withReferences` on pattern entry */

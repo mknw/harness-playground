@@ -23,6 +23,7 @@ import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
 import { trimToFit, getContextWindow } from '../token-budget.server'
+import { extractFailureLLMCallData } from '../baml-adapters.server'
 
 assertServerOnImport()
 
@@ -279,6 +280,11 @@ export function synthesizer<T extends SynthesizerData>(
     scope: PatternScope<T>,
     view: EventView
   ): Promise<PatternScope<T>> => {
+    // Collector + start time hoisted so the outer catch can recover LLM call
+    // data (prompt template, variables, HTTP body) on a failed BAML call.
+    let collector: Collector | undefined
+    let startTime: number | undefined
+    let synthesizeVariables: Record<string, unknown> | undefined
     try {
       // Skip if already has synthesized response
       if (skipIfHasResponse && scope.data.synthesizedResponse) {
@@ -307,7 +313,14 @@ export function synthesizer<T extends SynthesizerData>(
         synthesizedResponse = await synthesize(input)
       } else {
         // Use default with collector for LLM observability
-        const collector = new Collector('synthesizer')
+        collector = new Collector('synthesizer')
+        startTime = Date.now()
+        synthesizeVariables = {
+          userMessage: input.userMessage,
+          intent: input.intent,
+          hasError: input.hasError ?? false,
+          errorMessage: input.errorMessage
+        }
         const result = await defaultSynthesize(input, collector)
         synthesizedResponse = result.content
         llmCall = result.llmCall
@@ -334,11 +347,19 @@ export function synthesizer<T extends SynthesizerData>(
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
+      // Best-effort: if the BAML Synthesize call threw, surface the prompt
+      // template / variables / HTTP body alongside the error so the panel
+      // can render the same drill-down as a successful call.
+      const failedLlmCall =
+        collector !== undefined && synthesizeVariables !== undefined && startTime !== undefined
+          ? extractFailureLLMCallData(collector, 'Synthesize', synthesizeVariables, startTime)
+          : undefined
       trackEvent(scope, 'error', {
         error: msg,
         severity: resolved.errorSeverity,
         hint: getErrorHint(msg),
-      } as ErrorEventData, true)
+        ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
+      } as ErrorEventData, true, failedLlmCall)
       return scope
     }
   }

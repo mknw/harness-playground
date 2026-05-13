@@ -71,8 +71,22 @@ export function extractLLMCallData(
 ): LLMCallData | undefined {
   const last = collector.last
   if (!last) return undefined
+  return buildLLMCallDataFromLog(last, functionName, variables, startTime, parsedOutput)
+}
 
-  // Prefer the call BAML actually selected (handles fallbacks); fall back to the last attempted call
+/** Build LLMCallData from a collector log entry. Used for both success and
+ *  failure paths — on failure `parsedOutput` is omitted, `rawOutput` may be
+ *  empty, and `usage` may be absent, but `promptTemplate`/`variables` are
+ *  always populated so the failed-call drill-down has something to render. */
+function buildLLMCallDataFromLog(
+  last: NonNullable<Collector['last']>,
+  functionName: string,
+  variables: Record<string, unknown>,
+  startTime: number,
+  parsedOutput?: unknown
+): LLMCallData {
+  // Prefer the call BAML actually selected (handles fallbacks); fall back to the last attempted call.
+  // For failures, `selected` is rarely set — we want the last attempt that actually went out.
   const calls = (last.calls ?? []) as Array<{
     selected?: boolean
     provider?: string
@@ -121,6 +135,61 @@ export function extractLLMCallData(
     provider,
     clientName
   }
+}
+
+/** Extract LLM call data after a BAML call threw. Always returns a record
+ *  carrying at least `functionName`, `variables`, and `promptTemplate` so the
+ *  panel can render the Template/Variables sections even when the collector
+ *  never saw a response (e.g. pre-call network failure). HTTP body /
+ *  rawOutput / usage are best-effort and may be absent. */
+export function extractFailureLLMCallData(
+  collector: Collector | undefined,
+  functionName: string,
+  variables: Record<string, unknown>,
+  startTime: number
+): LLMCallData {
+  const last = collector?.last
+  if (last) {
+    return buildLLMCallDataFromLog(last, functionName, variables, startTime)
+  }
+  return {
+    functionName,
+    variables,
+    promptTemplate: getPromptTemplate(functionName),
+    durationMs: Date.now() - startTime
+  }
+}
+
+/** Error thrown by BAML adapters when an LLM call fails after all in-adapter
+ *  fallbacks have been exhausted. Carries the captured prompt/variables/HTTP
+ *  bodies so the catching pattern can attach them to the emitted `error`
+ *  event. Recovered fallback attempts never produce this — only the final
+ *  propagating failure does. */
+export class LLMCallError extends Error {
+  readonly llmCall: LLMCallData
+  readonly cause?: unknown
+  constructor(message: string, llmCall: LLMCallData, cause?: unknown) {
+    super(message)
+    this.name = 'LLMCallError'
+    this.llmCall = llmCall
+    if (cause !== undefined) this.cause = cause
+  }
+}
+
+/** Re-throw a BAML failure as an `LLMCallError` enriched with collector data.
+ *  Preserves the original error's message and stack via `cause`. Used by all
+ *  adapter catch paths so failures arriving at the calling pattern carry the
+ *  same prompt/variables/HTTP shape that successful calls already attach. */
+function wrapAsLLMCallError(
+  err: unknown,
+  functionName: string,
+  variables: Record<string, unknown>,
+  startTime: number,
+  collector: Collector | undefined
+): LLMCallError {
+  const message = err instanceof Error ? err.message : String(err)
+  const llmCall = extractFailureLLMCallData(collector, functionName, variables, startTime)
+  return new LLMCallError(message, llmCall, err)
 }
 
 // ============================================================================
@@ -263,12 +332,20 @@ export function createLoopControllerAdapter(
         ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, { collector })
         : await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots)
     } catch (e) {
-      if (!(e instanceof BamlValidationError)) throw e
+      if (!(e instanceof BamlValidationError)) {
+        throw wrapAsLLMCallError(e, 'LoopController', variables, startTime, collector)
+      }
       try {
-        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, { client: 'GroqGPT120B' })
+        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
       } catch (e2) {
-        if (!(e2 instanceof BamlValidationError)) throw e2
-        action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, { client: 'GroqFast' })
+        if (!(e2 instanceof BamlValidationError)) {
+          throw wrapAsLLMCallError(e2, 'LoopController', variables, startTime, collector)
+        }
+        try {
+          action = await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
+        } catch (e3) {
+          throw wrapAsLLMCallError(e3, 'LoopController', variables, startTime, collector)
+        }
       }
     }
 
@@ -388,9 +465,14 @@ export function createActorControllerAdapter(toolNames: string[]): CodeModeContr
     const variables = { user_message, intent, tools, attempts }
 
     // Call with or without collector
-    const action = collector
-      ? await b.ActorController(user_message, intent, tools, attempts, { collector })
-      : await b.ActorController(user_message, intent, tools, attempts)
+    let action: ControllerAction
+    try {
+      action = collector
+        ? await b.ActorController(user_message, intent, tools, attempts, { collector })
+        : await b.ActorController(user_message, intent, tools, attempts)
+    } catch (e) {
+      throw wrapAsLLMCallError(e, 'ActorController', variables, startTime, collector)
+    }
 
     // Extract LLM call data if collector present
     const llmCall = collector
@@ -433,9 +515,14 @@ export function createCriticAdapter(): CriticFnWithLLMData {
     const variables = { intent, attempts }
 
     // Call with or without collector
-    const result = collector
-      ? await b.Critic(intent, attempts, { collector })
-      : await b.Critic(intent, attempts)
+    let result: CriticResult
+    try {
+      result = collector
+        ? await b.Critic(intent, attempts, { collector })
+        : await b.Critic(intent, attempts)
+    } catch (e) {
+      throw wrapAsLLMCallError(e, 'Critic', variables, startTime, collector)
+    }
 
     // Extract LLM call data if collector present
     const llmCall = collector
