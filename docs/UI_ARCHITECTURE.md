@@ -771,11 +771,17 @@ ui/
 ├── eslint.config.ts              # ESLint rules
 ├── uno.config.ts                 # UnoCSS config + theme
 ├── baml_src/                     # BAML function definitions
-│   ├── clients.baml              # LLM client config
-│   ├── routing.baml              # Message routing
-│   ├── neo4j.baml                # Neo4j planning
-│   ├── code_mode.baml            # Code mode composition
-│   └── response.baml             # Response generation
+│   ├── clients.baml              # LLM client config + fallback chains
+│   ├── local-client.baml         # Local GLM-4.7 client (manual wiring)
+│   ├── router.baml               # Router (intent classification)
+│   ├── simpleLoop.baml           # Generic LoopController (used by all simpleLoop routes incl. code_mode)
+│   ├── actorCritic.baml          # ActorController + Critic (used by guardrailed/ontology agents)
+│   ├── synthesizer.baml          # Final response synthesis
+│   ├── describe.baml             # Lightweight tool-result summarization
+│   ├── title.baml                # Conversation title generation
+│   ├── with-references.baml      # Reference selector for withReferences
+│   ├── types.baml                # Shared schema types
+│   └── generators.baml           # baml-generate output config
 ├── src/
 │   ├── shims.d.ts                # TypeScript augmentation
 │   ├── routes/

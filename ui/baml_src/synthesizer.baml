@@ -9,7 +9,7 @@ function Synthesize(
   has_error: bool,
   error_message: string?
 ) -> string {
-  client SynthesizerFallback
+  client SynthesizerAnthropic
   prompt #"
     {{ _.role("system") }}
     Create a user-friendly response from tool execution results.

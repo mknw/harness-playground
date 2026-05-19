@@ -25,7 +25,7 @@ function ReferenceSelector(
   recent_messages: Message[],
   candidates: ReferenceCandidate[]
 ) -> ReferenceSelectorResult {
-  client DescribeFallback
+  client DescribeAnthropic
   prompt #"
     {{ _.role("system") }}
     Select prior tool results that are relevant to the user's current intent.

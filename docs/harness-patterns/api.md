@@ -81,10 +81,10 @@ type ScopedPattern<T> = (
 // From baml_client - standardized controller output
 interface ControllerAction {
   reasoning: string
-  tool_name: string           // Tool to call, or 'Return'
+  tool_name: string           // Tool to call. In simpleLoop, `'Return'` exits the loop. In actorCritic, the actor's exit signals are ignored — the critic alone decides termination via `is_sufficient`.
   tool_args: string           // JSON payload
   status: string
-  is_final: boolean
+  is_final: boolean           // simpleLoop only — actorCritic ignores this on the actor side
 }
 
 // Critic evaluation result

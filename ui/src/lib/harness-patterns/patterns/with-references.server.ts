@@ -174,6 +174,7 @@ function toPriorResults(refs: ReferenceCandidate[]): PriorResult[] {
 
 const defaultSelector: SelectorFn = async (input) => {
   const { b } = await import('../../../../baml_client')
+  const { clientOverrideFor } = await import('../clients.server')
   const now = Date.now()
   const collector = new Collector('reference-selector')
   const result = await b.ReferenceSelector(
@@ -186,7 +187,7 @@ const defaultSelector: SelectorFn = async (input) => {
       tool_args: c.tool_args ?? null,
       ts_offset_s: Math.max(0, Math.floor((now - c.ts) / 1000))
     })),
-    { collector }
+    { collector, ...clientOverrideFor('describe') }
   )
   return {
     selected: result.selected.map(s => ({ ref_id: s.ref_id, reason: s.reason })),

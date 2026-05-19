@@ -135,7 +135,7 @@ describe('LLM Judge qualityJudgeEvaluator', () => {
 
       // Import and access the judge pattern
       const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-      const patterns = await llmJudgeAgent.createPatterns()
+      const patterns = await llmJudgeAgent.createPatterns('test-session')
 
       // The judge pattern exists
       const judgePattern = patterns.find(p => (p as { config: { patternId?: string } }).config.patternId === 'quality-judge')
@@ -150,7 +150,7 @@ describe('LLM Judge qualityJudgeEvaluator', () => {
       ]
 
       const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-      const patterns = await llmJudgeAgent.createPatterns()
+      const patterns = await llmJudgeAgent.createPatterns('test-session')
       expect(patterns.length).toBe(3)
     })
   })
@@ -159,7 +159,7 @@ describe('LLM Judge qualityJudgeEvaluator', () => {
     it('should score higher when query terms are in content', async () => {
       // Testing that the judge pattern is properly configured
       const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-      const patterns = await llmJudgeAgent.createPatterns()
+      const patterns = await llmJudgeAgent.createPatterns('test-session')
 
       const judgePattern = patterns.find(p => (p as { config: { patternId?: string } }).config.patternId === 'quality-judge')
       expect(judgePattern).toBeDefined()
@@ -171,7 +171,7 @@ describe('LLM Judge qualityJudgeEvaluator', () => {
   describe('source authority scoring', () => {
     it('should give highest bonus for doc-lookup source', async () => {
       const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-      const patterns = await llmJudgeAgent.createPatterns()
+      const patterns = await llmJudgeAgent.createPatterns('test-session')
 
       // Verify all three source patterns exist in parallel
       const parallelPattern = patterns.find(p =>
@@ -210,7 +210,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
 
   it('should create parallel research with three sources', async () => {
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns()
+    const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
     const parallelPattern = patterns.find(p =>
       (p as { config: { patternId?: string } }).config.patternId === 'parallel-research'
@@ -220,7 +220,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
 
   it('should use quality judge for ranking', async () => {
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns()
+    const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
     const judgePattern = patterns.find(p =>
       (p as { config: { patternId?: string } }).config.patternId === 'quality-judge'
@@ -230,7 +230,7 @@ describe('Multi-Source Research judgeEvaluator', () => {
 
   it('should have synthesizer for final response', async () => {
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns()
+    const patterns = await multiSourceResearchAgent.createPatterns('test-session')
 
     const synthPattern = patterns.find(p =>
       (p as { config: { patternId?: string } }).config.patternId === 'research-synth'
@@ -255,7 +255,7 @@ describe('Ontology Builder ontologyJudge', () => {
 
   it('should create judge pattern for ontology evaluation', async () => {
     const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const patterns = await ontologyBuilderAgent.createPatterns()
+    const patterns = await ontologyBuilderAgent.createPatterns('test-session')
 
     const judgePattern = patterns.find(p =>
       (p as { config: { patternId?: string } }).config.patternId === 'ontology-judge'
@@ -265,7 +265,7 @@ describe('Ontology Builder ontologyJudge', () => {
 
   it('should include naming convention rail in guardrail', async () => {
     const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const patterns = await ontologyBuilderAgent.createPatterns()
+    const patterns = await ontologyBuilderAgent.createPatterns('test-session')
 
     const guardrailPattern = patterns.find(p =>
       (p as { config: { patternId?: string } }).config.patternId === 'ontology-validated'
@@ -276,7 +276,7 @@ describe('Ontology Builder ontologyJudge', () => {
 
   it('should include no-orphans rail in guardrail', async () => {
     const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const patterns = await ontologyBuilderAgent.createPatterns()
+    const patterns = await ontologyBuilderAgent.createPatterns('test-session')
 
     // Both rails are included in the guardrail
     const guardrailPattern = patterns.find(p =>
@@ -287,7 +287,7 @@ describe('Ontology Builder ontologyJudge', () => {
 
   it('should have all phases: scoping, research, proposal, judge, commit, suggestions', async () => {
     const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const patterns = await ontologyBuilderAgent.createPatterns()
+    const patterns = await ontologyBuilderAgent.createPatterns('test-session')
 
     // Check for each phase pattern
     const patternIds = patterns.map(p => (p as { config: { patternId?: string } }).config.patternId)
@@ -325,7 +325,7 @@ describe('Guardrailed Agent Rails', () => {
   describe('topicalRail', () => {
     it('should be configured with off-topic patterns', async () => {
       const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-      const patterns = await guardrailedAgent.createPatterns()
+      const patterns = await guardrailedAgent.createPatterns('test-session')
 
       const guardrailPattern = patterns.find(p =>
         (p as { config: { patternId?: string } }).config.patternId === 'safe-file-edit'
@@ -337,7 +337,7 @@ describe('Guardrailed Agent Rails', () => {
   describe('toolScopeRail', () => {
     it('should be included in guardrail with allowed filesystem tools', async () => {
       const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-      const patterns = await guardrailedAgent.createPatterns()
+      const patterns = await guardrailedAgent.createPatterns('test-session')
 
       const guardrailPattern = patterns.find(p =>
         (p as { config: { patternId?: string } }).config.patternId === 'safe-file-edit'
@@ -371,7 +371,7 @@ describe('Conversational Memory Distillation Hook', () => {
 
   it('should have session-close-hook pattern', async () => {
     const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-    const patterns = await conversationalMemoryAgent.createPatterns()
+    const patterns = await conversationalMemoryAgent.createPatterns('test-session')
 
     const hookPattern = patterns.find(p =>
       (p as { config: { patternId?: string } }).config.patternId === 'session-close-hook'
@@ -383,7 +383,7 @@ describe('Conversational Memory Distillation Hook', () => {
 
   it('should have distill-chain configured as background task', async () => {
     const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-    const patterns = await conversationalMemoryAgent.createPatterns()
+    const patterns = await conversationalMemoryAgent.createPatterns('test-session')
 
     // Hook exists with distill-chain
     const hookPattern = patterns.find(p =>
@@ -414,7 +414,7 @@ describe('Issue Triage Agent', () => {
 
   it('should create router pattern for GitHub routes', async () => {
     const { issueTriageAgent } = await import('../../../../lib/harness-client/examples/issue-triage.server')
-    const patterns = await issueTriageAgent.createPatterns()
+    const patterns = await issueTriageAgent.createPatterns('test-session')
 
     const routerPattern = patterns.find(p =>
       (p as { name: string }).name === 'router'
@@ -443,7 +443,7 @@ describe('KG Builder Agent', () => {
 
   it('should have web research pattern', async () => {
     const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
-    const patterns = await kgBuilderAgent.createPatterns()
+    const patterns = await kgBuilderAgent.createPatterns('test-session')
 
     const webPattern = patterns.find(p =>
       (p as { config: { patternId?: string } }).config.patternId === 'web-research'
@@ -453,7 +453,7 @@ describe('KG Builder Agent', () => {
 
   it('should have memory extract pattern', async () => {
     const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
-    const patterns = await kgBuilderAgent.createPatterns()
+    const patterns = await kgBuilderAgent.createPatterns('test-session')
 
     const memoryPattern = patterns.find(p =>
       (p as { config: { patternId?: string } }).config.patternId === 'memory-extract'
@@ -463,7 +463,7 @@ describe('KG Builder Agent', () => {
 
   it('should have neo4j persist with approval', async () => {
     const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
-    const patterns = await kgBuilderAgent.createPatterns()
+    const patterns = await kgBuilderAgent.createPatterns('test-session')
 
     const approvalPattern = patterns.find(p =>
       (p as { name: string }).name === 'withApproval'

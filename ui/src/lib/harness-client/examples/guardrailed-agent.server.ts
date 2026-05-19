@@ -82,7 +82,7 @@ const toolScopeRail: Rail<SessionData> = {
   },
 };
 
-async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
+async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools();
 
   // File editing pattern with actor-critic

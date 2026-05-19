@@ -7,6 +7,7 @@
 import { assertServerOnImport } from './assert.server'
 import { Collector } from '@boundaryml/baml'
 import { extractLLMCallData } from './baml-adapters.server'
+import { clientOverrideFor } from './clients.server'
 import type { LLMCallData } from './types'
 
 assertServerOnImport()
@@ -51,8 +52,12 @@ export async function routeMessageOp(
   // Build a lookup from route names for validation
   const validRoutes = new Set(routes.map((r) => r.name))
 
-  const result = collector
-    ? await b.Router(message, routes, history, { collector })
+  // Anthropic override applied when `USE_ANTHROPIC_ONLY=1` — routes through
+  // `RouterAnthropic` (Haiku 4.5 primary, Sonnet 4.6 backstop).
+  const routerOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('router') }
+  const hasRouterOpts = Object.keys(routerOpts).length > 0
+  const result = hasRouterOpts
+    ? await b.Router(message, routes, history, routerOpts)
     : await b.Router(message, routes, history)
 
   // Extract LLM call data if collector present

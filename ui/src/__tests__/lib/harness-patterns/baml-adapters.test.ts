@@ -4,9 +4,22 @@
  * Tests for controller and critic adapters that bridge patterns with BAML.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
 import { mockAction, mockFinalAction, mockCriticResult } from '../../mocks/baml'
 import { mockListTools } from '../../mocks/mcp'
+
+// These tests target the production mixed-provider fallback chain in
+// `baml_src/clients.baml` (RouterFallback / ControllerFallback / etc.) and
+// assert behavior like "fall back to GroqGPT120B on BamlValidationError".
+// The runtime default is Anthropic-only routing (see `clients.server.ts`),
+// which short-circuits the manual Groq fallback — so the tests must opt
+// back into the mixed chain explicitly.
+beforeAll(() => {
+  process.env.USE_MIXED_CHAINS = '1'
+})
+afterAll(() => {
+  delete process.env.USE_MIXED_CHAINS
+})
 
 // Mock server-only imports
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
@@ -556,11 +569,14 @@ describe('describeToolResultOp', () => {
     const result = await describeToolResultOp('read_neo4j_cypher', '{"query":"MATCH (n) RETURN n"}', 'Need to list nodes', '[{name:"A"},{name:"B"},{name:"C"}]')
 
     expect(result).toBe('Found 3 nodes in the graph.')
+    // 5th arg is the BAML options override (`{ client: 'DescribeFallback' }`)
+    // added under USE_MIXED_CHAINS=1 — see `clientOverrideFor`.
     expect(mockResultDescribe).toHaveBeenCalledWith(
       'read_neo4j_cypher',
       '{"query":"MATCH (n) RETURN n"}',
       'Need to list nodes',
-      '[{name:"A"},{name:"B"},{name:"C"}]'
+      '[{name:"A"},{name:"B"},{name:"C"}]',
+      expect.objectContaining({ client: 'DescribeFallback' })
     )
   })
 

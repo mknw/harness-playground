@@ -31,6 +31,7 @@ import type { HarnessSettings } from "../settings";
 import { runWithSettings } from "../settings-context.server";
 import { getAuthenticatedUser } from "../auth/server";
 import { BYPASS_USER, isBypassEnabled } from "../auth/dev-bypass";
+import { runWithUserId } from "./request-user.server";
 
 // ============================================================================
 // Auth helper
@@ -99,28 +100,33 @@ async function runTurn(
   agentId: string,
   onEvent?: (event: ContextEvent) => void,
 ): Promise<HarnessResultScoped<SessionData>> {
-  // If the user switched agent within an existing conversation, treat it as
-  // a fresh conversation by ignoring the prior serialized context. The UI is
-  // expected to mint a new sessionId on agent change, but we double-guard
-  // here so a stale id can't continue with a different agent's patterns.
-  const loaded = await loadSession(sessionId, userId);
-  const patterns = await getOrBuildPatterns(sessionId, agentId);
+  // Establish the user-id scope so pattern closures that need to load
+  // per-conversation context at runtime (e.g. code-mode's tool allowlist
+  // reader) can resolve the right user without an explicit parameter.
+  return runWithUserId(userId, async () => {
+    // If the user switched agent within an existing conversation, treat it as
+    // a fresh conversation by ignoring the prior serialized context. The UI is
+    // expected to mint a new sessionId on agent change, but we double-guard
+    // here so a stale id can't continue with a different agent's patterns.
+    const loaded = await loadSession(sessionId, userId);
+    const patterns = await getOrBuildPatterns(sessionId, agentId);
 
-  let result: HarnessResultScoped<SessionData>;
-  if (loaded && loaded.agentId === agentId) {
-    result = await continueSession(
-      loaded.serializedContext,
-      patterns,
-      message,
-      onEvent,
-    );
-  } else {
-    const agent = harness(...patterns);
-    result = await agent(message, sessionId, undefined, onEvent);
-  }
+    let result: HarnessResultScoped<SessionData>;
+    if (loaded && loaded.agentId === agentId) {
+      result = await continueSession(
+        loaded.serializedContext,
+        patterns,
+        message,
+        onEvent,
+      );
+    } else {
+      const agent = harness(...patterns);
+      result = await agent(message, sessionId, undefined, onEvent);
+    }
 
-  await saveSession(sessionId, userId, agentId, result.serialized);
-  return result;
+    await saveSession(sessionId, userId, agentId, result.serialized);
+    return result;
+  });
 }
 
 /**
@@ -151,14 +157,16 @@ async function resolveApproval(
   if (!loaded) {
     throw new Error("No active session");
   }
-  const patterns = await getOrBuildPatterns(sessionId, loaded.agentId);
-  const result = await resumeHarness(
-    loaded.serializedContext,
-    patterns,
-    approved,
-  );
-  await saveSession(sessionId, user.id, loaded.agentId, result.serialized);
-  return result;
+  return runWithUserId(user.id, async () => {
+    const patterns = await getOrBuildPatterns(sessionId, loaded.agentId);
+    const result = await resumeHarness(
+      loaded.serializedContext,
+      patterns,
+      approved,
+    );
+    await saveSession(sessionId, user.id, loaded.agentId, result.serialized);
+    return result;
+  });
 }
 
 /**

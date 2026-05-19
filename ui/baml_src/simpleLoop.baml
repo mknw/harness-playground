@@ -15,7 +15,7 @@ function LoopController(
   turns_previous_runs: PriorResult[]?,
   few_shots: FewShot[]?
 ) -> ControllerAction {
-  client ControllerFallback
+  client ControllerAnthropic
   prompt #"
     {{ _.role("system") }}
     You are an AI agent that accomplishes tasks by calling tools.
@@ -97,7 +97,6 @@ function LoopController(
     {{ _.role("user") }}
     INSTRUCTIONS: {{ user_message }}
 
-    {{ _.role("assistant") }}
     Turn {{ turns|length + 1 }}. Decide the next action.
 
     {{ ctx.output_format }}

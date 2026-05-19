@@ -24,8 +24,11 @@ export interface AgentConfig {
   icon: string;
   /** Server namespaces this agent uses */
   servers: string[];
-  /** Factory function that creates the pattern chain */
-  createPatterns: () => Promise<ConfiguredPattern<SessionData>[]>;
+  /** Factory function that creates the pattern chain. Receives the
+   *  sessionId so per-conversation context (e.g. code-mode's user-curated
+   *  tool allowlist) can be loaded inside the pattern closures. Most
+   *  agents accept and ignore the parameter. */
+  createPatterns: (sessionId: string) => Promise<ConfiguredPattern<SessionData>[]>;
 }
 
 // ============================================================================
@@ -80,6 +83,7 @@ export function getAgentMetadata(): Array<{
 
 // Import and register all example agents
 import { defaultAgent } from "./examples/default.server";
+import { codeModeAgent } from "./examples/code-mode.server";
 import { docAssistantAgent } from "./examples/doc-assistant.server";
 import { multiSourceResearchAgent } from "./examples/multi-source-research.server";
 import { guardrailedAgent } from "./examples/guardrailed-agent.server";
@@ -92,6 +96,7 @@ import { semanticCacheAgent } from "./examples/semantic-cache.server";
 
 // Register all agents
 registerAgent(defaultAgent);
+registerAgent(codeModeAgent);
 registerAgent(docAssistantAgent);
 registerAgent(multiSourceResearchAgent);
 registerAgent(guardrailedAgent);

@@ -37,7 +37,7 @@ async function getSchema(): Promise<string> {
   return result.success ? JSON.stringify(result.data) : "";
 }
 
-async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
+async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools();
   const schema = await getSchema();
 

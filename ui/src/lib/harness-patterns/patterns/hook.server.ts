@@ -10,7 +10,7 @@ import type {
   ConfiguredPattern,
   PatternConfig
 } from '../types'
-import { resolveConfig, createEvent } from '../context.server'
+import { resolveConfig, createEvent, createScope } from '../context.server'
 
 assertServerOnImport()
 
@@ -58,11 +58,17 @@ export function hook<T extends Record<string, unknown>>(
     name: `hook:${config.trigger}(${pattern.name})`,
     fn: async (scope, view) => {
       try {
+        const innerPatternId = pattern.config.patternId ?? pattern.name
+
         if (config.background) {
-          // Fire-and-forget: schedule for execution after response
+          // Fire-and-forget: schedule for execution after response. Uses a
+          // detached child scope so the hook's events (if anything ever
+          // reads them) are tagged with the hook's patternId, not the
+          // outer pattern's. Mirrors the sync path below.
           queueMicrotask(async () => {
             try {
-              await pattern.fn(scope, view)
+              const childScope = createScope(innerPatternId, scope.data) as typeof scope
+              await pattern.fn(childScope, view)
             } catch (e) {
               console.error(`Hook ${config.trigger} failed:`, e)
             }
@@ -70,16 +76,18 @@ export function hook<T extends Record<string, unknown>>(
           return scope
         }
 
-        // Synchronous: run and wait
-        const beforeLen = scope.events.length
-        const result = await pattern.fn(scope, view)
+        // Synchronous: run wrapped pattern in a fresh child scope so its
+        // events carry its own patternId. Without this, the wrapped
+        // pattern's events are tagged with the hook's id and become
+        // invisible to `view.fromLastPattern()`. Mirrors
+        // `withApproval.server.ts:93-104`.
+        const childScope = createScope(innerPatternId, scope.data) as typeof scope
+        const result = await pattern.fn(childScope, view)
 
-        // Wrap inner pattern events with enter/exit markers
-        const innerPatternId = pattern.config.patternId ?? pattern.name
-        const innerEvents = result.events.splice(beforeLen)
-        result.events.push(createEvent('pattern_enter', innerPatternId, { pattern: pattern.name }))
-        result.events.push(...innerEvents)
-        result.events.push(createEvent('pattern_exit', innerPatternId, { status: 'completed' }))
+        // Wrap inner pattern events with enter/exit markers and merge back
+        scope.events.push(createEvent('pattern_enter', innerPatternId, { pattern: pattern.name }))
+        scope.events.push(...result.events)
+        scope.events.push(createEvent('pattern_exit', innerPatternId, { status: 'completed' }))
         scope.data = { ...scope.data, ...result.data }
 
         return scope

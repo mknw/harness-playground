@@ -68,6 +68,9 @@ for (const t of [
 for (const t of ['resolve-library-id', 'get-library-docs'])
   KNOWN_TOOL_SERVERS[t] = 'context7'
 
+// Code-mode JS execution tool (kg-agent gateway built-in)
+KNOWN_TOOL_SERVERS['code-mode'] = 'code'
+
 // Web search / fetch server
 for (const t of ['search', 'fetch', 'fetch_content'])
   KNOWN_TOOL_SERVERS[t] = 'web'

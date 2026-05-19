@@ -34,6 +34,11 @@ assertServerOnImport()
 
 export interface SessionData extends HarnessData, RouterData, SimpleLoopData, WithApproval {
   response?: string
+  /** User-curated allowlist for the code-mode actor's tool selection.
+   *  Undefined → fall back to the agent's hardcoded CODE_MODE_TOOLS. Set
+   *  from the Tools tab via `setCodeModeAllowedTools(sessionId, tools)`
+   *  and read live per-actor-call by code-mode.server.ts's toolNamesProvider. */
+  codeModeAllowedTools?: string[]
   [key: string]: unknown
 }
 
@@ -62,7 +67,7 @@ export async function getOrBuildPatterns(
 
   const agent = getAgent(agentId)
   if (!agent) throw new Error(`Unknown agent: ${agentId}`)
-  const patterns = await agent.createPatterns()
+  const patterns = await agent.createPatterns(sessionId)
   patternCache.set(sessionId, { agentId, patterns })
   return patterns
 }

@@ -1,25 +1,28 @@
 /**
  * Tool Configuration Module
  *
- * Manages tool configuration and repository for the ToolsPanel UI.
+ * Per-conversation tool allowlist for the code-mode agent, plus the Neo4j-
+ * backed CodedTool repository.
  */
 
-// Config exports
+// Server-only RPC functions (each rewritten to a fetch by SolidStart)
 export {
-  getToolConfig,
-  setExecutionMode,
-  setCatalogMode,
-  setSelectedTools,
-  toggleTool,
-  resetToolConfig,
-  hotSwapCatalog,
+  getCodeModeAllowedTools,
+  setCodeModeAllowedTools,
   getAvailableTools,
+} from "./config.server";
+
+// Pure data + types — must come from a non-"use server" module so the
+// client sees real arrays and not RPC stubs (see ToolsPanel hallucination
+// log on this branch's PR thread).
+export {
   getMinimalTools,
   MINIMAL_TOOLS,
+  CODE_MODE_DEFAULTS,
   type ExecutionMode,
   type CatalogMode,
-  type ToolConfig
-} from './config.server'
+  type CodeModeToolsState,
+} from "./constants";
 
 // Repository exports
 export {
@@ -29,5 +32,5 @@ export {
   deleteCodedToolServer,
   type CodedTool,
   type CodedToolReference,
-  type SaveCodedToolInput
-} from './repository.server'
+  type SaveCodedToolInput,
+} from "./repository.server";

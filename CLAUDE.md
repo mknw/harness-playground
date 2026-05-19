@@ -23,6 +23,18 @@ Run a single test file:
 cd ui && pnpm vitest run src/__tests__/lib/harness-patterns/simpleLoop.test.ts
 ```
 
+### Client routing: Anthropic-default, mixed-chains opt-in
+
+Every BAML call (Router / LoopController / ActorController / Critic / Synthesize / ResultDescribe) routes through the Anthropic-only fallback chains in `baml_src/anthropic-only.baml` by default. Cross-provider rate limits (Groq + OpenRouter + OpenAI) interfered too much during dev iteration, so Anthropic-only is the dev default.
+
+To use the **mixed-provider production chains** (RouterFallback / ControllerFallback / etc. in `baml_src/clients.baml`):
+
+```bash
+USE_MIXED_CHAINS=1 pnpm dev:exposed
+```
+
+This unsets the override and lets each BAML function fall back to its declared chain. Production deployments and occasional mixed-chain testing both use this. See `ui/src/lib/harness-patterns/clients.server.ts` for the toggle.
+
 Docker services (Neo4j, MCP Gateway, Redis):
 ```bash
 docker compose up -d
@@ -98,19 +110,31 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 
 ## BAML Clients
 
+**Default (Anthropic-only)** — declared in `baml_src/anthropic-only.baml`:
+
 | Client | Role | Chain |
 |--------|------|-------|
-| `RouterFallback` | Intent classification | OpenRouterGemma4 → GroqFast → GroqGPT120B |
-| `ControllerFallback` | Tool loop controllers | OpenRouterNemotron120B → OpenAIGPT5 → OpenRouterMiniMax2_5 → GroqGPT120B |
-| `CriticFallback` | Evaluation/critique | GroqQwen3_32b → GroqGPT120B → OpenRouterMiniMax2_5 |
-| `SynthesizerFallback` | Response synthesis | OpenRouterGemma4 → GroqQwen3_32b → OpenAIGPT5 |
-| `DescribeFallback` | Lightweight tool result summarization | GroqFast → OpenRouterGemma4 → OpenAIGPT5Mini |
+| `RouterAnthropic` | Intent classification | AnthropicHaiku45 → AnthropicSonnet46 |
+| `ControllerAnthropic` | Tool loop controllers (simpleLoop + actor) | AnthropicSonnet46 → AnthropicHaiku45 |
+| `CriticAnthropic` | Evaluation/critique | AnthropicHaiku45 → AnthropicSonnet46 |
+| `SynthesizerAnthropic` | Response synthesis | AnthropicSonnet46 → AnthropicHaiku45 |
+| `DescribeAnthropic` | Lightweight tool result summarization | AnthropicHaiku45 |
+
+**Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — declared in `baml_src/clients.baml`:
+
+| Client | Chain |
+|--------|-------|
+| `RouterFallback` | OpenRouterGemma4 → GroqFast → GroqGPT120B |
+| `ControllerFallback` | OpenRouterNemotron120B → OpenAIGPT5 → OpenRouterMiniMax2_5 → GroqGPT120B |
+| `CriticFallback` | GroqQwen3_32b → GroqGPT120B → OpenRouterMiniMax2_5 |
+| `SynthesizerFallback` | OpenRouterGemma4 → GroqQwen3_32b → OpenAIGPT5 |
+| `DescribeFallback` | GroqFast → OpenRouterGemma4 → OpenAIGPT5Mini |
 
 Local inference (`LocalGLM` — GLM 4.7 Flash on localhost:8080) is defined in `baml_src/local-client.baml` and available for manual wiring but not used in any fallback chain.
 
-Required env vars: `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`.
+Required env vars: `ANTHROPIC_API_KEY` (always). With `USE_MIXED_CHAINS=1` also: `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`.
 
-**Known limitation:** Groq `gpt-oss-120b` fails structured output (`BamlValidationError`) on turn 2+ with larger context. `baml-adapters.server.ts` catches this manually and retries with `GroqGPT120B` then `GroqFast`. Errors are tracked as events; synthesizer reads them via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
+**Known limitation (mixed-chains only):** Groq `gpt-oss-120b` fails structured output (`BamlValidationError`) on turn 2+ with larger context. `baml-adapters.server.ts` catches this manually and retries with `GroqGPT120B` then `GroqFast`. Anthropic-only runs propagate the validation error instead. Errors are tracked as events; synthesizer reads them via `view.hasErrors()` (scoped by ViewConfig, so they expire naturally across turns).
 
 ---
 
