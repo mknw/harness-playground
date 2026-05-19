@@ -165,7 +165,7 @@ describe('LLM Judge Evaluator Execution', () => {
 
   it('should score high for substantial content (>500 chars)', async () => {
     const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-    const patterns = await llmJudgeAgent.createPatterns() as Pattern[]
+    const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'react hooks tutorial' })
@@ -190,7 +190,7 @@ describe('LLM Judge Evaluator Execution', () => {
 
   it('should score higher for content containing query terms', async () => {
     const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-    const patterns = await llmJudgeAgent.createPatterns() as Pattern[]
+    const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'react hooks tutorial' })
@@ -213,7 +213,7 @@ describe('LLM Judge Evaluator Execution', () => {
 
   it('should give source authority bonus', async () => {
     const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-    const patterns = await llmJudgeAgent.createPatterns() as Pattern[]
+    const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'test query' })
@@ -233,7 +233,7 @@ describe('LLM Judge Evaluator Execution', () => {
 
   it('should give bonus for code blocks', async () => {
     const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-    const patterns = await llmJudgeAgent.createPatterns() as Pattern[]
+    const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'code example' })
@@ -254,7 +254,7 @@ describe('LLM Judge Evaluator Execution', () => {
 
   it('should give bonus for lists', async () => {
     const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-    const patterns = await llmJudgeAgent.createPatterns() as Pattern[]
+    const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'list items' })
@@ -276,7 +276,7 @@ describe('LLM Judge Evaluator Execution', () => {
 
   it('should cap score at 1.0', async () => {
     const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-    const patterns = await llmJudgeAgent.createPatterns() as Pattern[]
+    const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     // Create content that would score > 1.0 uncapped
@@ -295,7 +295,7 @@ describe('LLM Judge Evaluator Execution', () => {
 
   it('should handle empty candidates', async () => {
     const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-    const patterns = await llmJudgeAgent.createPatterns() as Pattern[]
+    const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope()
@@ -310,7 +310,7 @@ describe('LLM Judge Evaluator Execution', () => {
 
   it('should handle query with no terms > 3 chars', async () => {
     const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-    const patterns = await llmJudgeAgent.createPatterns() as Pattern[]
+    const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'a b c' }) // All terms <= 3 chars
@@ -340,7 +340,7 @@ describe('Multi-Source Research Evaluator Execution', () => {
 
   it('should score based on content length and relevance', async () => {
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns() as Pattern[]
+    const patterns = await multiSourceResearchAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'python flask tutorial' })
@@ -368,7 +368,7 @@ describe('Multi-Source Research Evaluator Execution', () => {
 
   it('should handle candidates with only content length', async () => {
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns() as Pattern[]
+    const patterns = await multiSourceResearchAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'xyz123' }) // No matching terms
@@ -388,7 +388,7 @@ describe('Multi-Source Research Evaluator Execution', () => {
 
   it('should give correct reason for limited content', async () => {
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns() as Pattern[]
+    const patterns = await multiSourceResearchAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'test' })
@@ -408,7 +408,7 @@ describe('Multi-Source Research Evaluator Execution', () => {
 
   it('should select best candidate', async () => {
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const patterns = await multiSourceResearchAgent.createPatterns() as Pattern[]
+    const patterns = await multiSourceResearchAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')!
 
     const scope = createMockScope({ input: 'test query' })
@@ -440,7 +440,7 @@ describe('Ontology Builder ontologyJudge Execution', () => {
 
   it('should score for class/concept definitions', async () => {
     const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const patterns = await ontologyBuilderAgent.createPatterns() as Pattern[]
+    const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'ontology-judge')!
 
     const scope = createMockScope({ input: 'domain ontology' })
@@ -460,7 +460,7 @@ describe('Ontology Builder ontologyJudge Execution', () => {
 
   it('should score for relationships', async () => {
     const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const patterns = await ontologyBuilderAgent.createPatterns() as Pattern[]
+    const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'ontology-judge')!
 
     const scope = createMockScope({ input: 'domain ontology' })
@@ -480,7 +480,7 @@ describe('Ontology Builder ontologyJudge Execution', () => {
 
   it('should score for hierarchical structure', async () => {
     const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const patterns = await ontologyBuilderAgent.createPatterns() as Pattern[]
+    const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'ontology-judge')!
 
     const scope = createMockScope({ input: 'domain ontology' })
@@ -500,7 +500,7 @@ describe('Ontology Builder ontologyJudge Execution', () => {
 
   it('should score for substantial coverage', async () => {
     const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const patterns = await ontologyBuilderAgent.createPatterns() as Pattern[]
+    const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'ontology-judge')!
 
     const scope = createMockScope({ input: 'domain ontology' })
@@ -520,7 +520,7 @@ describe('Ontology Builder ontologyJudge Execution', () => {
 
   it('should always add consistency check', async () => {
     const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const patterns = await ontologyBuilderAgent.createPatterns() as Pattern[]
+    const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
     const judgePattern = patterns.find(p => p.config.patternId === 'ontology-judge')!
 
     const scope = createMockScope({ input: 'domain ontology' })
@@ -554,7 +554,7 @@ describe('Guardrailed Agent Rails Execution', () => {
 
   it('should create guardrail with all rails configured', async () => {
     const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const patterns = await guardrailedAgent.createPatterns('test-session') as Pattern[]
 
     const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')
     expect(guardrailPattern).toBeDefined()
@@ -570,7 +570,7 @@ describe('Guardrailed Agent Rails Execution', () => {
 
   it('should execute guardrail pattern with safe input', async () => {
     const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const patterns = await guardrailedAgent.createPatterns('test-session') as Pattern[]
     const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')!
 
     const scope = createMockScope({ input: 'edit my file.txt' })
@@ -583,7 +583,7 @@ describe('Guardrailed Agent Rails Execution', () => {
 
   it('should block destructive commands via topicalRail', async () => {
     const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const patterns = await guardrailedAgent.createPatterns('test-session') as Pattern[]
     const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')!
 
     // Use a destructive command pattern that topicalRail should block
@@ -598,7 +598,7 @@ describe('Guardrailed Agent Rails Execution', () => {
 
   it('should block delete database command via topicalRail', async () => {
     const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const patterns = await guardrailedAgent.createPatterns('test-session') as Pattern[]
     const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')!
 
     const scope = createMockScope({ input: 'delete all from database' })
@@ -611,7 +611,7 @@ describe('Guardrailed Agent Rails Execution', () => {
 
   it('should block drop table command via topicalRail', async () => {
     const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const patterns = await guardrailedAgent.createPatterns('test-session') as Pattern[]
     const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')!
 
     const scope = createMockScope({ input: 'DROP TABLE users' })
@@ -624,7 +624,7 @@ describe('Guardrailed Agent Rails Execution', () => {
 
   it('should block format drive command via topicalRail', async () => {
     const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-    const patterns = await guardrailedAgent.createPatterns() as Pattern[]
+    const patterns = await guardrailedAgent.createPatterns('test-session') as Pattern[]
     const guardrailPattern = patterns.find(p => p.config.patternId === 'safe-file-edit')!
 
     const scope = createMockScope({ input: 'format my drive C:' })
@@ -651,7 +651,7 @@ describe('Conversational Memory Distillation', () => {
 
   it('should have hook configured for session_close trigger', async () => {
     const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-    const patterns = await conversationalMemoryAgent.createPatterns() as Pattern[]
+    const patterns = await conversationalMemoryAgent.createPatterns('test-session') as Pattern[]
 
     const hookPattern = patterns.find(p => p.config.patternId === 'session-close-hook')
     expect(hookPattern).toBeDefined()
@@ -659,7 +659,7 @@ describe('Conversational Memory Distillation', () => {
 
   it('should configure hook as background task', async () => {
     const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-    const patterns = await conversationalMemoryAgent.createPatterns() as Pattern[]
+    const patterns = await conversationalMemoryAgent.createPatterns('test-session') as Pattern[]
 
     const hookPattern = patterns.find(p => p.config.patternId === 'session-close-hook')
     expect(hookPattern).toBeDefined()

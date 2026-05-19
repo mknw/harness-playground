@@ -15,8 +15,14 @@ export type {
 /**
  * Script execution event for actor-critic pattern.
  * Internal type used by actorCritic to track code mode executions.
+ *
+ * `toolName` records the actor's actual `action.tool_name` so the BAML
+ * adapter can render each rejected/executed attempt with the right tool
+ * name (not a placeholder). Defaults to `'code-mode'` in the adapter when
+ * absent, preserving back-compat for legacy callers.
  */
 export interface ScriptExecutionEvent {
+  toolName?: string
   script: string
   output: string
   error?: string | null
@@ -232,6 +238,11 @@ export interface SimpleLoopConfig extends PatternConfig {
   /** Hook to enrich/transform a tool result before the `tool_result` event is
    *  committed. See `OnToolResult`. */
   onToolResult?: OnToolResult
+  /** Regex matched against `action.tool_name` after the strict allowlist
+   *  fails. Lets agents accept dynamically-created tools (e.g. the kg-agent
+   *  gateway's `code-mode-<name>` factory output) without enumerating every
+   *  possible name upfront. */
+  dynamicToolPattern?: RegExp
 }
 
 /** Configuration for actorCritic pattern */
@@ -243,6 +254,17 @@ export interface ActorCriticConfig extends PatternConfig {
   /** Hook to enrich/transform a tool result before the `tool_result` event is
    *  committed. See `OnToolResult`. */
   onToolResult?: OnToolResult
+  /** Regex matched against `action.tool_name` after the strict allowlist
+   *  fails. Lets agents accept dynamically-created tools (e.g. the kg-agent
+   *  gateway's `code-mode-<name>` factory output) without enumerating every
+   *  possible name upfront. */
+  dynamicToolPattern?: RegExp
+  /** Async closure resolved per actor invocation. Returns the live allowlist
+   *  the loop should use *in addition to* `tools` and `dynamicToolPattern`.
+   *  Mirrors `ActorAdapterOptions.toolNamesProvider` so the actor's prompt
+   *  and the loop's strict allowlist stay in sync when the user mutates the
+   *  selection mid-conversation. */
+  dynamicToolAllowlist?: () => Promise<string[]>
 }
 
 /** Synthetic tool injected into LoopController's tools list when prior results

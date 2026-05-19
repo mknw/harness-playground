@@ -309,11 +309,10 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools()
   const schema = await getSchema()
 
-  // Bind BAML methods to preserve 'this' context
-  const neo4jController = b.Neo4jController.bind(b)
-  const webController = b.WebSearchController.bind(b)
-  const codeController = b.CodeModeController.bind(b)
-  const codeCritic = b.CodeModeCritic.bind(b)
+  // Use adapter factories (see baml-adapters.server.ts) — they wrap the generic
+  // LoopController with the right context for each domain.
+  const neo4jController = createNeo4jController(tools.neo4j ?? [])
+  const webController = createWebSearchController(tools.web ?? [])
 
   const neo4jPattern = withApproval(
     simpleLoop(neo4jController, tools.neo4j ?? [], {
@@ -327,20 +326,14 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     patternId: 'web-search'
   })
 
-  const codePattern = actorCritic(codeController, codeCritic, tools.all, {
-    patternId: 'code-mode'
-  })
-
   const routerPattern = router(
     {
       neo4j: 'Database queries and graph operations',
-      web_search: 'Web lookups and information retrieval',
-      code_mode: 'Multi-tool script composition'
+      web_search: 'Web lookups and information retrieval'
     },
     {
       neo4j: neo4jPattern,
-      web_search: webPattern,
-      code_mode: codePattern
+      web_search: webPattern
     }
   )
 
@@ -353,6 +346,8 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
   return [routerPattern, responseSynth]
 }
 ```
+
+JS-orchestration workflows (the kg-agent gateway's `code-mode` factory + generated tools) live in a separate agent — see [`code-mode.server.ts`](../../ui/src/lib/harness-client/examples/code-mode.server.ts) and [`examples.md` § 11. Code Mode Agent](examples.md#11-code-mode-agent).
 
 ---
 

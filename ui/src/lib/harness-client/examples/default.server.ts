@@ -1,7 +1,10 @@
 /**
  * Default Agent
  *
- * The original router-based agent with Neo4j, Web Search, and Code Mode.
+ * Router-based agent with Neo4j and Web Search routes.
+ * Code-mode lives in a dedicated agent (`code-mode.server.ts`) because the
+ * kg-agent gateway's `code-mode` tool is a factory that creates `code-mode-<name>`
+ * tools — that workflow needs an actorCritic loop rather than a simpleLoop.
  */
 "use server";
 
@@ -9,15 +12,12 @@ import {
   router,
   routes,
   simpleLoop,
-  actorCritic,
   synthesizer,
   withReferences,
   Tools,
   callTool,
   createNeo4jController,
   createWebSearchController,
-  createActorControllerAdapter,
-  createCriticAdapter,
   type ConfiguredPattern,
 } from "../../harness-patterns";
 import type { SessionData } from "../session.server";
@@ -30,15 +30,13 @@ async function getSchema(): Promise<string> {
   return result.success ? JSON.stringify(result.data) : "";
 }
 
-async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
+async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools();
   const schema = await getSchema();
 
   const neo4jController = createNeo4jController(tools.neo4j ?? []);
   const webTools = tools.web ?? [];
   const webController = createWebSearchController(webTools);
-  const codeController = createActorControllerAdapter(tools.all);
-  const codeCritic = createCriticAdapter();
 
   const neo4jPattern = simpleLoop<SessionData>(
     neo4jController,
@@ -59,21 +57,10 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     rememberPriorTurns: false,
   });
 
-  const codePattern = actorCritic<SessionData>(
-    codeController,
-    codeCritic,
-    tools.all,
-    {
-      patternId: "code-mode",
-      liveEvents: true,
-    },
-  );
-
   const routerPattern = router<SessionData>(
     {
       neo4j: "Database queries and graph operations",
       web_search: "Web lookups and information retrieval",
-      code_mode: "Multi-tool script composition",
     },
     { liveEvents: true },
   );
@@ -85,7 +72,6 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
     {
       neo4j: withReferences<SessionData>(neo4jPattern, { scope: "global", liveEvents: true }),
       web_search: withReferences<SessionData>(webPattern, { scope: "global", liveEvents: true }),
-      code_mode: withReferences<SessionData>(codePattern, { scope: "global", liveEvents: true }),
     },
     { liveEvents: true },
   );
@@ -102,7 +88,7 @@ async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
 export const defaultAgent: AgentConfig = {
   id: "default",
   name: "Default Agent",
-  description: "Router-based agent with Neo4j, Web Search, and Code Mode",
+  description: "Router-based agent with Neo4j and Web Search",
   icon: "🤖",
   servers: ["neo4j-cypher", "web_search", "fetch"],
   createPatterns,

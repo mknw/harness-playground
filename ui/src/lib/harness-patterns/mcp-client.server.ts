@@ -41,6 +41,57 @@ export async function getMcpClient(): Promise<Client> {
   return client;
 }
 
+/** Drop the singleton so the next getMcpClient() reconnects. Used by the
+ *  reconnect-once retry below when an operation fails with a transport-level
+ *  error (the gateway restarted while we held a stale connection). */
+async function resetMcpClient(): Promise<void> {
+  if (client) {
+    try {
+      await client.close();
+    } catch {
+      // best-effort; the connection is already broken
+    }
+  }
+  client = null;
+  transport = null;
+}
+
+/** Heuristic: does this error look like a dead/closed transport rather than
+ *  a tool-level failure? Covers the typical shapes that surface when the
+ *  MCP gateway restarts under us. */
+function isConnectionError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes('econnrefused') ||
+    msg.includes('econnreset') ||
+    msg.includes('socket hang up') ||
+    msg.includes('fetch failed') ||
+    msg.includes('connection closed') ||
+    msg.includes('transport') ||
+    msg.includes('terminated') ||
+    msg.includes('aborted')
+  );
+}
+
+/** Run an MCP operation with a single reconnect attempt on connection errors.
+ *  The first failure resets the client singleton; the second attempt builds a
+ *  fresh transport. If that still fails, the error is propagated.
+ *
+ *  Tool-level errors (the gateway responding with a structured failure) are
+ *  not retried — only transport-level errors trigger reconnect. */
+async function withReconnect<T>(op: (c: Client) => Promise<T>): Promise<T> {
+  try {
+    const c = await getMcpClient();
+    return await op(c);
+  } catch (err) {
+    if (!isConnectionError(err)) throw err;
+    await resetMcpClient();
+    const c = await getMcpClient();
+    return await op(c);
+  }
+}
+
 // ============================================================================
 // Tool Operations
 // ============================================================================
@@ -50,8 +101,7 @@ export async function callTool(
   args: Record<string, unknown>
 ): Promise<ToolCallResult> {
   try {
-    const c = await getMcpClient();
-    const result = await c.callTool({ name, arguments: args });
+    const result = await withReconnect((c) => c.callTool({ name, arguments: args }));
 
     // Extract text content
     if (result.content && Array.isArray(result.content)) {
@@ -101,14 +151,20 @@ function demoteErrorString(
 
 export async function listTools(): Promise<MCPToolDescription[]> {
   try {
-    const c = await getMcpClient();
-    const { tools } = await c.listTools();
+    const { tools } = await withReconnect((c) => c.listTools());
     return tools.map((t) => ({
       name: t.name,
       description: t.description ?? '',
       inputSchema: (t.inputSchema as Record<string, unknown>) ?? {}
     }));
-  } catch {
+  } catch (err) {
+    // Reconnect already tried once. If we still failed here, this is a real
+    // problem (gateway down, URL misconfigured, etc.) — log it loudly so the
+    // operator can see it. Returning [] still degrades gracefully for callers
+    // that don't want to crash on a missing tool list, but the cause is no
+    // longer hidden the way it was before this change.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[mcp-client] listTools failed after reconnect:', msg);
     return [];
   }
 }

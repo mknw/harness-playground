@@ -7,7 +7,8 @@
 
 import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '../assert.server'
-import { callTool } from '../mcp-client.server'
+import { callTool, listTools as mcpListTools } from '../mcp-client.server'
+import { invalidateToolDescriptions } from '../baml-adapters.server'
 import { repairJson } from '../json-repair'
 import type {
   ControllerAction,
@@ -79,16 +80,32 @@ export function actorCritic<T extends ActorCriticData>(
 
     try {
       for (let attempt = 0; attempt < maxRetries; attempt++) {
-        // Get user message from view
-        const userMessage = view.messages().last(1).get()[0]
+        // Get the original user input. Use `ofType('user_message')` (not
+        // `messages()`, which also includes assistant_message) so a router or
+        // other upstream pattern emitting an intermediate `assistant_message`
+        // (e.g. a transient "Looking into that..." status) can't bump itself
+        // into the "last message" slot and end up rendered as the user's input
+        // in the actor prompt. `fromAll()` bypasses the per-pattern view scope —
+        // the user_message lives at the harness level, outside this loop's id.
+        const userMessage = view.fromAll().ofType('user_message').last(1).get()[0]
         const userContent = userMessage
           ? (userMessage.data as { content: string }).content
           : ''
         const intent = scope.data.intent ?? userContent
 
-        // Call actor
+        // Call actor. We pass `attempt + 1` (1-indexed for the prompt) and
+        // maxRetries so the actor's prompt can surface "Attempt N of M" and
+        // nudge the model toward `Return` when the budget is nearly exhausted.
         const actorCollector = new Collector('actor')
-        const { action, llmCall: actorLlmCall } = await actor(userContent, intent, availableTools, previousAttempts, actorCollector)
+        const { action, llmCall: actorLlmCall } = await actor(
+          userContent,
+          intent,
+          availableTools,
+          previousAttempts,
+          actorCollector,
+          attempt + 1,
+          maxRetries,
+        )
 
         // Track controller action with LLM call data. `turn` and `maxTurns`
         // (mapped from attempt / maxRetries) are exposed so live progress
@@ -101,21 +118,65 @@ export function actorCritic<T extends ActorCriticData>(
           actorLlmCall
         )
 
-        // Check if done (is_final flag OR tool_name === 'Return')
+        // Check if done (is_final flag OR tool_name === 'Return'). Return
+        // early — `break` would fall through to the "Max retries exceeded"
+        // tracker below and spuriously emit an error event even on a clean
+        // exit. (Pre-existing bug surfaced by the code-mode retry-budget test.)
         if (action.is_final || action.tool_name === 'Return') {
           scope.data = {
             ...scope.data,
             lastAction: action,
           }
-          break
+          return scope
         }
 
-        // Validate tool
-        if (!tools.includes(action.tool_name)) {
+        // Validate tool. The strict allowlist is augmented by an optional
+        // `dynamicToolPattern` regex so agents whose backends create tools at
+        // runtime (e.g. the kg-agent gateway's `code-mode-<name>` factory)
+        // can accept those names without enumerating them upfront. A second
+        // augmentation, `dynamicToolAllowlist`, is a per-turn callback for
+        // user-curated selections (e.g. the code-mode agent's per-conversation
+        // tool picker) — kept in sync with the adapter's `toolNamesProvider`.
+        const dynamicAllowlist = config?.dynamicToolAllowlist
+          ? await config.dynamicToolAllowlist()
+          : []
+        const allowed =
+          tools.includes(action.tool_name) ||
+          dynamicAllowlist.includes(action.tool_name) ||
+          (config?.dynamicToolPattern?.test(action.tool_name) ?? false)
+        if (!allowed) {
+          const errMsg = `Tool not allowed: ${action.tool_name}`
+          // Only surface as a visible error event when the allowlist has
+          // SOME entries — that's a real actor mistake (proposed wrong tool
+          // name). When the combined allowlist is empty, that's almost
+          // always a transient MCP gateway issue, and a per-turn flood of
+          // identical "Tool not allowed" events would spam the synth's view
+          // and observability UI without helping. The actor still sees the
+          // rejection via `previousAttempts` either way (its standard
+          // feedback channel), and the gateway-down case resolves on the
+          // next turn once `withReconnect` rebuilds the transport and
+          // `toolNamesProvider` re-resolves to a non-empty list.
+          const allowlistHasContent = tools.length > 0 || dynamicAllowlist.length > 0
+          if (allowlistHasContent) {
+            trackEvent(
+              scope,
+              'error',
+              {
+                error: errMsg,
+                severity: 'recoverable',
+                hint:
+                  'Actor proposed a tool not on the allowlist (and not matched by ' +
+                  'dynamicToolPattern / dynamicToolAllowlist).',
+                iteration: attempt,
+              } as ErrorEventData,
+              resolved.trackHistory,
+            )
+          }
           previousAttempts.push({
-            script: '',
+            toolName: action.tool_name,
+            script: action.tool_args,
             output: '',
-            error: `Tool not allowed: ${action.tool_name}`
+            error: errMsg,
           })
           continue
         }
@@ -125,10 +186,28 @@ export function actorCritic<T extends ActorCriticData>(
         try {
           args = repairJson(action.tool_args)
         } catch {
+          // Surface unparseable tool_args as a recoverable error too — same
+          // observability reasoning as the allowlist branch above.
+          const errMsg = `Invalid tool_args JSON for ${action.tool_name}: ${action.tool_args}`
+          trackEvent(
+            scope,
+            'error',
+            {
+              error: errMsg,
+              severity: 'recoverable',
+              hint:
+                'Actor produced unparseable tool_args. Common causes: unquoted ' +
+                'keys/values, unescaped newlines inside scripts. The actor will ' +
+                'see this in previousAttempts and (hopefully) retry with valid JSON.',
+              iteration: attempt,
+            } as ErrorEventData,
+            resolved.trackHistory,
+          )
           previousAttempts.push({
-            script: '',
+            toolName: action.tool_name,
+            script: action.tool_args,
             output: '',
-            error: `Invalid tool_args JSON: ${action.tool_args}`
+            error: errMsg,
           })
           continue
         }
@@ -146,6 +225,21 @@ export function actorCritic<T extends ActorCriticData>(
 
         // Execute tool
         const result = await callTool(action.tool_name, args)
+
+        // The kg-agent `code-mode` tool is a factory: a successful call
+        // registers a new tool (`code-mode-<args.name>`). Invalidate the
+        // adapter's tool-description cache so the next actor invocation
+        // re-fetches a fresh listing and includes the newly-created tool in
+        // the LLM's prompt. The gateway persists these tools across turns, so
+        // this also makes them visible to future user turns in the same session.
+        if (result.success && action.tool_name === 'code-mode') {
+          invalidateToolDescriptions()
+          try {
+            await mcpListTools()  // warm the gateway's own cache; non-fatal
+          } catch {
+            // Non-fatal — the actor can still try to invoke the new tool by name.
+          }
+        }
 
         // onToolResult hook: enrich/transform result before commit. See SimpleLoop for full doc.
         if (config?.onToolResult) {
@@ -175,6 +269,7 @@ export function actorCritic<T extends ActorCriticData>(
         // Track result
         const script = typeof args.script === 'string' ? args.script : JSON.stringify(args)
         previousAttempts.push({
+          toolName: action.tool_name,
           script,
           output: result.success ? JSON.stringify(result.data) : '',
           error: result.success ? null : (result.error ?? 'Execution failed')

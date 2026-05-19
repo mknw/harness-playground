@@ -144,6 +144,16 @@ describe('tools', () => {
         expect(tools.redis).toContain('vector_search_hash')
       })
 
+      it('should group code-mode under code namespace', async () => {
+        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
+
+        const tools = ToolsFrom([
+          { name: 'code-mode', description: 'JS executor', inputSchema: {} },
+        ])
+
+        expect(tools.code).toEqual(['code-mode'])
+      })
+
       it('should group filesystem tools under filesystem namespace', async () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 

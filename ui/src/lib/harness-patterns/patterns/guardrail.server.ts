@@ -14,7 +14,7 @@ import type {
   PatternConfig,
   ContextEvent
 } from '../types'
-import { trackEvent, resolveConfig, createEvent } from '../context.server'
+import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
 
 assertServerOnImport()
 
@@ -137,23 +137,27 @@ export function guardrail<T extends Record<string, unknown>>(
           }
         }
 
-        // --- Execute wrapped pattern ---
-        const beforeLen = scope.events.length
-        const result = await pattern.fn(scope, view)
-
-        // Wrap inner pattern events with enter/exit markers
+        // --- Execute wrapped pattern in a fresh child scope ---
+        // The wrapped pattern needs its own scope so its events are tagged
+        // with its own patternId (not the guardrail's). Without this,
+        // `view.fromLastPattern()` filters the wrapped pattern's events out.
+        // Mirrors `withApproval.server.ts:93-104`.
         const innerPatternId = pattern.config.patternId ?? pattern.name
-        const innerEvents = result.events.splice(beforeLen)
-        result.events.push(createEvent('pattern_enter', innerPatternId, { pattern: pattern.name }))
-        result.events.push(...innerEvents)
-        result.events.push(createEvent('pattern_exit', innerPatternId, { status: 'completed' }))
+        const childScope = createScope(innerPatternId, scope.data) as typeof scope
+        const result = await pattern.fn(childScope, view)
+
+        // Wrap inner pattern events with enter/exit markers and merge back
+        scope.events.push(createEvent('pattern_enter', innerPatternId, { pattern: pattern.name }))
+        scope.events.push(...result.events)
+        scope.events.push(createEvent('pattern_exit', innerPatternId, { status: 'completed' }))
+        scope.data = result.data
 
         // --- Output rails ---
         for (const rail of outputRails) {
           const check = await rail.check({
             ...railCtx,
-            scope: result,
-            lastToolResult: result.events.filter((e) => e.type === 'tool_result').pop()
+            scope,
+            lastToolResult: scope.events.filter((e) => e.type === 'tool_result').pop()
           })
 
           if (!check.ok) {
@@ -170,18 +174,18 @@ export function guardrail<T extends Record<string, unknown>>(
                   // Redis may not be available
                 }
               }
-              trackEvent(result, 'error', {
+              trackEvent(scope, 'error', {
                 error: `Output rail '${rail.name}' rejected: ${check.reason}`
               }, true)
             } else if (check.action === 'warn') {
-              trackEvent(result, 'error', {
+              trackEvent(scope, 'error', {
                 error: `Output rail '${rail.name}' warning: ${check.reason}`
               }, true)
             }
           }
         }
 
-        return result
+        return scope
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         trackEvent(scope, 'error', { error: msg }, true)

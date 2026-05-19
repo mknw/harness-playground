@@ -283,7 +283,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
 
           {/* Tools Tab */}
           <Tabs.Content value="tools" h="full">
-            <ToolsPanel />
+            <ToolsPanel sessionId={props.sessionId} />
           </Tabs.Content>
 
           {/* Actions Tab (Future) */}

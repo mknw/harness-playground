@@ -159,18 +159,45 @@ export function chain<T extends Record<string, unknown>>(
   return {
     name: `chain(${patterns.map(p => p.name).join(', ')})`,
     fn: async (scope, view) => {
-      let current = scope
+      // Run each sub-pattern in a fresh child scope so its events get tagged
+      // with its OWN patternId (e.g. 'code-mode-loop'), not the outer
+      // composition's auto-generated id. Without this, `view.fromLastPattern()`
+      // and `ViewConfig.fromLast: true` silently exclude the sub-pattern's
+      // events because they filter on `e.patternId === lastPatternId`.
+      //
+      // We also build a fresh EventView per sub-pattern with the correct
+      // `selfPatternId` and a synthetic context that includes events
+      // accumulated by previous sub-patterns in this same chain. Without
+      // this, a later sub-pattern's `fromLastPattern()` either sees stale
+      // ancestry (no view of its sibling's emit) or — worse — selects its
+      // OWN patternId as "last" (because the outer view was constructed
+      // for the wrapping pattern, not for the synth). Mirrors `runChain`
+      // above (chain.server.ts:60-122) and `withApproval.server.ts:93-104`.
+      const outerCtx = (view as unknown as { ctx: UnifiedContext }).ctx
+      let currentData = scope.data
       for (const pattern of patterns) {
-        current.events.push(
-          createEvent('pattern_enter', pattern.config.patternId ?? pattern.name, { pattern: pattern.name })
+        const subId = pattern.config.patternId ?? pattern.name
+        scope.events.push(
+          createEvent('pattern_enter', subId, { pattern: pattern.name })
         )
-        const result = await pattern.fn(current, view)
-        result.events.push(
-          createEvent('pattern_exit', pattern.config.patternId ?? pattern.name, { status: 'completed' })
+        // Synthetic ctx: original events + everything this chain has
+        // accumulated so far (including the pattern_enter just pushed).
+        // Read-only view — events array is freshly composed each iteration.
+        const syntheticCtx: UnifiedContext = {
+          ...outerCtx,
+          events: [...outerCtx.events, ...scope.events] as ContextEvent[],
+        }
+        const subView = createEventView(syntheticCtx, pattern.config.viewConfig, subId)
+        const childScope = createScope<T>(subId, currentData)
+        const result = await pattern.fn(childScope, subView)
+        scope.events.push(...result.events)
+        scope.events.push(
+          createEvent('pattern_exit', subId, { status: 'completed' })
         )
-        current = result
+        currentData = result.data
       }
-      return current
+      scope.data = currentData
+      return scope
     },
     config: resolved,
     estimateTurns: (s) =>

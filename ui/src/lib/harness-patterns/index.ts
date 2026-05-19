@@ -203,5 +203,8 @@ export {
   createGitHubController,
   createFilesystemController,
   createRedisController,
-  createDatabaseController
+  createDatabaseController,
+  createCodeModeController,
+  invalidateToolDescriptions,
+  type ActorAdapterOptions
 } from './baml-adapters.server'

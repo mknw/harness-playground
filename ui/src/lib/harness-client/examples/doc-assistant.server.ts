@@ -17,7 +17,7 @@ import {
 import type { SessionData } from "../session.server";
 import type { AgentConfig } from "../registry.server";
 
-async function createPatterns(): Promise<ConfiguredPattern<SessionData>[]> {
+async function createPatterns(_sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
   const tools = await Tools();
 
   // Stage 1: Look up documentation using Context7

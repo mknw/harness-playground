@@ -10,7 +10,11 @@ function ActorController(
   user_message: string,
   intent: string,
   tools: ToolDescription[],
-  attempts: Attempt[]
+  attempts: Attempt[],
+  context: string?,
+  few_shots: FewShot[]?,
+  attempt_n: int?,
+  max_attempts: int?
 ) -> ControllerAction {
   client ControllerFallback
   prompt #"
@@ -19,6 +23,21 @@ function ActorController(
     A critic evaluates your output. Learn from previous feedback.
 
     USER INTENT: {{ intent }}
+
+    {% if context %}
+    CONTEXT:
+    {{ context }}
+    {% endif %}
+
+    {% if few_shots and few_shots|length > 0 %}
+    EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
+    {% for ex in few_shots %}
+    - User: {{ ex.user }}
+      Reasoning: {{ ex.reasoning }}
+      Tool: {{ ex.tool }}
+      Args: {{ ex.args }}
+    {% endfor %}
+    {% endif %}
 
     AVAILABLE TOOLS:
     {% for tool in tools %}
@@ -40,6 +59,14 @@ function ActorController(
     {% endfor %}
 
     You MUST address the critic's feedback. Do not repeat failed approaches.
+    {% endif %}
+
+    {% if attempt_n is not none and max_attempts is not none %}
+    BUDGET: Attempt {{ attempt_n }} of {{ max_attempts }}.
+    {% if attempt_n >= max_attempts - 1 %}
+    This is your final or near-final attempt. Prefer `Return` with whatever
+    partial results you have over starting a new tool chain.
+    {% endif %}
     {% endif %}
 
     {{ _.role("user") }}

@@ -15,17 +15,17 @@
 - [ ] Collapsible sections for large JSON payloads in EventDetailOverlay
 - [ ] Show tool input arguments in detail overlay (currently only output/result is shown)
 
-### Code Mode (re-implementation using harness-patterns)
-Composable code execution with an evaluate loop. The previous implementation (`lib/baml-agent/`) has been removed. A new implementation should be built on top of harness-patterns.
-
-Core requirements:
-- [ ] Evaluate loop with `MAX_RETRIES` and graceful exit after N failures
-- [ ] Per-iteration output capture passed as context to the evaluator
-- [ ] Rich failure context for each retry iteration (what was tried, what failed, script diff)
-- [ ] Intermediate logging per iteration
-
 ### MCP Infrastructure
 - [ ] MCP catalog hot-swap without gateway restart (currently requires restart after config changes)
+
+### Harness pattern: Skill support
+- [ ] First-class **Skill** abstraction for pattern factories. Today the code-mode agent ships its actor guidance as a `contextPrefix` string + `fewShots` array inlined in `code-mode.server.ts` (see `ui/src/lib/harness-client/examples/code_mode_actor_critic.md`). Once Skill support exists, that same content moves into a reusable Skill the actor receives via the standard mechanism — same shape (text + few-shots), but composable across agents and discoverable in the registry. Other actorCritic / simpleLoop users (guardrailed, ontology-builder, neo4j) would migrate the same way.
+
+### Code-mode execution environment
+- [ ] [#64](https://github.com/mknw/harness-playground/issues/64) — Investigate where `code-mode-<name>({script})` actually runs (Node container / V8 isolate / sandbox) and what host-side write capability the JS has. Blocks shipping any few-shot whose script writes to the host filesystem directly (currently the agent only writes via MCP tools — e.g. Scenario F writes to Neo4j via `write_neo4j_cypher`).
+
+### Result summarization
+- [ ] [#65](https://github.com/mknw/harness-playground/issues/65) — Skip `ResultDescribe` for `code-mode` factory calls. The factory result is a multi-KB tool spec (description, full JSON schema, all bound MCP tools enumerated) and the summary is fully derivable from `{ tool === 'code-mode', success === true, args.name, args.servers }`. Short-circuit to a templated `"Created code-mode tool '<name>' bound to servers: <list>."` without an LLM round-trip. Saves ~1–2K input tokens and one Groq dependency per factory call. Same shape as the LLM-generated summary — observability stays intact.
 
 ### UI
 See [ui/ROADMAP.md](../ui/ROADMAP.md) for frontend-specific work: graph editing, Actions tab, Documents tab, Graph Layout improvements.
@@ -33,6 +33,17 @@ See [ui/ROADMAP.md](../ui/ROADMAP.md) for frontend-specific work: graph editing,
 ---
 
 ## Completed
+
+### Code Mode as a dedicated agent (actorCritic + factory workflow) ✅
+The kg-agent gateway's `code-mode` tool is a **factory** — its `args_schema` is `{name, servers}`, and calling it registers a new `code-mode-<name>` tool bound to the listed MCP servers (the generated tool is what actually executes JS). The first implementation tried to wedge this into the default agent as a simpleLoop with a single-tool toolbelt; that approach blew up the first time the LLM (correctly) tried to call `mcp-find` to discover servers. Closes #12; unblocks #28 row 1.3.
+
+The redesign moves code_mode out of the default agent into its own:
+
+- **New `code-mode` agent** — `ui/src/lib/harness-client/examples/code-mode.server.ts`. Shape: `router → routes(chain(actorCritic, synthesizer))`. The router either responds directly (Router's `needs_tool: false` path) or dispatches to the `code_mode` route. The inner chain runs `actorCritic` against the curated mcp-* family (`mcp-find`, `mcp-add`, `code-mode`, `mcp-exec`); the synthesizer that follows reads only actor-side events via `viewConfig.eventTypes: ['controller_action', 'tool_call', 'tool_result']` so the critic's reasoning never leaks into the final response.
+- **Default agent untouched** apart from losing its `code_mode` wiring — neo4j + web_search routes remain identical.
+- **Dynamic-tool support** — actorCritic + SimpleLoopConfig gain an optional `dynamicToolPattern: RegExp` so `code-mode-<name>` tools created by the factory pass the allowlist without enumerating every name upfront.
+- **Cross-turn tool reuse** — `createActorControllerAdapter` accepts `{ toolNames, dynamicPattern, refreshOnCall }`; the code-mode agent sets `refreshOnCall: true` so each actor invocation re-lists the gateway and surfaces tools created in earlier turns of the same session (the gateway persists those tools for its process lifetime). A new `invalidateToolDescriptions()` export lets `actorCritic.server.ts` drop the module-level cache after a successful `code-mode` call so the freshly-registered tool appears in the actor's next prompt.
+- **Test** — `ui/src/__tests__/agents/code-mode.test.ts` drives the agent end-to-end with mocked LLM + MCP, exercising both the factory workflow (mcp-find → code-mode({name, servers}) → Return) and the direct-response branch.
 
 ### Conversation Persistence + Functional Sidebar ✅
 Replaced the in-memory session `Map` with a Postgres-backed store; sidebar now shows real threads that survive restarts. Closes #22 (commit `f6b2822`).

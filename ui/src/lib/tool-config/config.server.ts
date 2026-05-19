@@ -1,186 +1,115 @@
 /**
- * Tool Configuration State Management
+ * Tool Configuration — Per-Conversation Allowlist
  *
- * Manages execution mode, catalog selection, and tool availability
- * for the Tools tab interface.
+ * The code-mode agent's actor allowlist is curated per-conversation by the
+ * user from the Tools tab. Storage rides in the conversation's serialized
+ * UnifiedContext.data.codeModeAllowedTools field (JSONB column on the
+ * `conversations` table — see lib/db/conversations.server.ts). No new schema.
+ *
+ * Read path:   ToolsPanel resource → getCodeModeAllowedTools(sessionId)
+ * Write path:  Tools tab checkbox  → setCodeModeAllowedTools(sessionId, names)
+ * Agent path:  createPatterns(sid) builds a toolNamesProvider closure that
+ *              calls getCodeModeAllowedTools live per actor invocation
+ *              (see harness-client/examples/code-mode.server.ts).
  */
+"use server";
+
+import { deserializeContext, serializeContext } from "../harness-patterns";
+import type { UnifiedContext } from "../harness-patterns";
+import { listTools } from "../harness-patterns/mcp-client.server";
+import { loadSession, saveSession, type SessionData } from "../harness-client/session.server";
+import { getAuthenticatedUser } from "../auth/server";
+import { CODE_MODE_DEFAULTS, type CodeModeToolsState } from "./constants";
+
+// Constants and types live in ./constants because SolidStart's `"use server"`
+// transform rewrites every export from this file into an RPC stub on the
+// client — non-function exports come through as `undefined`-like, which
+// would break `MINIMAL_TOOLS.includes(...)` in ToolsPanel.tsx.
 
 // ============================================================================
-// Types (shared between client and server)
+// Auth helper (mirrors actions.server.ts:43)
 // ============================================================================
 
-/** Execution mode determines which planning flow to use */
-export type ExecutionMode = 'static' | 'code';
-
-/** Catalog mode determines which tools are available */
-export type CatalogMode = 'minimal' | 'global';
-
-/** Tool configuration state */
-export interface ToolConfig {
-  executionMode: ExecutionMode;
-  catalogMode: CatalogMode;
-  selectedTools: string[];
-}
-
-/** Default minimal tools - defined as function to avoid initialization issues */
-export function getMinimalTools(): string[] {
-  return [
-    'read_neo4j_cypher',
-    'write_neo4j_cypher',
-    'get_neo4j_schema',
-    'search',
-    'fetch_content'
-  ];
-}
-
-/** Default minimal tools constant (for client-side use) */
-export const MINIMAL_TOOLS = getMinimalTools();
-
-// ============================================================================
-// Server Functions
-// ============================================================================
-
-// Server-side state - lazily initialized to avoid SSR issues
-let _currentConfig: ToolConfig | null = null;
-
-function getCurrentConfig(): ToolConfig {
-  if (!_currentConfig) {
-    _currentConfig = {
-      executionMode: 'static',
-      catalogMode: 'minimal',
-      selectedTools: getMinimalTools()
-    };
+async function requireUser(): Promise<{ id: string }> {
+  if (import.meta.env.VITE_DEV_BYPASS_AUTH === "true") {
+    return { id: "dev-bypass-user" };
   }
-  return _currentConfig;
+  const u = await getAuthenticatedUser();
+  return { id: u.id };
 }
 
-/**
- * Get the current tool configuration
- */
-export async function getToolConfig(): Promise<ToolConfig> {
-  "use server";
-  const config = getCurrentConfig();
-  return { ...config };
-}
+// ============================================================================
+// Per-conversation allowlist
+// ============================================================================
 
 /**
- * Set the execution mode (static or code)
+ * Read the user's code-mode tool selection for a conversation, plus the live
+ * gateway tool list and the locked-on meta-tools.
+ *
+ * When the conversation has no persisted selection yet (new chat, never
+ * touched the Tools panel), `allowed` is the meta-tools default.
  */
-export async function setExecutionMode(mode: ExecutionMode): Promise<ToolConfig> {
-  "use server";
-  const config = getCurrentConfig();
-  config.executionMode = mode;
-  return { ...config };
-}
+export async function getCodeModeAllowedTools(
+  sessionId: string,
+): Promise<CodeModeToolsState> {
+  const user = await requireUser();
 
-/**
- * Set the catalog mode and update available tools
- * This triggers hot-swap via MCP Gateway
- */
-export async function setCatalogMode(mode: CatalogMode): Promise<ToolConfig> {
-  "use server";
-  const config = getCurrentConfig();
-  config.catalogMode = mode;
+  const [loaded, gateway] = await Promise.all([
+    loadSession(sessionId, user.id),
+    listTools(),
+  ]);
 
-  // When switching to minimal, reset to default minimal tools
-  if (mode === 'minimal') {
-    config.selectedTools = getMinimalTools();
+  const available = gateway.map((t) => t.name).sort();
+  const defaults = [...CODE_MODE_DEFAULTS];
+
+  let persisted: string[] | undefined;
+  if (loaded) {
+    try {
+      const ctx = deserializeContext<SessionData>(loaded.serializedContext);
+      persisted = ctx.data?.codeModeAllowedTools;
+    } catch {
+      // Corrupt blob — fall through to defaults.
+    }
   }
 
-  // Note: Actual MCP Gateway hot-swap would happen here
-  // For now, we just update the local state
-  // await hotSwapCatalog(mode);
-
-  return { ...config };
+  const allowed = persisted && persisted.length > 0 ? persisted : defaults;
+  return { allowed, available, defaults };
 }
 
 /**
- * Update selected tools
+ * Persist the user's code-mode tool selection for this conversation. Stores
+ * the array as-is on `ctx.data.codeModeAllowedTools`; the agent's runtime
+ * unions it with `CODE_MODE_DEFAULTS` so meta-tools are always reachable
+ * regardless of UI state.
+ *
+ * Throws when the conversation row doesn't exist yet (the user must send at
+ * least one message before configuring tools — the row is created by the
+ * first turn).
  */
-export async function setSelectedTools(tools: string[]): Promise<ToolConfig> {
-  "use server";
-  const config = getCurrentConfig();
-  config.selectedTools = [...tools];
-  return { ...config };
-}
-
-/**
- * Toggle a specific tool on/off
- */
-export async function toggleTool(toolName: string): Promise<ToolConfig> {
-  "use server";
-  const config = getCurrentConfig();
-
-  const index = config.selectedTools.indexOf(toolName);
-  if (index === -1) {
-    config.selectedTools.push(toolName);
-  } else {
-    config.selectedTools.splice(index, 1);
+export async function setCodeModeAllowedTools(
+  sessionId: string,
+  tools: string[],
+): Promise<void> {
+  const user = await requireUser();
+  const loaded = await loadSession(sessionId, user.id);
+  if (!loaded) {
+    throw new Error(
+      `Cannot set tool allowlist for unknown session ${sessionId}. Send a message first.`,
+    );
   }
 
-  return { ...config };
+  const ctx = deserializeContext<SessionData>(loaded.serializedContext) as UnifiedContext<SessionData>;
+  ctx.data = { ...(ctx.data ?? {}), codeModeAllowedTools: [...tools] };
+
+  await saveSession(sessionId, user.id, loaded.agentId, serializeContext(ctx));
 }
 
 /**
- * Reset to default configuration
- */
-export async function resetToolConfig(): Promise<ToolConfig> {
-  "use server";
-
-  _currentConfig = {
-    executionMode: 'static',
-    catalogMode: 'minimal',
-    selectedTools: getMinimalTools()
-  };
-
-  return { ..._currentConfig };
-}
-
-// ============================================================================
-// MCP Gateway Hot-Swap (placeholder)
-// ============================================================================
-
-/**
- * Hot-swap catalog via MCP Gateway
- * Uses mcp-add and mcp-remove to enable/disable servers without restart
- */
-export async function hotSwapCatalog(mode: CatalogMode): Promise<void> {
-  "use server";
-
-  // TODO: Implement actual MCP Gateway hot-swap
-  // This would call the MCP Gateway API to:
-  // 1. For 'global': enable all servers from catalog.yaml
-  // 2. For 'minimal': remove all except MINIMAL_TOOLS servers
-
-  console.log(`[ToolConfig] Hot-swap catalog to: ${mode}`);
-}
-
-/**
- * Get available tools from MCP Gateway
- * Returns tool names that can be selected in the UI
+ * Live list of tools the gateway exposes. Replaces the earlier hardcoded
+ * stub. Returns just the tool names; the Tools panel queries this resource
+ * directly when sessionId isn't known yet.
  */
 export async function getAvailableTools(): Promise<string[]> {
-  "use server";
-  const config = getCurrentConfig();
-
-  // TODO: Query MCP Gateway for actual available tools
-  // For now, return static list based on catalog mode
-
-  if (config.catalogMode === 'minimal') {
-    return getMinimalTools();
-  }
-
-  // Global mode - return expanded list
-  // In production, this would query the MCP Gateway
-  return [
-    ...getMinimalTools(),
-    // Additional tools would be fetched from catalog.yaml
-    'brave_search',
-    'firecrawl',
-    'github',
-    'linear',
-    'slack',
-    'notion'
-    // ... more from catalog
-  ];
+  const tools = await listTools();
+  return tools.map((t) => t.name).sort();
 }

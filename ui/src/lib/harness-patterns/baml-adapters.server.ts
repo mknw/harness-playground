@@ -258,7 +258,8 @@ function extractPromptTemplates(source: string, cache: Record<string, string>): 
 
 let toolDescCache: ToolDescription[] | null = null
 
-async function getToolDescriptions(): Promise<ToolDescription[]> {
+async function getToolDescriptions(refresh = false): Promise<ToolDescription[]> {
+  if (refresh) toolDescCache = null
   if (!toolDescCache) {
     const tools = await mcpListTools()
     toolDescCache = tools.map((t) => ({
@@ -270,11 +271,26 @@ async function getToolDescriptions(): Promise<ToolDescription[]> {
   return toolDescCache
 }
 
-/** Filter tool descriptions by tool names */
-async function filterToolDescriptions(toolNames: string[]): Promise<ToolDescription[]> {
-  const all = await getToolDescriptions()
+/** Drop the cached tool description list. Use after operations that mutate
+ *  the gateway's registered tools (e.g. the kg-agent `code-mode` factory)
+ *  so the next adapter call re-fetches a fresh listing and the LLM sees
+ *  newly-registered tools in subsequent attempts/turns. */
+export function invalidateToolDescriptions(): void {
+  toolDescCache = null
+}
+
+/** Filter tool descriptions by names plus an optional regex pattern for
+ *  dynamically-discoverable tools. `refresh: true` forces a fresh listTools()
+ *  call — needed when the toolset may have changed (e.g. the gateway created
+ *  a `code-mode-<name>` tool on a prior turn that should now be visible). */
+async function filterToolDescriptions(
+  toolNames: string[],
+  options?: { dynamicPattern?: RegExp; refresh?: boolean }
+): Promise<ToolDescription[]> {
+  const all = await getToolDescriptions(options?.refresh)
   const nameSet = new Set(toolNames)
-  return all.filter((t) => nameSet.has(t.name))
+  const pattern = options?.dynamicPattern
+  return all.filter((t) => nameSet.has(t.name) || (pattern?.test(t.name) ?? false))
 }
 
 // ============================================================================
@@ -418,41 +434,102 @@ export function annotateExpansions(refs: PriorResult[], turns: LoopTurn[]): Prio
 // Adapters for actorCritic
 // ============================================================================
 
-/** Code mode controller function that returns action + observability data */
+/** Code mode controller function that returns action + observability data.
+ *  `attemptNumber` / `maxAttempts` are passed by `actorCritic.server.ts` so the
+ *  actor's prompt can show "Attempt N of M" and prefer Return as budget runs low. */
 export type CodeModeControllerFnWithLLMData = (
   user_message: string,
   intent: string,
   available_tools: string[],
   previous_attempts: ScriptExecutionEvent[],
-  collector?: Collector
+  collector?: Collector,
+  attemptNumber?: number,
+  maxAttempts?: number
 ) => Promise<ControllerCallResult>
+
+/** Options for `createActorControllerAdapter` when the actor's toolset may
+ *  change at runtime (e.g. kg-agent's `code-mode` factory creates new tools
+ *  that should be visible to subsequent actor calls in the same session). */
+export interface ActorAdapterOptions {
+  /** Static tool names always available to the actor. Mutually exclusive
+   *  with `toolNamesProvider`; if both are set, the provider wins. */
+  toolNames?: string[]
+  /** Async closure resolved per actor invocation. Use this when the
+   *  allowlist is user-curated and may change between turns of the same
+   *  session (e.g. the code-mode agent reads `data.codeModeAllowedTools`
+   *  from the persisted conversation context). Adds one DB read per call. */
+  toolNamesProvider?: () => Promise<string[]>
+  /** Regex matched against gateway-listed tool names. Any match is added to
+   *  the actor's prompt alongside the static names. */
+  dynamicPattern?: RegExp
+  /** When true, re-list gateway tools on every actor call (instead of using
+   *  the module-level cache). Set this for agents whose toolset evolves
+   *  across turns. Adds one MCP roundtrip per actor invocation. */
+  refreshOnCall?: boolean
+  /** Optional domain-specific guidance prepended to the actor's prompt under
+   *  the `CONTEXT:` heading. Mirrors `createLoopControllerAdapter(contextPrefix)`.
+   *  Used by the code-mode agent to teach the actor about the factory
+   *  protocol, batching heuristics, etc. */
+  contextPrefix?: string
+  /** Optional FewShot examples rendered into the actor's prompt under
+   *  `EXAMPLES:`. Mirrors LoopController's few-shots. Keep small (2–4). */
+  fewShots?: FewShot[]
+}
 
 /**
  * Create a CodeModeControllerFn adapter that uses the generic ActorController.
  *
- * @param toolNames - Array of tool names available
- * @returns CodeModeControllerFnWithLLMData compatible with actorCritic pattern
+ * Two call shapes:
+ *   createActorControllerAdapter(['t1', 't2'])           // static toolset (back-compat)
+ *   createActorControllerAdapter({ toolNames, dynamicPattern, refreshOnCall })  // dynamic
+ *
+ * The dynamic form is for agents whose backend creates tools at runtime —
+ * the actor needs to see them in its prompt to call them, and a fresh
+ * listing per call ensures the LLM is aware of tools created in earlier
+ * turns of the same session (the kg-agent gateway persists them across turns).
  */
-export function createActorControllerAdapter(toolNames: string[]): CodeModeControllerFnWithLLMData {
+export function createActorControllerAdapter(
+  toolsOrOptions: string[] | ActorAdapterOptions
+): CodeModeControllerFnWithLLMData {
+  const options: ActorAdapterOptions = Array.isArray(toolsOrOptions)
+    ? { toolNames: toolsOrOptions }
+    : toolsOrOptions
+
   return async (
     user_message: string,
     intent: string,
     available_tools: string[],
     previous_attempts: ScriptExecutionEvent[],
-    collector?: Collector
+    collector?: Collector,
+    attemptNumber?: number,
+    maxAttempts?: number,
   ): Promise<ControllerCallResult> => {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
 
-    // Get tool descriptions
-    const tools = await filterToolDescriptions(toolNames)
+    // Resolve the actor's allowlist. `toolNamesProvider` (if set) is called
+    // fresh per invocation so user-curated selections persisted to the
+    // session context surface live; otherwise fall back to the static array.
+    const names = options.toolNamesProvider
+      ? await options.toolNamesProvider()
+      : options.toolNames ?? []
 
-    // Convert ScriptExecutionEvent to Attempt format
+    // Get tool descriptions — optionally refresh + include pattern matches.
+    const tools = await filterToolDescriptions(names, {
+      dynamicPattern: options.dynamicPattern,
+      refresh: options.refreshOnCall,
+    })
+
+    // Convert ScriptExecutionEvent to Attempt format. `toolName` records the
+    // actor's actual tool_name per push — so a rejected `mcp-exec` attempt
+    // renders as `Action: mcp-exec(<bad args>)` instead of the misleading
+    // `code-mode(<empty>)` it used to show. Falls back to `'code-mode'` for
+    // legacy callers that don't set `toolName`.
     const attempts: Attempt[] = previous_attempts.map((event, i) => ({
       n: i + 1,
       action: {
         reasoning: '',
-        tool_name: 'code-mode',
+        tool_name: event.toolName ?? 'code-mode',
         tool_args: event.script,
         status: event.error ? 'error' : 'success',
         is_final: false
@@ -462,16 +539,50 @@ export function createActorControllerAdapter(toolNames: string[]): CodeModeContr
       feedback: undefined
     }))
 
-    const variables = { user_message, intent, tools, attempts }
+    const context = options.contextPrefix
+    const fewShots = options.fewShots
+    const variables = {
+      user_message,
+      intent,
+      tools,
+      attempts,
+      context,
+      few_shots: fewShots,
+      attempt_n: attemptNumber,
+      max_attempts: maxAttempts,
+    }
 
-    // Call with or without collector
+    // Call with or without collector.
+    // On BamlValidationError, BAML's built-in fallback won't retry (it only
+    // covers network/API errors). Manually escalate: first to GroqGPT120B
+    // (fast, reliable structured output at moderate context), then to
+    // GroqFast as a last resort. Mirrors createLoopControllerAdapter above
+    // — without this, a single Groq structured-output failure on the very
+    // first actor call kills the whole code-mode loop with no retry (see
+    // .harness-logs/parsing-error.json). Non-validation failures (network,
+    // pre-call errors) are wrapped as LLMCallError so the catching pattern
+    // gets the captured prompt/variables for the observability panel.
     let action: ControllerAction
     try {
       action = collector
-        ? await b.ActorController(user_message, intent, tools, attempts, { collector })
-        : await b.ActorController(user_message, intent, tools, attempts)
+        ? await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, { collector })
+        : await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts)
     } catch (e) {
-      throw wrapAsLLMCallError(e, 'ActorController', variables, startTime, collector)
+      if (!(e instanceof BamlValidationError)) {
+        throw wrapAsLLMCallError(e, 'ActorController', variables, startTime, collector)
+      }
+      try {
+        action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, collector ? { collector, client: 'GroqGPT120B' } : { client: 'GroqGPT120B' })
+      } catch (e2) {
+        if (!(e2 instanceof BamlValidationError)) {
+          throw wrapAsLLMCallError(e2, 'ActorController', variables, startTime, collector)
+        }
+        try {
+          action = await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, collector ? { collector, client: 'GroqFast' } : { client: 'GroqFast' })
+        } catch (e3) {
+          throw wrapAsLLMCallError(e3, 'ActorController', variables, startTime, collector)
+        }
+      }
     }
 
     // Extract LLM call data if collector present
@@ -497,12 +608,14 @@ export function createCriticAdapter(): CriticFnWithLLMData {
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
 
-    // Convert ScriptExecutionEvent to Attempt format
+    // Convert ScriptExecutionEvent to Attempt format. See the actor adapter
+    // above for why `toolName` is preferred over the legacy `'code-mode'`
+    // placeholder.
     const attempts: Attempt[] = previous_attempts.map((event, i) => ({
       n: i + 1,
       action: {
         reasoning: '',
-        tool_name: 'code-mode',
+        tool_name: event.toolName ?? 'code-mode',
         tool_args: event.script,
         status: event.error ? 'error' : 'success',
         is_final: false
@@ -597,4 +710,18 @@ export function createRedisController(toolNames: string[]): ControllerFnWithLLMD
 /** Database controller */
 export function createDatabaseController(toolNames: string[]): ControllerFnWithLLMData {
   return createLoopControllerAdapter(toolNames)
+}
+
+/** Code-mode controller — drives a simpleLoop whose only tool is the MCP
+ *  `code-mode` JS executor. The contextPrefix tells the LLM to author a JS
+ *  script (passed via tool_args) that the gateway runs against the available
+ *  MCP tools, then returns the script's output as a normal tool_result. */
+export function createCodeModeController(toolNames: string[]): ControllerFnWithLLMData {
+  return createLoopControllerAdapter(
+    toolNames,
+    'You compose JavaScript that orchestrates multiple MCP tools in a single turn. ' +
+    'Call the `code-mode` tool with tool_args = { "script": "<your JS>" }. ' +
+    'The script runs server-side with access to the gateway\'s tools; its return ' +
+    'value comes back as the tool_result. Use Return when the result answers the user.'
+  )
 }
