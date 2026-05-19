@@ -16,7 +16,7 @@ function ActorController(
   attempt_n: int?,
   max_attempts: int?
 ) -> ControllerAction {
-  client ControllerFallback
+  client ControllerAnthropic
   prompt #"
     {{ _.role("system") }}
     You are an AI agent that accomplishes tasks by calling tools.
@@ -44,7 +44,11 @@ function ActorController(
     - {{ tool.name }}: {{ tool.description }}
       {% if tool.args_schema %}  Args: {{ tool.args_schema }}{% endif %}
     {% endfor %}
-    - Return: Signal task completion (tool_args = final answer or summary)
+
+    The critic evaluates whether the data you've gathered is sufficient and
+    decides when the task is complete — you don't need a "Return" tool. Focus
+    on calling the right tool to make progress; the loop exits when the critic
+    says so.
 
     {% if attempts|length > 0 %}
     PREVIOUS ATTEMPTS:
@@ -64,16 +68,16 @@ function ActorController(
     {% if attempt_n is not none and max_attempts is not none %}
     BUDGET: Attempt {{ attempt_n }} of {{ max_attempts }}.
     {% if attempt_n >= max_attempts - 1 %}
-    This is your final or near-final attempt. Prefer `Return` with whatever
-    partial results you have over starting a new tool chain.
+    This is your final or near-final attempt. Call the tool most likely to
+    produce a useful partial answer — the critic will decide whether to accept.
+    Do NOT start a fresh tool chain that won't complete in time.
     {% endif %}
     {% endif %}
 
     {{ _.role("user") }}
     {{ user_message }}
 
-    {{ _.role("assistant") }}
-    Attempt {{ attempts|length + 1 }}.
+    You are on attempt {{ attempts|length + 1 }}. Respond with the next action.
 
     {{ ctx.output_format }}
   "#
@@ -87,7 +91,7 @@ function Critic(
   intent: string,
   attempts: Attempt[]
 ) -> CriticResult {
-  client CriticFallback
+  client CriticAnthropic
   prompt #"
     {{ _.role("system") }}
     You evaluate whether task execution results satisfy the user's intent.

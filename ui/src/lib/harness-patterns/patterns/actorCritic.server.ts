@@ -118,17 +118,17 @@ export function actorCritic<T extends ActorCriticData>(
           actorLlmCall
         )
 
-        // Check if done (is_final flag OR tool_name === 'Return'). Return
-        // early — `break` would fall through to the "Max retries exceeded"
-        // tracker below and spuriously emit an error event even on a clean
-        // exit. (Pre-existing bug surfaced by the code-mode retry-budget test.)
-        if (action.is_final || action.tool_name === 'Return') {
-          scope.data = {
-            ...scope.data,
-            lastAction: action,
-          }
-          return scope
-        }
+        // P0 (Return-from-critic redesign): the actor used to be able to exit
+        // the loop by calling `tool_name === 'Return'` or setting `is_final`.
+        // We removed that — sufficiency-to-exit is the critic's job by
+        // definition, and the dual responsibility let the actor self-terminate
+        // with fabricated data (see `.harness-logs/one-turn-codemode.json`).
+        // If the actor still proposes `Return` (or anything else not on the
+        // allowlist), it falls through to the allowlist check below, which
+        // rejects it as "Tool not allowed: Return" and continues the loop —
+        // letting the critic actually evaluate the next real tool call.
+        // `is_final` is preserved on `ControllerAction` for backwards compat
+        // but is now advisory; nothing in the loop honours it.
 
         // Validate tool. The strict allowlist is augmented by an optional
         // `dynamicToolPattern` regex so agents whose backends create tools at

@@ -10,7 +10,7 @@
 // so the prompt rules are best-effort, not load-bearing.
 
 function GenerateConversationTitle(user_message: string) -> string {
-  client DescribeFallback
+  client DescribeAnthropic
   prompt #"
     {{ _.role("system") }}
     Generate a 3-to-5-word title summarizing what this conversation is

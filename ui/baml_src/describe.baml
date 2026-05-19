@@ -8,7 +8,7 @@ function ResultDescribe(
   reasoning: string,
   result: string
 ) -> string {
-  client DescribeFallback
+  client DescribeAnthropic
   prompt #"
     {{ _.role("system") }}
     You are a concise data summarizer. Summarize what the following tool call

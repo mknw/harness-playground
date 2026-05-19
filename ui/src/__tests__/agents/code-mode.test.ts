@@ -100,7 +100,7 @@ describe('code-mode agent — router → routes(chain(actorCritic, synth))', () 
       response: '',
     })
 
-    // Three actor attempts: find servers → create code-mode tool → done.
+    // Three actor attempts: find servers → create code-mode tool → invoke it.
     actorController
       .mockResolvedValueOnce(
         mockAction({
@@ -116,12 +116,19 @@ describe('code-mode agent — router → routes(chain(actorCritic, synth))', () 
           tool_args: JSON.stringify({ name: 'graph-search', servers: ['neo4j-cypher', 'fetch'] }),
         }),
       )
-      .mockResolvedValueOnce(mockFinalAction('Done.'))
+      .mockResolvedValueOnce(
+        mockAction({
+          reasoning: 'Invoke the registered tool with a query script.',
+          tool_name: 'code-mode-graph-search',  // matches dynamicToolPattern /^code-mode-/
+          tool_args: '{"script":"return ok;"}',
+        }),
+      )
 
-    // First two attempts (mcp-find, code-mode factory) are setup steps —
-    // critic must say "not done yet" so the loop continues to the next actor
-    // call. After the factory creates the tool, the actor returns `Return` on
-    // its next call, which breaks the loop at the top before the critic runs.
+    // First two attempts (mcp-find, code-mode factory) are setup steps — critic
+    // says "not done yet" so the loop continues to the next actor call. On the
+    // third attempt the actor invokes the registered tool; the critic accepts
+    // the result (post-P0 Return-from-critic: the loop exits when the critic
+    // says `is_sufficient: true`, never when the actor calls "Return").
     critic
       .mockResolvedValueOnce(mockCriticResult({ is_sufficient: false, explanation: 'Need to create code-mode tool' }))
       .mockResolvedValueOnce(mockCriticResult({ is_sufficient: false, explanation: 'Need to call generated tool' }))
@@ -241,25 +248,30 @@ describe('code-mode agent — retry budget + per-conversation allowlist', () => 
   })
 
   it('survives more than 3 non-final turns (maxRetries: 8 vs default 3)', async () => {
-    // Five non-final actor turns, then the default (mockResolvedValue) flips
-    // to final so any call past the 5th returns Return and breaks the loop.
-    // Default maxRetries=3 (settings.ts:18) would emit "Max retries (3)
-    // exceeded" at turn 3. With maxRetries: 8 on the code-mode loop, the
-    // loop reaches the final action.
+    // Five setup/exploration actor turns, then the default (mockResolvedValue)
+    // flips to a real tool action that the critic eventually accepts. Default
+    // maxRetries=3 (settings.ts:18) would emit "Max retries (3) exceeded" at
+    // turn 3. With maxRetries: 8 on the code-mode loop, the loop reaches the
+    // turn where the critic returns is_sufficient: true (post-P0: only the
+    // critic can exit the loop).
     actorController
       .mockResolvedValueOnce(mockAction({ tool_name: 'mcp-find', tool_args: '{}' }))
       .mockResolvedValueOnce(mockAction({ tool_name: 'mcp-find', tool_args: '{}' }))
       .mockResolvedValueOnce(mockAction({ tool_name: 'mcp-add', tool_args: '{"name":"memory"}' }))
       .mockResolvedValueOnce(mockAction({ tool_name: 'mcp-add', tool_args: '{"name":"web_search"}' }))
-      .mockResolvedValueOnce(
+      .mockResolvedValue(
         mockAction({
           tool_name: 'code-mode',
           tool_args: JSON.stringify({ name: 'graph-search', servers: ['neo4j-cypher'] }),
         }),
       )
-      .mockResolvedValue(mockFinalAction('All steps complete.'))
 
-    critic.mockResolvedValue(mockCriticResult({ is_sufficient: false, explanation: 'keep going' }))
+    critic
+      .mockResolvedValueOnce(mockCriticResult({ is_sufficient: false, explanation: 'keep going' }))
+      .mockResolvedValueOnce(mockCriticResult({ is_sufficient: false, explanation: 'keep going' }))
+      .mockResolvedValueOnce(mockCriticResult({ is_sufficient: false, explanation: 'keep going' }))
+      .mockResolvedValueOnce(mockCriticResult({ is_sufficient: false, explanation: 'keep going' }))
+      .mockResolvedValue(mockCriticResult({ is_sufficient: true }))
     synthesize.mockResolvedValue('All steps complete.')
 
     const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
@@ -299,7 +311,10 @@ describe('code-mode agent — retry budget + per-conversation allowlist', () => 
       agentId: 'code-mode',
     })
 
-    actorController.mockResolvedValue(mockFinalAction('Done.'))
+    // Post-P0: actor exits via critic, not via Return. Use a real tool action
+    // and let the critic say sufficient after one turn.
+    actorController.mockResolvedValue(mockAction({ tool_name: 'code-mode', tool_args: '{"name":"x","servers":["x"]}' }))
+    critic.mockResolvedValue(mockCriticResult({ is_sufficient: true }))
 
     const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
     const { harness } = await import('../../lib/harness-patterns/harness.server')

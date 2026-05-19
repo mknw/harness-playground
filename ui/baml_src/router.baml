@@ -7,7 +7,7 @@ function Router(
   routes: RouteOption[],
   history: Message[]
 ) -> RoutingResult {
-  client RouterFallback
+  client RouterAnthropic
   prompt #"
     {{ _.role("system") }}
     Analyze the user message and determine routing.
@@ -16,6 +16,15 @@ function Router(
     {% for route in routes %}
     - {{ route.name }}: {{ route.description }}
     {% endfor %}
+
+    ROUTING RULES:
+    - Set needs_tool=true if the message requires calling a tool or route
+    - Set route to the matching route name (null if no tool needed)
+    - Set needs_tool=false ONLY for greetings, thanks, help requests, or simple clarifications
+    - Any question about data, graphs, databases, stored information, or domain-specific lookups MUST route to the appropriate tool (needs_tool=true)
+    - If needs_tool=true, set response to a SHORT status like "Looking into that..." — do NOT attempt to answer the question yourself
+    - If needs_tool=false, provide a direct conversational reply
+    - NEVER generate a substantive answer when routing to a tool — the tool will provide the real answer
 
     {% if history|length > 0 %}
     CONVERSATION HISTORY (most recent last):
@@ -27,16 +36,6 @@ function Router(
 
     {{ _.role("user") }}
     {{ message }}
-
-    {{ _.role("assistant") }}
-    ROUTING RULES:
-    - Set needs_tool=true if the message requires calling a tool or route
-    - Set route to the matching route name (null if no tool needed)
-    - Set needs_tool=false ONLY for greetings, thanks, help requests, or simple clarifications
-    - Any question about data, graphs, databases, stored information, or domain-specific lookups MUST route to the appropriate tool (needs_tool=true)
-    - If needs_tool=true, set response to a SHORT status like "Looking into that..." — do NOT attempt to answer the question yourself
-    - If needs_tool=false, provide a direct conversational reply
-    - NEVER generate a substantive answer when routing to a tool — the tool will provide the real answer
 
     {{ ctx.output_format }}
   "#

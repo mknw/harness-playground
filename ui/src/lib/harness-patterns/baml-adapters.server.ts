@@ -23,6 +23,7 @@ import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot } from '.
 import { listTools as mcpListTools } from './mcp-client.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
+import { clientOverrideFor } from './clients.server'
 
 assertServerOnImport()
 
@@ -339,16 +340,28 @@ export function createLoopControllerAdapter(
     const variables = { user_message, intent, tools, turns, context, turns_previous_runs: priorResults, few_shots: fewShots }
 
     // Call with or without collector.
-    // On BamlValidationError, BAML's built-in fallback won't retry (it only covers network/API
-    // errors). Manually escalate: first to GroqGPT120B (fast, reliable structured output at
-    // moderate context), then to GroqFast as a last resort.
+    //
+    // Default (no override): BAML routes the call to `ControllerAnthropic` —
+    // its declared client in `actorCritic.baml` / `simpleLoop.baml`. Anthropic
+    // models rarely fail structured output, so the manual Groq fallback below
+    // is unhelpful and would defeat the Anthropic-by-default purpose.
+    //
+    // `USE_MIXED_CHAINS=1`: `clientOverrideFor('controller')` returns
+    // `{ client: 'ControllerFallback' }`, swapping in the mixed Groq /
+    // OpenRouter / OpenAI chain. Groq's gpt-oss-120b has a known structured-
+    // output failure on turn 2+ with larger context — manual escalation to
+    // GroqGPT120B → GroqFast kicks in on `BamlValidationError` here, because
+    // BAML's built-in fallback only retries on network/API errors.
+    const clientOverride = clientOverrideFor('controller')
+    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverride }
+    const hasBaseOpts = Object.keys(baseOpts).length > 0
     let action: ControllerAction
     try {
-      action = collector
-        ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, { collector })
+      action = hasBaseOpts
+        ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, baseOpts)
         : await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots)
     } catch (e) {
-      if (!(e instanceof BamlValidationError)) {
+      if (!(e instanceof BamlValidationError) || !clientOverride) {
         throw wrapAsLLMCallError(e, 'LoopController', variables, startTime, collector)
       }
       try {
@@ -553,22 +566,30 @@ export function createActorControllerAdapter(
     }
 
     // Call with or without collector.
-    // On BamlValidationError, BAML's built-in fallback won't retry (it only
-    // covers network/API errors). Manually escalate: first to GroqGPT120B
-    // (fast, reliable structured output at moderate context), then to
-    // GroqFast as a last resort. Mirrors createLoopControllerAdapter above
-    // — without this, a single Groq structured-output failure on the very
-    // first actor call kills the whole code-mode loop with no retry (see
-    // .harness-logs/parsing-error.json). Non-validation failures (network,
-    // pre-call errors) are wrapped as LLMCallError so the catching pattern
-    // gets the captured prompt/variables for the observability panel.
+    //
+    // Default (no override): BAML routes to `ControllerAnthropic` (declared
+    // in `actorCritic.baml`). Anthropic models rarely fail structured output,
+    // so the manual Groq fallback below is skipped.
+    //
+    // `USE_MIXED_CHAINS=1`: `clientOverrideFor('controller')` swaps in
+    // `ControllerFallback` (the mixed Groq/OpenRouter/OpenAI chain). Groq's
+    // gpt-oss-120b has a known structured-output failure on turn 2+ — manual
+    // escalation to GroqGPT120B → GroqFast kicks in on `BamlValidationError`
+    // here, mirroring `createLoopControllerAdapter` above. Without this, a
+    // single failure on the first actor call would kill the loop (see
+    // `.harness-logs/parsing-error.json`). Non-validation failures (network,
+    // pre-call) are wrapped as `LLMCallError` so the observability panel
+    // keeps the captured prompt/variables drill-down.
+    const clientOverride = clientOverrideFor('controller')
+    const baseOpts = { ...(collector ? { collector } : {}), ...clientOverride }
+    const hasBaseOpts = Object.keys(baseOpts).length > 0
     let action: ControllerAction
     try {
-      action = collector
-        ? await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, { collector })
+      action = hasBaseOpts
+        ? await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, baseOpts)
         : await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts)
     } catch (e) {
-      if (!(e instanceof BamlValidationError)) {
+      if (!(e instanceof BamlValidationError) || !clientOverride) {
         throw wrapAsLLMCallError(e, 'ActorController', variables, startTime, collector)
       }
       try {
@@ -627,11 +648,14 @@ export function createCriticAdapter(): CriticFnWithLLMData {
 
     const variables = { intent, attempts }
 
-    // Call with or without collector
+    // Call with or without collector. Anthropic override applied when
+    // `USE_ANTHROPIC_ONLY=1` — routes through `CriticAnthropic`.
+    const criticOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('critic') }
+    const hasCriticOpts = Object.keys(criticOpts).length > 0
     let result: CriticResult
     try {
-      result = collector
-        ? await b.Critic(intent, attempts, { collector })
+      result = hasCriticOpts
+        ? await b.Critic(intent, attempts, criticOpts)
         : await b.Critic(intent, attempts)
     } catch (e) {
       throw wrapAsLLMCallError(e, 'Critic', variables, startTime, collector)
@@ -662,7 +686,10 @@ export async function describeToolResultOp(
 ): Promise<string> {
   try {
     const { b } = await import('../../../baml_client')
-    return await b.ResultDescribe(tool, toolArgs, reasoning, result)
+    const describeOpts = clientOverrideFor('describe')
+    return describeOpts
+      ? await b.ResultDescribe(tool, toolArgs, reasoning, result, describeOpts)
+      : await b.ResultDescribe(tool, toolArgs, reasoning, result)
   } catch {
     return ''
   }

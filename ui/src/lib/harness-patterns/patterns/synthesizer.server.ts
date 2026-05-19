@@ -24,6 +24,7 @@ import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { extractFailureLLMCallData } from '../baml-adapters.server'
+import { clientOverrideFor } from '../clients.server'
 
 assertServerOnImport()
 
@@ -87,15 +88,19 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
     errorMessage: input.errorMessage
   }
 
-  // Call with or without collector, including error context
-  const content = collector
+  // Call with or without collector, including error context.
+  // Anthropic override applied when `USE_ANTHROPIC_ONLY=1` — routes through
+  // `SynthesizerAnthropic` (Sonnet 4.6 → Haiku 4.5).
+  const synthOpts = { ...(collector ? { collector } : {}), ...clientOverrideFor('synth') }
+  const hasSynthOpts = Object.keys(synthOpts).length > 0
+  const content = hasSynthOpts
     ? await b.Synthesize(
         input.userMessage,
         input.intent,
         trimmedTurns,
         input.hasError ?? false,
         input.errorMessage,
-        { collector }
+        synthOpts
       )
     : await b.Synthesize(
         input.userMessage,
