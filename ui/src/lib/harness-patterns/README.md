@@ -155,10 +155,10 @@ interface ConfiguredPattern<T> {
 // Controller output (standardized across all BAML controllers)
 interface ControllerAction {
   reasoning: string      // Chain-of-thought
-  tool_name: string      // Tool to call or 'Return'
+  tool_name: string      // Tool to call. simpleLoop: `'Return'` exits the loop. actorCritic: actor's `'Return'` is ignored — the critic alone owns termination.
   tool_args: string      // JSON payload
   status: string         // User-facing message
-  is_final: boolean      // Exit loop flag
+  is_final: boolean      // simpleLoop only — actorCritic ignores it on the actor side
 }
 
 // Critic result for actor-critic pattern
@@ -797,14 +797,14 @@ BAML Inputs (ActorController):
   tools        : ToolDescription[]← MCP listTools()
   attempts     : Attempt[]        ← assembled from scope events per attempt
 
-BAML Return → ControllerAction (same as simpleLoop)
+BAML Return → ControllerAction (same shape as simpleLoop; actor's `is_final` / `tool_name: 'Return'` are *not* honored — exit is the critic's call)
 
 BAML Inputs (Critic):
   intent   : string      ← same intent
   attempts : Attempt[]   ← same assembled attempts
 
 BAML Return → CriticResult:
-  is_sufficient      : bool    → if true, exits retry loop
+  is_sufficient      : bool    → sole termination signal; true exits the retry loop
   explanation        : string  → logged
   suggested_approach : string? → forwarded as next Attempt.feedback
 ```
