@@ -1,0 +1,321 @@
+/**
+ * Document Store Tests (Issue #6)
+ *
+ * Exercises the Redis-backed document storage layer against an in-memory
+ * fake `callTool` that emulates the subset of Redis MCP tools the store uses
+ * (json_set / json_get / sadd / smembers / srem / delete), including the
+ * RedisJSON `$`-path array wrapping the real gateway returns.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// The store self-asserts server-only on import; stub it out under jsdom.
+vi.mock('../../lib/harness-patterns/assert.server', () => ({
+  assertServerOnImport: vi.fn(),
+  assertServer: vi.fn(),
+}))
+
+// Stub the MCP client module so importing the store never reaches a real
+// gateway. Tests inject their own fake callTool per-call instead.
+vi.mock('../../lib/harness-patterns/mcp-client.server', () => ({
+  callTool: vi.fn(async () => ({ success: false, data: null, error: 'no gateway' })),
+}))
+
+import {
+  storeDocument,
+  getDocument,
+  getDocumentMeta,
+  listDocuments,
+  setDocumentFlags,
+  deleteDocument,
+  toPriorResult,
+  DEFAULT_TTL_SECONDS,
+  MAX_CONTENT_BYTES,
+  type CallTool,
+} from '../../lib/document-store.server'
+import type { ToolCallResult } from '../../lib/harness-patterns/types'
+
+// ----------------------------------------------------------------------------
+// Fake Redis backing a fake callTool
+// ----------------------------------------------------------------------------
+
+interface FakeRedis {
+  json: Map<string, unknown>
+  sets: Map<string, Set<string>>
+  expires: Map<string, number>
+}
+
+function makeFakeRedis(): { redis: FakeRedis; callTool: CallTool & { calls: Array<[string, Record<string, unknown>]> } } {
+  const redis: FakeRedis = { json: new Map(), sets: new Map(), expires: new Map() }
+  const calls: Array<[string, Record<string, unknown>]> = []
+
+  const fn = (async (name: string, args: Record<string, unknown>): Promise<ToolCallResult> => {
+    calls.push([name, args])
+    switch (name) {
+      case 'json_set': {
+        const key = args.name as string
+        // The store stringifies the doc into `value`.
+        redis.json.set(key, JSON.parse(args.value as string))
+        if (typeof args.expire_seconds === 'number') redis.expires.set(key, args.expire_seconds)
+        return { success: true, data: 'OK' }
+      }
+      case 'json_get': {
+        const key = args.name as string
+        if (!redis.json.has(key)) return { success: true, data: null }
+        // Emulate RedisJSON: `$` path returns the value wrapped in an array.
+        return { success: true, data: [redis.json.get(key)] }
+      }
+      case 'json_del':
+      case 'delete': {
+        const key = (args.key ?? args.name) as string
+        redis.json.delete(key)
+        redis.expires.delete(key)
+        return { success: true, data: 1 }
+      }
+      case 'sadd': {
+        const key = args.name as string
+        if (!redis.sets.has(key)) redis.sets.set(key, new Set())
+        redis.sets.get(key)!.add(args.value as string)
+        if (typeof args.expire_seconds === 'number') redis.expires.set(key, args.expire_seconds)
+        return { success: true, data: 1 }
+      }
+      case 'smembers': {
+        const key = args.name as string
+        return { success: true, data: Array.from(redis.sets.get(key) ?? []) }
+      }
+      case 'srem': {
+        const key = args.name as string
+        redis.sets.get(key)?.delete(args.value as string)
+        return { success: true, data: 1 }
+      }
+      default:
+        return { success: false, data: null, error: `unhandled tool ${name}` }
+    }
+  }) as CallTool & { calls: Array<[string, Record<string, unknown>]> }
+  fn.calls = calls
+  return { redis, callTool: fn }
+}
+
+// ----------------------------------------------------------------------------
+
+describe('document-store (Issue #6)', () => {
+  let fake: ReturnType<typeof makeFakeRedis>
+
+  beforeEach(() => {
+    fake = makeFakeRedis()
+  })
+
+  describe('storeDocument', () => {
+    it('stores content + metadata and returns a complete document', async () => {
+      const before = Date.now()
+      const doc = await storeDocument(
+        { sessionId: 's1', filename: 'notes.txt', mimeType: 'text/plain', content: 'hello world' },
+        fake.callTool,
+      )
+
+      expect(doc.id).toBeTruthy()
+      expect(doc.sessionId).toBe('s1')
+      expect(doc.filename).toBe('notes.txt')
+      expect(doc.mimeType).toBe('text/plain')
+      expect(doc.content).toBe('hello world')
+      expect(doc.size).toBe(Buffer.byteLength('hello world', 'utf8'))
+      expect(doc.uploadedAt).toBeGreaterThanOrEqual(before)
+    })
+
+    it('writes to the namespaced key and registers the session index with a TTL', async () => {
+      const doc = await storeDocument(
+        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x', id: 'fixed-id' },
+        fake.callTool,
+      )
+
+      const jsonSet = fake.callTool.calls.find((c) => c[0] === 'json_set')!
+      expect(jsonSet[1].name).toBe('stash:doc:s1:fixed-id')
+      expect(jsonSet[1].expire_seconds).toBe(DEFAULT_TTL_SECONDS)
+
+      const sadd = fake.callTool.calls.find((c) => c[0] === 'sadd')!
+      expect(sadd[1].name).toBe('stash:docs:s1')
+      expect(sadd[1].value).toBe('fixed-id')
+      expect(sadd[1].expire_seconds).toBe(DEFAULT_TTL_SECONDS)
+      expect(doc.id).toBe('fixed-id')
+    })
+
+    it('honours a custom TTL override', async () => {
+      await storeDocument(
+        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x', ttlSeconds: 60 },
+        fake.callTool,
+      )
+      const jsonSet = fake.callTool.calls.find((c) => c[0] === 'json_set')!
+      expect(jsonSet[1].expire_seconds).toBe(60)
+    })
+
+    it('rejects content larger than the size limit', async () => {
+      const huge = 'a'.repeat(MAX_CONTENT_BYTES + 1)
+      await expect(
+        storeDocument({ sessionId: 's1', filename: 'big', mimeType: 'text/plain', content: huge }, fake.callTool),
+      ).rejects.toThrow(/too large/i)
+    })
+
+    it('throws when the Redis write fails', async () => {
+      const failing: CallTool = async () => ({ success: false, data: null, error: 'boom' })
+      await expect(
+        storeDocument({ sessionId: 's1', filename: 'a', mimeType: 'text/plain', content: 'x' }, failing),
+      ).rejects.toThrow(/boom/)
+    })
+  })
+
+  describe('getDocument / getDocumentMeta', () => {
+    it('round-trips a stored document, unwrapping the RedisJSON array', async () => {
+      const stored = await storeDocument(
+        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'payload' },
+        fake.callTool,
+      )
+      const got = await getDocument('s1', stored.id, fake.callTool)
+      expect(got).toEqual(stored)
+    })
+
+    it('returns null for a missing document', async () => {
+      expect(await getDocument('s1', 'nope', fake.callTool)).toBeNull()
+    })
+
+    it('getDocumentMeta omits the content field', async () => {
+      const stored = await storeDocument(
+        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'secret' },
+        fake.callTool,
+      )
+      const meta = await getDocumentMeta('s1', stored.id, fake.callTool)
+      expect(meta).not.toBeNull()
+      expect((meta as unknown as Record<string, unknown>).content).toBeUndefined()
+      expect(meta!.filename).toBe('a.txt')
+    })
+  })
+
+  describe('listDocuments', () => {
+    it('lists metadata newest-first and never includes content', async () => {
+      const d1 = await storeDocument(
+        { sessionId: 's1', filename: 'first.txt', mimeType: 'text/plain', content: 'one' },
+        fake.callTool,
+      )
+      // Force a later timestamp for the second doc.
+      vi.spyOn(Date, 'now').mockReturnValue(d1.uploadedAt + 1000)
+      const d2 = await storeDocument(
+        { sessionId: 's1', filename: 'second.txt', mimeType: 'text/plain', content: 'two' },
+        fake.callTool,
+      )
+      vi.restoreAllMocks()
+
+      const list = await listDocuments('s1', fake.callTool)
+      expect(list.map((d) => d.id)).toEqual([d2.id, d1.id])
+      expect(list.every((d) => !('content' in d))).toBe(true)
+    })
+
+    it('prunes stale index entries whose keys have expired', async () => {
+      const doc = await storeDocument(
+        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x' },
+        fake.callTool,
+      )
+      // Simulate the doc key expiring while the index still references it.
+      fake.redis.json.delete(`stash:doc:s1:${doc.id}`)
+
+      const list = await listDocuments('s1', fake.callTool)
+      expect(list).toEqual([])
+      // The index entry should have been removed.
+      expect(fake.callTool.calls.some((c) => c[0] === 'srem' && c[1].value === doc.id)).toBe(true)
+    })
+
+    it('returns [] for an empty/unknown session', async () => {
+      expect(await listDocuments('ghost', fake.callTool)).toEqual([])
+    })
+  })
+
+  describe('setDocumentFlags', () => {
+    it('hides and archives a document in place', async () => {
+      const doc = await storeDocument(
+        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x' },
+        fake.callTool,
+      )
+
+      const hidden = await setDocumentFlags('s1', doc.id, { hidden: true }, fake.callTool)
+      expect(hidden!.hidden).toBe(true)
+
+      const archived = await setDocumentFlags('s1', doc.id, { archived: true, hidden: false }, fake.callTool)
+      expect(archived!.archived).toBe(true)
+      expect(archived!.hidden).toBe(false)
+
+      // Persisted, not just returned.
+      const reread = await getDocument('s1', doc.id, fake.callTool)
+      expect(reread!.archived).toBe(true)
+    })
+
+    it('returns null for a missing document', async () => {
+      expect(await setDocumentFlags('s1', 'nope', { hidden: true }, fake.callTool)).toBeNull()
+    })
+  })
+
+  describe('deleteDocument', () => {
+    it('removes the document and its index entry', async () => {
+      const doc = await storeDocument(
+        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x' },
+        fake.callTool,
+      )
+      await deleteDocument('s1', doc.id, fake.callTool)
+
+      expect(await getDocument('s1', doc.id, fake.callTool)).toBeNull()
+      expect(await listDocuments('s1', fake.callTool)).toEqual([])
+
+      const del = fake.callTool.calls.find((c) => c[0] === 'delete')!
+      expect(del[1].key).toBe(`stash:doc:s1:${doc.id}`)
+    })
+
+    it('is idempotent for a non-existent document', async () => {
+      await expect(deleteDocument('s1', 'nope', fake.callTool)).resolves.toBeUndefined()
+    })
+  })
+
+  describe('toPriorResult', () => {
+    it('maps a document to a PriorResult with a content preview', () => {
+      const pr = toPriorResult({
+        id: 'doc-1',
+        sessionId: 's1',
+        filename: 'report.md',
+        mimeType: 'text/markdown',
+        size: 12,
+        uploadedAt: Date.now(),
+        content: 'The quick brown fox',
+      })
+      expect(pr.ref_id).toBe('doc-1')
+      expect(pr.tool).toBe('upload:report.md')
+      expect(pr.summary).toContain('The quick brown fox')
+      expect(pr.expanded_in_turn).toBeNull()
+    })
+
+    it('truncates long content with an ellipsis', () => {
+      const pr = toPriorResult(
+        {
+          id: 'doc-1',
+          sessionId: 's1',
+          filename: 'long.txt',
+          mimeType: 'text/plain',
+          size: 100,
+          uploadedAt: Date.now(),
+          content: 'x'.repeat(500),
+        },
+        50,
+      )
+      expect(pr.summary.endsWith('…')).toBe(true)
+      expect(pr.summary.length).toBeLessThanOrEqual(51)
+    })
+
+    it('falls back to a metadata summary when content is absent', () => {
+      const pr = toPriorResult({
+        id: 'doc-1',
+        sessionId: 's1',
+        filename: 'data.csv',
+        mimeType: 'text/csv',
+        size: 2048,
+        uploadedAt: Date.now(),
+      })
+      expect(pr.summary).toContain('data.csv')
+      expect(pr.summary).toContain('text/csv')
+    })
+  })
+})
