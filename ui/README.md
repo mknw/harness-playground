@@ -108,7 +108,7 @@ See [examples/README.md](src/lib/harness-client/examples/README.md) for detailed
 
 | File | Contents |
 |------|----------|
-| [ROADMAP.md](ROADMAP.md) | Completed work and deferred frontend tasks |
+| [../docs/ROADMAP.md](../docs/ROADMAP.md) | Single project roadmap (UI items consolidated 2026-05-21) |
 | [src/lib/harness-patterns/README.md](src/lib/harness-patterns/README.md) | Harness patterns full API reference |
 | [src/lib/harness-client/examples/README.md](src/lib/harness-client/examples/README.md) | Example agent implementations (10 agents) |
 | [../docs/UI_ARCHITECTURE.md](../docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |

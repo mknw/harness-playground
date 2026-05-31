@@ -69,6 +69,8 @@ docker compose ps
 
 **Graph tabs:** `SupportPanel` uses `lazyMount` + `unmountOnExit` on `Tabs.Root` — Cytoscape instances only exist for the active tab. The Neo4j/Memory tabs consume accumulated `graphElements` from `index.tsx`. The All tab derives elements on-demand from `contextEvents` via `turn-utils.ts` based on user-selected turns, with per-turn color coding via `GraphVisualization`'s `extraStyles` prop.
 
+**Probe before scaffolding:** For architectural questions (new patterns, infrastructure, deployment shapes, anything with multiple non-obvious options), sample the option space first and converge with the user on the shape before writing implementation docs or code. Going straight to a fully-detailed design tends to lock in defaults the user would have redirected. See [`docs/sandbox-plan.md`](docs/sandbox-plan.md) for the kind of doc that should *follow* such a conversation, not start it.
+
 ---
 
 ## Harness Patterns — Quick Reference
@@ -174,8 +176,7 @@ Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secon
 | Doc | Contents |
 |-----|----------|
 | [`docs/INDEX.md`](docs/INDEX.md) | Full documentation index |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Project-level planned and completed work |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Single project roadmap (UI items consolidated 2026-05-21) |
 | [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
 | [`ui/README.md`](ui/README.md) | UI quick start and file index |
-| [`ui/ROADMAP.md`](ui/ROADMAP.md) | UI deferred tasks |
 | [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md) | Harness patterns full API |

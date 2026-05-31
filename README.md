@@ -1,6 +1,8 @@
-# kg-agent: Knowledge Graph Agent System
+# harness-playground
 
-A knowledge graph agent system with a BAML-powered AI agent, Neo4j graph database, SolidStart UI, and MCP Gateway for tool integration.
+A playground for building agent applications out of composable **harness patterns** — primitives like `simpleLoop`, `actorCritic`, `parallel`, `router`, `withReferences`, `withApproval` that you chain into agents fit for any task. BAML provides typed LLM reasoning at each pattern's leaf; an MCP gateway provides the tools.
+
+The repo ships several example agents that exercise the framework (default Neo4j + web research, code-mode, and several more in the registry). The point of the project is the framework — the agents are showcases of what becomes easy when the primitives are right.
 
 ## Feature showcase
 
@@ -83,9 +85,9 @@ All services run in Docker containers via the `app-network` bridge network:
 | **Redis** | 6379 | Guardrail circuit-breaker state, ephemeral cache |
 | **n8n** | 5678 | Workflow automation (optional) |
 
-## Agent Framework
+## Harness Patterns Framework
 
-The agent runs on **harness-patterns** — a composable pattern framework built on a `UnifiedContext` event log. Patterns are functions of `(scope, view, tools)` that emit events and can be composed via `chain`, `router`, `parallel`, `withApproval`, `withReferences`, etc. BAML provides type-safe LLM reasoning at each pattern's leaf.
+The harness is the main deliverable. It's a composable pattern framework built on a `UnifiedContext` event log: patterns are functions of `(scope, view, tools)` that emit events and can be composed via `chain`, `router`, `parallel`, `withApproval`, `withReferences`, etc. BAML provides type-safe LLM reasoning at each pattern's leaf. Patterns share infrastructure (event commit, SSE streaming, session persistence) and stay independent in semantics — you can drop one in or out without disturbing the others.
 
 ### Core flow
 

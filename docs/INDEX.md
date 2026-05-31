@@ -7,8 +7,7 @@
 | Document | Description |
 |----------|-------------|
 | [README.md](../README.md) | Project overview and quick start |
-| [ROADMAP.md](ROADMAP.md) | Project-level planned and completed work |
-| [ui/ROADMAP.md](../ui/ROADMAP.md) | UI-specific deferred tasks |
+| [ROADMAP.md](ROADMAP.md) | Single roadmap (project + UI; `ui/ROADMAP.md` retired 2026-05-21) |
 
 ---
 
@@ -46,6 +45,7 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 |----------|-------------|
 | [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md) | Neo4j, MCP Gateway, Redis service configuration |
 | [MCP_GATEWAY.md](MCP_GATEWAY.md) | MCP Gateway reference, CLI, troubleshooting |
+| [sandbox-plan.md](sandbox-plan.md) | Sandbox compute plan — `withSandbox` wrapper, attachment model, MCP-in-VM architecture, backend interface (Docker + Firecracker), substrate options, failure modes |
 
 **Key config files:**
 - `docker-compose.yaml` — service orchestration
