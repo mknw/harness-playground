@@ -39,6 +39,30 @@ The build is a two-stage Dockerfile:
 1. lift the `rust-mcp-filesystem` binary from its pinned image, then
 2. assemble `node:22-bookworm-slim` + python3 + the two MCP servers.
 
+### Inside the nix shell
+
+The repo's `flake.nix` shellHook sets `DOCKER_CONFIG=$PWD/.docker` so the
+nix-store-backed CLI plugins (`docker-mcp`, eventually `docker-model`) are
+picked up. Naively that breaks `docker build` / `docker run`, because the
+worktree-local `.docker/contexts/` is empty and the active context (typically
+`colima` on macOS) can't resolve its endpoint metadata:
+
+```
+context "colima": context not found: open .docker/contexts/meta/<hash>/meta.json
+```
+
+The shellHook bridges this by symlinking `~/.docker/contexts` into
+`$DOCKER_CONFIG/contexts`. Re-enter the nix shell after pulling this change.
+If you ever see the error above and the symlink is missing, run:
+
+```sh
+ln -sfn "$HOME/.docker/contexts" "$DOCKER_CONFIG/contexts"
+```
+
+…or as a one-off, drop the env entirely: `env -u DOCKER_CONFIG docker build ...`.
+The same applies at runtime — `DockerBackend` shells out to `docker run`, so
+`pnpm dev:exposed` from inside the nix shell relies on the same bridge.
+
 ## Verify both MCP servers come up on stdio
 
 Start an idle container:

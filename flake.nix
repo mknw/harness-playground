@@ -53,6 +53,15 @@
           # Keep docker config local to the repo (optional, but nice)
           export DOCKER_CONFIG="$PWD/.docker"
           mkdir -p "$DOCKER_CONFIG/cli-plugins"
+          # Bridge the system docker contexts dir into the worktree-local
+          # DOCKER_CONFIG so the active context (e.g. colima) can resolve its
+          # endpoint metadata. Without this, `docker build` / `docker run`
+          # fail from inside the nix shell with
+          # `context "colima": context not found: open .docker/contexts/meta/...`
+          # because DOCKER_CONFIG redirects context lookup to the (empty)
+          # worktree-local dir. The symlink keeps the rest of DOCKER_CONFIG
+          # worktree-local (for the nix-store-backed CLI plugins below).
+          [ -d "$HOME/.docker/contexts" ] && ln -sfn "$HOME/.docker/contexts" "$DOCKER_CONFIG/contexts"
 
           # Store-backed Docker CLI plugins
           ln -sf "${docker-mcp}/bin/docker-mcp" \
