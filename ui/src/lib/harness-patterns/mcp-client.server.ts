@@ -6,6 +6,7 @@
  */
 
 import { assertServerOnImport } from './assert.server';
+import { getActiveSandbox } from '../sandbox/scope.server';
 import type { ToolCallResult, MCPToolDescription } from './types';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -100,6 +101,16 @@ export async function callTool(
   name: string,
   args: Record<string, unknown>
 ): Promise<ToolCallResult> {
+  // Sandbox dispatch (see docs/sandbox-plan.md → "How tools reach the
+  // controller"). When a `withSandbox` wrapper is active and the tool name
+  // is owned by its in-VM transport, route there instead of the host
+  // gateway. Tools not owned by the sandbox fall through to the gateway path
+  // — which is also what happens outside any sandbox scope.
+  const sandbox = getActiveSandbox();
+  if (sandbox?.ownsTool(name)) {
+    return sandbox.callTool(name, args);
+  }
+
   try {
     const result = await withReconnect((c) => c.callTool({ name, arguments: args }));
 

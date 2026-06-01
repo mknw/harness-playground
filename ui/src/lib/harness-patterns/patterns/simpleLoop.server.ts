@@ -25,6 +25,7 @@ import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
+import { getActiveSandbox } from '../../sandbox/scope.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
 import { dedupByRefId, annotateExpansions, LLMCallError } from '../baml-adapters.server'
@@ -370,8 +371,16 @@ export function simpleLoop<T extends SimpleLoopData>(
           continue
         }
 
-        // Validate tool
-        if (!tools.includes(action.tool_name)) {
+        // Validate tool. The static allowlist is augmented by an active
+        // `withSandbox` scope's tool surface — `sandbox_*` names pass without
+        // being listed in `tools` (see docs/sandbox-plan.md → "How tools reach
+        // the controller"). Outside any sandbox scope, `getActiveSandbox()`
+        // returns undefined and this collapses to the original check.
+        const sandbox = getActiveSandbox()
+        const allowed =
+          tools.includes(action.tool_name) ||
+          (sandbox?.ownsTool(action.tool_name) ?? false)
+        if (!allowed) {
           hasError = true
           errorMessage = `Tool not allowed: ${action.tool_name}. Allowed: ${tools.join(', ')}`
           errorTurn = turn

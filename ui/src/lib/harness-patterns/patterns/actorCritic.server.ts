@@ -27,6 +27,7 @@ import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
+import { getActiveSandbox } from '../../sandbox/scope.server'
 import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
 import { LLMCallError } from '../baml-adapters.server'
 
@@ -140,9 +141,16 @@ export function actorCritic<T extends ActorCriticData>(
         const dynamicAllowlist = config?.dynamicToolAllowlist
           ? await config.dynamicToolAllowlist()
           : []
+        // A third augmentation: an active `withSandbox` scope's tool surface.
+        // Sandbox-owned (`sandbox_*`) names pass without being listed in
+        // `tools` or `dynamicToolAllowlist` (see docs/sandbox-plan.md → "How
+        // tools reach the controller"). Outside any sandbox scope this is
+        // a no-op.
+        const sandbox = getActiveSandbox()
         const allowed =
           tools.includes(action.tool_name) ||
           dynamicAllowlist.includes(action.tool_name) ||
+          (sandbox?.ownsTool(action.tool_name) ?? false) ||
           (config?.dynamicToolPattern?.test(action.tool_name) ?? false)
         if (!allowed) {
           const errMsg = `Tool not allowed: ${action.tool_name}`

@@ -119,10 +119,11 @@ const sandbox = await acquireOrAttach(cfg)
 return sandboxScope.run(sandbox, () => inner.fn(scope, view))
 ```
 
-The two controllers are changed **once** to consult that scope:
+The two controllers, the `callTool` dispatch layer, and the BAML adapters are changed **once** to consult that scope:
 
-- **Allowlist** — `dynamicToolAllowlist` resolves to the active sandbox's tool names, so they pass the `tools.includes(...)` guard and appear in the actor's prompt.
-- **Dispatch** — the `callTool` step checks: a tool name owned by the active sandbox routes to its in-VM transport (`connectMcp`); everything else goes to the gateway, exactly as today.
+- **Allowlist (controllers)** — both controllers extend their `tools.includes(...)` guard with `sandbox.ownsTool(...)`, so sandbox-owned tool names are accepted without the caller listing them in `tools` / `availableTools`.
+- **Dispatch (`mcp-client.callTool`)** — checks the active scope first: a tool name owned by the sandbox routes to its in-VM transport (`connectMcp`); everything else goes to the host gateway, exactly as today.
+- **Prompt (adapters in `baml-adapters.server.ts`)** — `createLoopControllerAdapter` and `createActorControllerAdapter` append the active sandbox's `listTools()` descriptions to the gateway-derived tool list, so sandbox tools appear in the actor's first-turn prompt without being threaded through the wrapped pattern's config. The allowlist change alone wouldn't accomplish this — the prompt is built at adapter time from the gateway's tool list, separately from the runtime guard.
 
 **What this buys composition:**
 
@@ -391,7 +392,7 @@ Each step de-risks the next.
 
 1. `rootfs/` Dockerfile that bundles `rust-mcp-filesystem` + JS shell-MCP + Python on `debian-slim`. Build manually; verify both MCP servers come up on stdio.
 2. `ui/src/lib/sandbox/` — `ComputeBackend` interface + `DockerBackend` implementation. `boot` / `destroy` / `connectMcp` only; no warm pool yet, no reset.
-3. `withSandbox` wrapper **+ transport-aware dispatch**: run the wrapped pattern inside an ALS sandbox scope; change `simpleLoop` + `actorCritic` (and the `callTool` layer) **once** to route sandbox-owned tool names to the in-VM transport and default `dynamicToolAllowlist` to the active sandbox. Auto-attachment only (no ID, no `fresh`) for the first cut. This step is what makes multi-controller chains share one sandbox for free (see [How tools reach the controller](#how-tools-reach-the-controller)).
+3. `withSandbox` wrapper **+ transport-aware dispatch**: run the wrapped pattern inside an ALS sandbox scope; change `simpleLoop` + `actorCritic` (allowlist guard), `mcp-client.callTool` (dispatch), and `baml-adapters.server.ts` (prompt-side tool descriptions) **once** so sandbox-owned tool names route to the in-VM transport, pass the allowlist guard, and appear in the actor's first-turn prompt — all from the ALS scope, with no per-pattern wiring. Auto-attachment only (no ID, no `fresh`) for the first cut. This step is what makes multi-controller chains share one sandbox for free (see [How tools reach the controller](#how-tools-reach-the-controller)).
 4. End-to-end integration test: `actorCritic` wrapped in `withSandbox`, agent receives "write a Python script in /work that counts words in this string and run it," reports the count back. Single Docker container, no warm pool.
 5. Warm pool (small `warmCaps`), idle eviction, scheduler caps.
 6. ID-addressable attachment + `fresh: true`.

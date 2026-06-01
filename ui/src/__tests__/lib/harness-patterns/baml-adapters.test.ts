@@ -1032,3 +1032,77 @@ describe('extractFailureLLMCallData', () => {
     expect(result.parsedOutput).toBeUndefined()
   })
 })
+
+// Build-order step 3: when a `withSandbox` wrapper is active, the adapters
+// prepend the sandbox's in-VM tool descriptions to the `tools` arg passed to
+// the BAML function, so the actor sees them in its first-turn prompt without
+// the caller threading them through `toolNames`. See docs/sandbox-plan.md →
+// "How tools reach the controller".
+describe('sandbox tool descriptions in prompt', () => {
+  function fakeTransport() {
+    return {
+      vmId: 'sbx-1',
+      toolNames: async () => ['sandbox_bash', 'sandbox_read'],
+      listTools: async () => [
+        { name: 'sandbox_bash', description: 'run a shell command', inputSchema: { type: 'object' } },
+        { name: 'sandbox_read', description: 'read a file', inputSchema: { type: 'object' } },
+      ],
+      ownsTool: (n: string) => n === 'sandbox_bash' || n === 'sandbox_read',
+      callTool: vi.fn(),
+      close: async () => {},
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockLoopController.mockResolvedValue(mockFinalAction())
+    mockActorController.mockResolvedValue(mockFinalAction())
+  })
+
+  it('prepends sandbox tools to LoopController prompt when scope is active', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { runWithSandbox } = await import('../../../lib/sandbox/scope.server')
+
+    const controller = createLoopControllerAdapter(['read_neo4j_cypher', 'Return'])
+
+    await runWithSandbox(fakeTransport(), () =>
+      controller('msg', 'intent', '[]', 0),
+    )
+
+    // 3rd arg of LoopController is the `tools` array.
+    const tools = mockLoopController.mock.calls[0][2] as Array<{ name: string }>
+    const names = tools.map((t) => t.name)
+    // Sandbox tools appear first (prepended).
+    expect(names.slice(0, 2)).toEqual(['sandbox_bash', 'sandbox_read'])
+    // Gateway-listed tools still present.
+    expect(names).toContain('read_neo4j_cypher')
+  })
+
+  it('does not include sandbox tools when no scope is active (LoopController)', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+
+    const controller = createLoopControllerAdapter(['read_neo4j_cypher', 'Return'])
+    await controller('msg', 'intent', '[]', 0)
+
+    const tools = mockLoopController.mock.calls[0][2] as Array<{ name: string }>
+    const names = tools.map((t) => t.name)
+    expect(names).not.toContain('sandbox_bash')
+    expect(names).not.toContain('sandbox_read')
+  })
+
+  it('prepends sandbox tools to ActorController prompt when scope is active', async () => {
+    const { createActorControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { runWithSandbox } = await import('../../../lib/sandbox/scope.server')
+
+    const controller = createActorControllerAdapter(['code-mode', 'Return'])
+
+    await runWithSandbox(fakeTransport(), () =>
+      controller('msg', 'intent', [], []),
+    )
+
+    // 3rd arg of ActorController is the `tools` array.
+    const tools = mockActorController.mock.calls[0][2] as Array<{ name: string }>
+    const names = tools.map((t) => t.name)
+    expect(names.slice(0, 2)).toEqual(['sandbox_bash', 'sandbox_read'])
+  })
+})
