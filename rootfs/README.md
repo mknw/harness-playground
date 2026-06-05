@@ -96,6 +96,16 @@ printf '%s\n' \
 docker stop "$CID"
 ```
 
+## Verifying the full chain
+
+The handshake check above exercises only the in-VM MCP layer. To verify the
+whole stack against a live container — wrapper, ALS dispatch, controller +
+adapter changes, and `DockerBackend.boot/connectMcp/destroy` — see the smoke
+scripts under [`ui/src/lib/sandbox/scripts/`](../ui/src/lib/sandbox/scripts/README.md).
+Two scripts: one with a hand-scripted actor (no LLM cost, ~340ms) and one
+driven by real Anthropic via the BAML adapters (a few cents, ~4–5s). Both
+boot a real `kg-sandbox:base` container and exit cleanly.
+
 ## Tool surface exposed to the actor
 
 The harness applies a `sandbox_` prefix when registering these (see plan
