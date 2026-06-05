@@ -4,6 +4,33 @@
  * Safe to import from both client and server — contains only types and plain constants.
  */
 
+/**
+ * Sandbox compute settings. See docs/sandbox-plan.md → "Settings".
+ *
+ * Process-scoped values (`globalCap`, `perSessionCap`, `warmPool`, `idleEvictMs`)
+ * are read once when the harness lazily constructs its singleton scheduler
+ * and pool; per-call defaults (`defaultTimeoutSec`, `defaultMemoryMB`,
+ * `defaultEgress`) are read each time `withSandbox` boots a VM whose caller
+ * didn't override them. The settings panel UI does not currently surface
+ * these — they're programmatic for v0.
+ */
+export interface SandboxSettings {
+  /** Max concurrent sandbox attachments across the harness. */
+  globalCap: number
+  /** Max concurrent sandbox attachments per session. */
+  perSessionCap: number
+  /** Per-rootfs warm-pool depth. e.g. `{ base: 1 }`. */
+  warmPool: Partial<Record<string, number>>
+  /** Idle time before a pooled VM is destroyed (ms). */
+  idleEvictMs: number
+  /** Per-tool-call wall-clock cap when caller does not override. */
+  defaultTimeoutSec: number
+  /** Per-VM memory cap (MB) when caller does not override. */
+  defaultMemoryMB: number
+  /** Default egress profile when caller does not override. */
+  defaultEgress: 'mcp-only' | 'pypi' | 'github-trusted' | 'open'
+}
+
 export interface HarnessSettings {
   maxToolTurns: number        // simpleLoop max iterations (default: 5)
   maxRetries: number          // actorCritic max attempts (default: 3)
@@ -11,6 +38,7 @@ export interface HarnessSettings {
   maxResultForSummary: number // summarizer input limit chars (default: 3000)
   priorTurnCount: number      // prior turns for tool result memory (default: 3)
   routerTurnWindow: number    // router history window in turns (default: 5)
+  sandbox: SandboxSettings    // compute sandbox caps + defaults
 }
 
 export const DEFAULT_SETTINGS: HarnessSettings = {
@@ -20,6 +48,15 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
   maxResultForSummary: 3000,
   priorTurnCount: 3,
   routerTurnWindow: 5,
+  sandbox: {
+    globalCap: 16,
+    perSessionCap: 4,
+    warmPool: { base: 1 },
+    idleEvictMs: 300_000,
+    defaultTimeoutSec: 60,
+    defaultMemoryMB: 512,
+    defaultEgress: 'mcp-only',
+  },
 }
 
 /** Context window limits per BAML client (tokens) */

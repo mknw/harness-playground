@@ -2,15 +2,26 @@
  * `withSandbox` — outer wrapper that attaches a sandbox VM to a controller
  * pattern for its lifetime. See docs/sandbox-plan.md → "What withSandbox is".
  *
- * Build-order step 3 scope (this file): auto-attachment only. Every invocation
- * boots a fresh VM, runs the wrapped pattern inside the ALS sandbox scope,
- * then closes the transport and destroys the VM on exit. ID-addressable reuse
- * (`id: 'foo'`) and force-fresh (`fresh: true`) land in step 6; warm pool +
- * idle eviction + scheduler caps in step 5.
+ * Acquisition path (build-order step 5):
+ *   1. `scheduler.allocate(sessionId)` — blocks if either cap is reached.
+ *   2. `pool.acquire(rootfs, runtime)`  — pool-hit (O(ms)) or cold-boot.
+ *   3. `backend.connectMcp(vm)`         — open the in-VM MCP transport.
+ *
+ * Release path (reverse order, runs even on inner throws / partial failure):
+ *   1. `transport.close()`              — tear down stdio pipes.
+ *   2. `pool.release(vm)`               — reset & park, or destroy on cap/fail.
+ *   3. `slot.release()`                 — free the scheduler slot.
+ *
+ * ID-addressable reuse (`id: 'foo'`) and force-fresh (`fresh: true`) remain
+ * deferred to build-order step 6.
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
+import { DEFAULT_SETTINGS } from '../settings'
+import { getRequestSettings } from '../settings-context.server'
 import { DockerBackend } from './docker-backend.server'
 import { runWithSandbox } from './scope.server'
+import { SandboxScheduler } from './scheduler.server'
+import { WarmPool } from './warm-pool.server'
 import type { ComputeBackend, RootfsId, RuntimeConfig } from './types'
 import type {
   ConfiguredPattern,
@@ -23,29 +34,58 @@ assertServerOnImport()
 export interface WithSandboxConfig {
   /** Reserved for step 6 (ID-addressable attachment); currently ignored. */
   id?: string
-  /** Reserved for step 6 (force fresh); currently ignored — every invocation
-   *  is fresh anyway in the no-pool world. */
+  /** Reserved for step 6 (force fresh); currently ignored. */
   fresh?: boolean
   /** Rootfs flavor. v0: `'base'` only. */
   rootfs?: RootfsId
-  /** Per-VM runtime knobs. Defaults come from HarnessSettings (added later). */
+  /** Per-VM runtime knobs. Defaults come from `settings.sandbox.*`. */
   resources?: Pick<RuntimeConfig, 'cpus' | 'memoryMB' | 'timeoutSec'>
-  /** Egress profile. v0 honors `'mcp-only'` (no network) vs anything else. */
+  /** Egress profile. Defaults to `settings.sandbox.defaultEgress`. */
   egress?: RuntimeConfig['egress']
-  /** Backend override. Defaults to a process-shared `DockerBackend`. Tests
-   *  inject a mock here to exercise the wrapper without spinning containers. */
+  /** Session id for `SandboxScheduler` per-session-cap accounting. */
+  sessionId?: string
+  /** Backend override. Defaults to a process-shared `DockerBackend`. */
   backend?: ComputeBackend
+  /** Pool override. Defaults to a process-shared `WarmPool` from settings. */
+  pool?: WarmPool
+  /** Scheduler override. Defaults to a process-shared `SandboxScheduler`. */
+  scheduler?: SandboxScheduler
 }
 
+// Process-shared singletons, lazily constructed from DEFAULT_SETTINGS. Cap
+// values are read once at first use; the settings panel can't reshape an
+// already-built scheduler/pool at runtime (those caps are process-scoped, not
+// per-request — see docs/sandbox-plan.md → "Settings").
 let defaultBackend: ComputeBackend | null = null
+let defaultPool: WarmPool | null = null
+let defaultScheduler: SandboxScheduler | null = null
+
 function getDefaultBackend(): ComputeBackend {
   if (!defaultBackend) defaultBackend = new DockerBackend()
   return defaultBackend
 }
+function getDefaultPool(): WarmPool {
+  if (!defaultPool) {
+    defaultPool = new WarmPool(getDefaultBackend(), {
+      caps: DEFAULT_SETTINGS.sandbox.warmPool,
+      idleEvictMs: DEFAULT_SETTINGS.sandbox.idleEvictMs,
+    })
+  }
+  return defaultPool
+}
+function getDefaultScheduler(): SandboxScheduler {
+  if (!defaultScheduler) {
+    defaultScheduler = new SandboxScheduler({
+      globalCap: DEFAULT_SETTINGS.sandbox.globalCap,
+      perSessionCap: DEFAULT_SETTINGS.sandbox.perSessionCap,
+    })
+  }
+  return defaultScheduler
+}
 
 /**
- * Wrap a pattern so its lifetime owns a sandbox VM. Composes orthogonally with
- * everything in the harness — `chain(withSandbox(actorCritic), synth)`,
+ * Wrap a pattern so its lifetime owns a sandbox VM. Composes orthogonally
+ * with everything in the harness — `chain(withSandbox(actorCritic), synth)`,
  * `withSandbox(chain(simpleLoop, …, actorCritic))`, `router → routes`, etc.
  * The sandbox handle propagates to nested tool-calling controllers via ALS;
  * `chain` / `router` / `withReferences` don't need to be sandbox-aware.
@@ -53,32 +93,64 @@ function getDefaultBackend(): ComputeBackend {
 export function withSandbox(config?: WithSandboxConfig) {
   return <T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> => {
     const backend = config?.backend ?? getDefaultBackend()
+    // When the caller injects a custom backend (test scenario), build per-call
+    // pool + scheduler so test state doesn't bleed through the singletons.
+    // Tests can still inject `pool` / `scheduler` explicitly to share state
+    // across multiple withSandbox invocations (smoke-script pool-hit case).
+    const usingDefaultBackend = !config?.backend
+    const pool =
+      config?.pool ??
+      (usingDefaultBackend
+        ? getDefaultPool()
+        : new WarmPool(backend, {
+            caps: DEFAULT_SETTINGS.sandbox.warmPool,
+            idleEvictMs: DEFAULT_SETTINGS.sandbox.idleEvictMs,
+          }))
+    const scheduler =
+      config?.scheduler ??
+      (usingDefaultBackend
+        ? getDefaultScheduler()
+        : new SandboxScheduler({
+            globalCap: DEFAULT_SETTINGS.sandbox.globalCap,
+            perSessionCap: DEFAULT_SETTINGS.sandbox.perSessionCap,
+          }))
+
     const rootfs: RootfsId = config?.rootfs ?? 'base'
-    const runtime: RuntimeConfig = {
-      ...(config?.resources ?? {}),
-      ...(config?.egress ? { egress: config.egress } : {}),
-    }
+    const sessionId = config?.sessionId ?? 'default'
 
     const fn = async (
       scope: PatternScope<T>,
       view: EventView,
     ): Promise<PatternScope<T>> => {
-      const vm = await backend.boot(rootfs, runtime)
-      let transport
-      try {
-        transport = await backend.connectMcp(vm)
-      } catch (err) {
-        // boot succeeded but transport setup failed — clean up the VM so we
-        // don't leak. Swallow destroy errors; the original error is what the
-        // caller cares about.
-        await backend.destroy(vm).catch(() => {})
-        throw err
+      const settings = getRequestSettings()
+      const runtime: RuntimeConfig = {
+        cpus: config?.resources?.cpus,
+        memoryMB: config?.resources?.memoryMB ?? settings.sandbox.defaultMemoryMB,
+        timeoutSec: config?.resources?.timeoutSec ?? settings.sandbox.defaultTimeoutSec,
+        egress: config?.egress ?? settings.sandbox.defaultEgress,
       }
+
+      const slot = await scheduler.allocate(sessionId)
       try {
-        return await runWithSandbox(transport, () => pattern.fn(scope, view))
+        const vm = await pool.acquire(rootfs, runtime)
+        let transport
+        try {
+          transport = await backend.connectMcp(vm)
+        } catch (err) {
+          // Acquire succeeded but transport setup failed — recycle the VM
+          // (pool.release destroys if reset fails, parks if it succeeds and
+          // there's cap). Original error wins.
+          await pool.release(vm).catch(() => {})
+          throw err
+        }
+        try {
+          return await runWithSandbox(transport, () => pattern.fn(scope, view))
+        } finally {
+          await transport.close().catch(() => {})
+          await pool.release(vm).catch(() => {})
+        }
       } finally {
-        await transport.close().catch(() => {})
-        await backend.destroy(vm).catch(() => {})
+        slot.release()
       }
     }
 

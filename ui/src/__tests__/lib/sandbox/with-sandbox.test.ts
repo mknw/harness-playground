@@ -14,6 +14,8 @@ vi.mock('../../../lib/harness-patterns/assert.server', () => ({
 
 import { withSandbox } from '../../../lib/sandbox/with-sandbox.server'
 import { getActiveSandbox } from '../../../lib/sandbox/scope.server'
+import { WarmPool } from '../../../lib/sandbox/warm-pool.server'
+import { SandboxScheduler } from '../../../lib/sandbox/scheduler.server'
 import type {
   ComputeBackend,
   HealthStatus,
@@ -166,7 +168,7 @@ describe('withSandbox', () => {
     expect(backend.calls.destroy).toHaveLength(1)
   })
 
-  it('forwards rootfs, resources, and egress to backend.boot', async () => {
+  it('forwards rootfs and caller-supplied resources/egress to backend.boot', async () => {
     const backend = fakeBackend()
     const inner = fakePattern(async (scope) => scope)
 
@@ -177,9 +179,26 @@ describe('withSandbox', () => {
       egress: 'open',
     })(inner).fn(fakeScope({}), fakeView)
 
-    expect(backend.calls.boot[0]).toEqual({
-      rootfs: 'base',
-      runtime: { cpus: 2, memoryMB: 1024, egress: 'open' },
+    // Caller-supplied wins; timeoutSec gets the settings default.
+    expect(backend.calls.boot[0].rootfs).toBe('base')
+    expect(backend.calls.boot[0].runtime).toMatchObject({
+      cpus: 2,
+      memoryMB: 1024,
+      egress: 'open',
+      timeoutSec: 60, // DEFAULT_SETTINGS.sandbox.defaultTimeoutSec
+    })
+  })
+
+  it('fills missing resources/egress from settings.sandbox defaults', async () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+
+    await withSandbox({ backend })(inner).fn(fakeScope({}), fakeView)
+
+    expect(backend.calls.boot[0].runtime).toMatchObject({
+      memoryMB: 512, // defaultMemoryMB
+      timeoutSec: 60, // defaultTimeoutSec
+      egress: 'mcp-only', // defaultEgress
     })
   })
 
@@ -191,5 +210,124 @@ describe('withSandbox', () => {
     expect(wrapped.name).toBe('withSandbox(inner)')
     expect(wrapped.config).toEqual(inner.config)
     expect(wrapped.estimateTurns?.({ maxToolTurns: 10, maxRetries: 3 })).toBe(3)
+  })
+})
+
+describe('withSandbox scheduler + pool wiring', () => {
+  it('routes acquire/release through the injected pool', async () => {
+    const backend = fakeBackend()
+    // Spy on a real WarmPool's methods so we see the wrapper's call sequence.
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const acquireSpy = vi.spyOn(pool, 'acquire')
+    const releaseSpy = vi.spyOn(pool, 'release')
+
+    const inner = fakePattern(async (scope) => scope)
+    await withSandbox({ backend, pool, rootfs: 'base' })(inner).fn(
+      fakeScope({}),
+      fakeView,
+    )
+
+    expect(acquireSpy).toHaveBeenCalledWith('base', expect.any(Object))
+    expect(releaseSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('parks the VM in the pool when reset succeeds (subsequent acquire hits)', async () => {
+    const backend = fakeBackend()
+    // fakeBackend's default reset throws; install a working reset for this case.
+    backend.reset = vi.fn(async (vm) => {
+      ;(vm as { bootedAt: number }).bootedAt = Date.now()
+    })
+    const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 60_000 })
+    const inner = fakePattern(async (scope) => scope)
+    const wrap = withSandbox({ backend, pool, rootfs: 'base' })(inner)
+
+    await wrap.fn(fakeScope({}), fakeView)
+    expect(backend.calls.boot).toHaveLength(1)
+    expect(pool.size('base')).toBe(1) // parked
+    expect(backend.calls.destroy).toHaveLength(0)
+
+    // Second invocation: pool-hit, no new boot.
+    await wrap.fn(fakeScope({}), fakeView)
+    expect(backend.calls.boot).toHaveLength(1)
+    expect(pool.size('base')).toBe(1) // re-parked
+  })
+
+  it('allocates and releases scheduler slots with the provided sessionId', async () => {
+    const backend = fakeBackend()
+    backend.reset = vi.fn(async () => {})
+    const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 60_000 })
+    const scheduler = new SandboxScheduler({ globalCap: 4, perSessionCap: 2 })
+    const allocSpy = vi.spyOn(scheduler, 'allocate')
+
+    const inner = fakePattern(async (scope) => scope)
+    await withSandbox({ backend, pool, scheduler, sessionId: 'sess-99' })(inner).fn(
+      fakeScope({}),
+      fakeView,
+    )
+
+    expect(allocSpy).toHaveBeenCalledWith('sess-99')
+    expect(scheduler.inflightCount()).toBe(0) // slot released on cleanup
+  })
+
+  it('blocks a second invocation when the scheduler is at globalCap', async () => {
+    const backend = fakeBackend()
+    backend.reset = vi.fn(async () => {})
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const scheduler = new SandboxScheduler({ globalCap: 1, perSessionCap: 4 })
+
+    let gateOpen = false
+    const releaseGate = new Promise<void>((resolve) => {
+      const id = setInterval(() => {
+        if (gateOpen) {
+          clearInterval(id)
+          resolve()
+        }
+      }, 5)
+    })
+
+    const slow = fakePattern(async (scope) => {
+      await releaseGate
+      return scope
+    })
+    const fast = fakePattern(async (scope) => scope)
+
+    const slowP = withSandbox({ backend, pool, scheduler, sessionId: 's1' })(slow).fn(
+      fakeScope({}),
+      fakeView,
+    )
+    // Give slow a tick to claim the slot.
+    await new Promise((r) => setImmediate(r))
+    expect(scheduler.inflightCount()).toBe(1)
+    expect(scheduler.queueDepth()).toBe(0)
+
+    const fastP = withSandbox({ backend, pool, scheduler, sessionId: 's2' })(fast).fn(
+      fakeScope({}),
+      fakeView,
+    )
+    await new Promise((r) => setImmediate(r))
+    // fast is queued behind slow.
+    expect(scheduler.queueDepth()).toBe(1)
+
+    gateOpen = true
+    await Promise.all([slowP, fastP])
+    expect(scheduler.inflightCount()).toBe(0)
+  })
+
+  it('releases the scheduler slot even if the inner pattern throws', async () => {
+    const backend = fakeBackend()
+    backend.reset = vi.fn(async () => {})
+    const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 60_000 })
+    const scheduler = new SandboxScheduler({ globalCap: 1, perSessionCap: 1 })
+    const inner = fakePattern(async () => {
+      throw new Error('inner went pop')
+    })
+
+    await expect(
+      withSandbox({ backend, pool, scheduler, sessionId: 's1' })(inner).fn(
+        fakeScope({}),
+        fakeView,
+      ),
+    ).rejects.toThrow('inner went pop')
+    expect(scheduler.inflightCount()).toBe(0)
   })
 })

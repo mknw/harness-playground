@@ -32,7 +32,7 @@ that the SDK mocks gloss over.
 
 | File | Driven by | Cost | Typical runtime |
 |---|---|---|---|
-| `smoke-scripted.ts` | hand-scripted actor + critic | none | ~340ms |
+| `smoke-scripted.ts` | hand-scripted actor + critic, **runs twice to prove pool hit** | none | ~1.5s (1 cold boot + 1 pool hit + 1 reset) |
 | `smoke-llm.ts` | real Anthropic via BAML adapters | a few cents | ~4–5s (2× Anthropic calls) |
 
 Run from `ui/`:
@@ -65,6 +65,12 @@ For the word-count task, the result's `stdout` ends with `"9\n"`. The
 scripted run takes the deterministic write-then-run path (`sandbox_write`
 then `sandbox_bash`); the LLM run picks its own — the verified run went
 straight to `sandbox_bash` with a `python3 -c` one-liner.
+
+`smoke-scripted` additionally asserts that `bootCount === 1` after two
+invocations of the same wrapper, sharing one `WarmPool(caps: { base: 1 })`.
+The first run cold-boots, the second hits the pool. The script throws if
+either invocation cold-booted independently — a regression in the wrapper's
+acquire/release wiring would show up here before it reaches production.
 
 ## Cleanup
 
