@@ -4,7 +4,8 @@
  * Hermetic — `node:child_process` spawn and the MCP SDK client/transport are
  * mocked so no real Docker engine is required. Covers boot arg construction,
  * destroy idempotency, health states, connectMcp tool routing/prefixing, and
- * the reset-not-implemented contract (build-order step 2 scope).
+ * the warm-pool recycle contract (destroy + boot fresh, handle mutated in
+ * place with stable vm.id and preserved RuntimeConfig).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -248,10 +249,102 @@ describe('DockerBackend.connectMcp', () => {
 })
 
 describe('DockerBackend.reset', () => {
-  it('throws — warm-pool recycle is build-order step 5', async () => {
+  it('destroys the old container and boots a fresh one (warm-pool recycle)', async () => {
+    let bootCount = 0
+    spawnPlan = (cmd, args) => {
+      if (args[0] === 'run') {
+        bootCount += 1
+        return { stdout: `container-${bootCount}`, code: 0 }
+      }
+      return { stdout: 'ok', code: 0 }
+    }
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', {})
+    expect((handle.native as { containerId: string }).containerId).toBe('container-1')
+    const originalId = handle.id
+
+    spawnCalls.length = 0
+    await backend.reset(handle)
+
+    // Two docker calls: rm old, then run new.
+    const rm = spawnCalls.find((c) => c.args[0] === 'rm')!
+    expect(rm.args).toEqual(['rm', '-f', 'container-1'])
+    const run = spawnCalls.find((c) => c.args[0] === 'run')!
+    expect(run.args).toContain('-d')
+    expect(run.args).toContain('--rm')
+
+    // Handle mutated in place: sandbox id stable, container id swapped.
+    expect(handle.id).toBe(originalId)
+    expect((handle.native as { containerId: string }).containerId).toBe('container-2')
+  })
+
+  it('preserves the runtime config across the recycle', async () => {
+    let bootCount = 0
+    spawnPlan = (cmd, args) => {
+      if (args[0] === 'run') {
+        bootCount += 1
+        return { stdout: `container-${bootCount}`, code: 0 }
+      }
+      return { stdout: 'ok', code: 0 }
+    }
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', { cpus: 2, memoryMB: 512, egress: 'open' })
+
+    spawnCalls.length = 0
+    await backend.reset(handle)
+
+    const run = spawnCalls.find((c) => c.args[0] === 'run')!
+    expect(run.args).toContain('--cpus')
+    expect(run.args).toContain('2')
+    expect(run.args).toContain('--memory')
+    expect(run.args).toContain('512m')
+    // egress: 'open' ⇒ no --network none
+    expect(run.args).not.toContain('none')
+    // Container is renamed to the same sandbox id so the slot is stable.
+    const nameIdx = run.args.indexOf('--name')
+    expect(run.args[nameIdx + 1]).toBe(handle.id)
+  })
+
+  it('updates bootedAt to the recycle time', async () => {
     spawnPlan = () => ({ stdout: 'cid', code: 0 })
     const backend = await makeBackend()
     const handle = await backend.boot('base', {})
-    await expect(backend.reset(handle)).rejects.toThrow(/step 5/)
+    const firstBootedAt = handle.bootedAt
+    // Sleep a tick so Date.now() advances past firstBootedAt; vitest's clock
+    // resolution is enough that this is reliable.
+    await new Promise((r) => setTimeout(r, 2))
+    await backend.reset(handle)
+    expect(handle.bootedAt).toBeGreaterThan(firstBootedAt)
+  })
+
+  it('proceeds when the old container is already gone (rm failure is swallowed)', async () => {
+    let runCount = 0
+    spawnPlan = (cmd, args) => {
+      if (args[0] === 'rm') return { stderr: 'No such container', code: 1 }
+      if (args[0] === 'run') {
+        runCount += 1
+        return { stdout: `container-${runCount}`, code: 0 }
+      }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', {})
+    await expect(backend.reset(handle)).resolves.toBeUndefined()
+    expect((handle.native as { containerId: string }).containerId).toBe('container-2')
+  })
+
+  it('throws SandboxBootError when the reboot fails', async () => {
+    let runCount = 0
+    spawnPlan = (cmd, args) => {
+      if (args[0] === 'run') {
+        runCount += 1
+        if (runCount === 2) return { stderr: 'image missing', code: 1 }
+        return { stdout: 'container-1', code: 0 }
+      }
+      return { stdout: 'ok', code: 0 }
+    }
+    const backend = await makeBackend()
+    const handle = await backend.boot('base', {})
+    await expect(backend.reset(handle)).rejects.toThrow(/boot failed/)
   })
 })

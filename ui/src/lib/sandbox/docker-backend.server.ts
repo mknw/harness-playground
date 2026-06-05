@@ -11,8 +11,10 @@
  * `connectMcp` spawns each one on stdio via `docker exec -i <ctr> init.sh
  * serve <name>` and wraps them in a unified `McpTransport`.
  *
- * Step 2 scope: boot / destroy / connectMcp (+ a cheap health). `reset`
- * (warm-pool recycle) throws until step 5.
+ * Reset semantics: destroy + boot fresh (no Docker snapshot story). The
+ * sandbox `id` is preserved across the reset so warm-pool slot identity is
+ * stable; only `native.containerId` and `bootedAt` change. The caller must
+ * close any `McpTransport` first — its stdio pipes target the old container.
  */
 
 import { spawn } from 'node:child_process'
@@ -43,6 +45,8 @@ const WORK_DIR = '/work'
 
 interface DockerNative extends Record<string, unknown> {
   containerId: string
+  /** Preserved across `reset` so the recycle reboots with the same caps. */
+  runtime: RuntimeConfig
 }
 
 /** Run `docker <args>`, resolving stdout (trimmed). Rejects on non-zero exit. */
@@ -192,40 +196,13 @@ export class DockerBackend implements ComputeBackend {
 
   async boot(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle> {
     const id = `sbx-${randomUUID().slice(0, 8)}`
-    const image = imageForRootfs(rootfs)
-
-    const args = ['run', '-d', '--rm', '--name', id]
-
-    // Resource caps. Docker accepts fractional --cpus and <N>m for memory.
-    if (runtime.cpus) args.push('--cpus', String(runtime.cpus))
-    if (runtime.memoryMB) args.push('--memory', `${runtime.memoryMB}m`)
-
-    // Egress. v0: mcp-only ⇒ no network at all (in-VM MCP is reached over the
-    // docker-exec stdio pipe, which does NOT require container networking).
-    // Anything else leaves the default bridge network in place. Finer egress
-    // profiles (pypi / github-trusted) are later work.
-    if ((runtime.egress ?? 'mcp-only') === 'mcp-only') {
-      args.push('--network', 'none')
-    }
-
-    // Label so orphaned sandboxes are findable/reapable.
-    args.push('--label', 'kg-sandbox=1', '--label', `kg-sandbox-id=${id}`)
-    args.push(image)
-
-    let containerId: string
-    try {
-      containerId = await docker(args)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      throw new SandboxBootError(`boot failed for ${id} (${image}): ${msg}`)
-    }
-
+    const containerId = await this.runContainer(id, rootfs, runtime)
     return {
       id,
       backend: 'docker',
       rootfs,
       bootedAt: Date.now(),
-      native: { containerId } satisfies DockerNative,
+      native: { containerId, runtime } satisfies DockerNative,
     }
   }
 
@@ -259,11 +236,51 @@ export class DockerBackend implements ComputeBackend {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  async reset(_vm: VMHandle): Promise<void> {
-    // Warm-pool recycle. For Docker the recycle strategy is destroy + boot
-    // fresh (no snapshot story); the pool wiring lands in build-order step 5.
-    throw new Error('DockerBackend.reset is not implemented until warm-pool (build-order step 5)')
+  async reset(vm: VMHandle): Promise<void> {
+    const native = vm.native as DockerNative
+    const oldCid = containerId(vm)
+    // Caller is responsible for closing any open McpTransport; its stdio pipes
+    // target the container we're about to remove.
+    await docker(['rm', '-f', oldCid]).catch(() => {
+      /* already gone — recycle still proceeds */
+    })
+    const newCid = await this.runContainer(vm.id, vm.rootfs, native.runtime)
+    // Mutate in place: same logical slot (vm.id stable), new container under.
+    native.containerId = newCid
+    ;(vm as { bootedAt: number }).bootedAt = Date.now()
+  }
+
+  /** Boot a container under a given sandbox id. Shared by `boot` and `reset`. */
+  private async runContainer(
+    id: string,
+    rootfs: RootfsId,
+    runtime: RuntimeConfig,
+  ): Promise<string> {
+    const image = imageForRootfs(rootfs)
+    const args = ['run', '-d', '--rm', '--name', id]
+
+    // Resource caps. Docker accepts fractional --cpus and <N>m for memory.
+    if (runtime.cpus) args.push('--cpus', String(runtime.cpus))
+    if (runtime.memoryMB) args.push('--memory', `${runtime.memoryMB}m`)
+
+    // Egress. v0: mcp-only ⇒ no network at all (in-VM MCP is reached over the
+    // docker-exec stdio pipe, which does NOT require container networking).
+    // Anything else leaves the default bridge network in place. Finer egress
+    // profiles (pypi / github-trusted) are later work.
+    if ((runtime.egress ?? 'mcp-only') === 'mcp-only') {
+      args.push('--network', 'none')
+    }
+
+    // Label so orphaned sandboxes are findable/reapable.
+    args.push('--label', 'kg-sandbox=1', '--label', `kg-sandbox-id=${id}`)
+    args.push(image)
+
+    try {
+      return await docker(args)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      throw new SandboxBootError(`boot failed for ${id} (${image}): ${msg}`)
+    }
   }
 }
 
