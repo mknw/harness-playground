@@ -95,7 +95,7 @@ function getDefaultScheduler(): SandboxScheduler {
   }
   return defaultScheduler
 }
-function getDefaultAttachments(): AttachmentTable {
+export function getDefaultAttachments(): AttachmentTable {
   if (!defaultAttachments) {
     defaultAttachments = new AttachmentTable(getDefaultBackend(), getDefaultPool(), {
       idleMs: DEFAULT_SETTINGS.sandbox.idleEvictMs,
