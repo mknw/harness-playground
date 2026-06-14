@@ -87,7 +87,11 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     patternId: "sandbox-synth",
     liveEvents: true,
     viewConfig: {
-      eventTypes: ["controller_action", "tool_call", "tool_result", "error"],
+      // Include user_message so the synthesizer frames the answer against the
+      // original question — without it, it sees only the tool trace ("9") and
+      // can't say what was computed. controller_action carries the actor's
+      // reasoning; error surfaces loop-exhaustion to view.hasErrors().
+      eventTypes: ["user_message", "controller_action", "tool_call", "tool_result", "error"],
     },
   });
 
