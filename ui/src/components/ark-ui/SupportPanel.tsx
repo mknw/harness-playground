@@ -304,9 +304,9 @@ export const SupportPanel = (props: SupportPanelProps) => {
             <ToolsPanel sessionId={props.sessionId} />
           </Tabs.Content>
 
-          {/* Terminal Tab — read-only in-VM sandbox feed (#79) */}
+          {/* Terminal Tab — read-only feed + interactive shell (#79) */}
           <Tabs.Content value="terminal" h="full">
-            <TerminalPanel events={props.contextEvents ?? []} />
+            <TerminalPanel events={props.contextEvents ?? []} sessionId={props.sessionId} />
           </Tabs.Content>
 
           {/* Actions Tab (Future) */}

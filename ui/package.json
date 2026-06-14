@@ -27,6 +27,8 @@
     "@utcp/mcp": "^1.1.1",
     "@utcp/sdk": "^1.1.0",
     "@utcp/text": "^1.1.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "cytoscape": "^3.33.2",
     "marked": "^17.0.6",
     "neo4j-driver": "^6.0.1",
@@ -41,7 +43,9 @@
     "node": ">=22"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["node-pty"]
+    "onlyBuiltDependencies": [
+      "node-pty"
+    ]
   },
   "devDependencies": {
     "@boundaryml/baml": "0.219.0",
