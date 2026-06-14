@@ -94,6 +94,7 @@ import { conversationalMemoryAgent } from "./examples/conversational-memory.serv
 import { ontologyBuilderAgent } from "./examples/ontology-builder.server";
 import { semanticCacheAgent } from "./examples/semantic-cache.server";
 import { sandboxDemoAgent } from "./examples/sandbox-demo.server";
+import { sandboxSessionAgent } from "./examples/sandbox-session.server";
 
 // Register all agents
 registerAgent(defaultAgent);
@@ -108,3 +109,4 @@ registerAgent(conversationalMemoryAgent);
 registerAgent(ontologyBuilderAgent);
 registerAgent(semanticCacheAgent);
 registerAgent(sandboxDemoAgent);
+registerAgent(sandboxSessionAgent);
