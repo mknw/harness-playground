@@ -2,22 +2,24 @@
  * `withSandbox` — outer wrapper that attaches a sandbox VM to a controller
  * pattern for its lifetime. See docs/sandbox-plan.md → "What withSandbox is".
  *
- * Acquisition path (build-order step 5):
- *   1. `scheduler.allocate(sessionId)` — blocks if either cap is reached.
- *   2. `pool.acquire(rootfs, runtime)`  — pool-hit (O(ms)) or cold-boot.
- *   3. `backend.connectMcp(vm)`         — open the in-VM MCP transport.
+ * Four acquire paths, picked by `id` and `fresh`:
  *
- * Release path (reverse order, runs even on inner throws / partial failure):
- *   1. `transport.close()`              — tear down stdio pipes.
- *   2. `pool.release(vm)`               — reset & park, or destroy on cap/fail.
- *   3. `slot.release()`                 — free the scheduler slot.
+ *   {}                      anonymous pool. acquire/release through `WarmPool`.
+ *   { id }                  id-addressable. `AttachmentTable.acquire(id)`
+ *                           reuses or boots; release decrements refCount and
+ *                           parks under the id. Sweeper destroys on idle.
+ *   { id, fresh: true }     destroy any existing entry for `id`, then acquire
+ *                           anew. Stores under id like the plain `id` case.
+ *   { fresh: true }         direct `backend.boot/destroy`, bypassing both pool
+ *                           and attachment table. One-shot private VM.
  *
- * ID-addressable reuse (`id: 'foo'`) and force-fresh (`fresh: true`) remain
- * deferred to build-order step 6.
+ * All four go through the scheduler first (`scheduler.allocate(sessionId)`)
+ * and release the slot in the outer finally regardless of branch.
  */
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { DEFAULT_SETTINGS } from '../settings'
 import { getRequestSettings } from '../settings-context.server'
+import { AttachmentTable } from './attachment-table.server'
 import { DockerBackend } from './docker-backend.server'
 import { runWithSandbox } from './scope.server'
 import { SandboxScheduler } from './scheduler.server'
@@ -32,9 +34,17 @@ import type {
 assertServerOnImport()
 
 export interface WithSandboxConfig {
-  /** Reserved for step 6 (ID-addressable attachment); currently ignored. */
+  /**
+   * Id-addressable attachment. Two calls with the same id share one VM /
+   * transport; the attachment stays parked under the id between calls.
+   * Without `fresh`, an existing entry is reused.
+   */
   id?: string
-  /** Reserved for step 6 (force fresh); currently ignored. */
+  /**
+   * Force a fresh VM. With `id`: destroy any existing entry first, then
+   * acquire a new one for the id. Without `id`: bypass both the pool and the
+   * attachment table — one-shot `backend.boot/destroy` for a private VM.
+   */
   fresh?: boolean
   /** Rootfs flavor. v0: `'base'` only. */
   rootfs?: RootfsId
@@ -50,15 +60,18 @@ export interface WithSandboxConfig {
   pool?: WarmPool
   /** Scheduler override. Defaults to a process-shared `SandboxScheduler`. */
   scheduler?: SandboxScheduler
+  /** Attachment table override. Defaults to a process-shared instance. */
+  attachments?: AttachmentTable
 }
 
 // Process-shared singletons, lazily constructed from DEFAULT_SETTINGS. Cap
 // values are read once at first use; the settings panel can't reshape an
-// already-built scheduler/pool at runtime (those caps are process-scoped, not
-// per-request — see docs/sandbox-plan.md → "Settings").
+// already-built scheduler/pool/table at runtime (those caps are process-
+// scoped, not per-request — see docs/sandbox-plan.md → "Settings").
 let defaultBackend: ComputeBackend | null = null
 let defaultPool: WarmPool | null = null
 let defaultScheduler: SandboxScheduler | null = null
+let defaultAttachments: AttachmentTable | null = null
 
 function getDefaultBackend(): ComputeBackend {
   if (!defaultBackend) defaultBackend = new DockerBackend()
@@ -82,6 +95,14 @@ function getDefaultScheduler(): SandboxScheduler {
   }
   return defaultScheduler
 }
+function getDefaultAttachments(): AttachmentTable {
+  if (!defaultAttachments) {
+    defaultAttachments = new AttachmentTable(getDefaultBackend(), getDefaultPool(), {
+      idleMs: DEFAULT_SETTINGS.sandbox.idleEvictMs,
+    })
+  }
+  return defaultAttachments
+}
 
 /**
  * Wrap a pattern so its lifetime owns a sandbox VM. Composes orthogonally
@@ -94,9 +115,9 @@ export function withSandbox(config?: WithSandboxConfig) {
   return <T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> => {
     const backend = config?.backend ?? getDefaultBackend()
     // When the caller injects a custom backend (test scenario), build per-call
-    // pool + scheduler so test state doesn't bleed through the singletons.
-    // Tests can still inject `pool` / `scheduler` explicitly to share state
-    // across multiple withSandbox invocations (smoke-script pool-hit case).
+    // pool/scheduler/attachments so test state doesn't bleed through the
+    // singletons. Tests can still inject any of them explicitly to share
+    // state across multiple withSandbox invocations.
     const usingDefaultBackend = !config?.backend
     const pool =
       config?.pool ??
@@ -114,9 +135,18 @@ export function withSandbox(config?: WithSandboxConfig) {
             globalCap: DEFAULT_SETTINGS.sandbox.globalCap,
             perSessionCap: DEFAULT_SETTINGS.sandbox.perSessionCap,
           }))
+    const attachments =
+      config?.attachments ??
+      (usingDefaultBackend
+        ? getDefaultAttachments()
+        : new AttachmentTable(backend, pool, {
+            idleMs: DEFAULT_SETTINGS.sandbox.idleEvictMs,
+          }))
 
     const rootfs: RootfsId = config?.rootfs ?? 'base'
     const sessionId = config?.sessionId ?? 'default'
+    const id = config?.id
+    const fresh = config?.fresh === true
 
     const fn = async (
       scope: PatternScope<T>,
@@ -132,23 +162,22 @@ export function withSandbox(config?: WithSandboxConfig) {
 
       const slot = await scheduler.allocate(sessionId)
       try {
-        const vm = await pool.acquire(rootfs, runtime)
-        let transport
-        try {
-          transport = await backend.connectMcp(vm)
-        } catch (err) {
-          // Acquire succeeded but transport setup failed — recycle the VM
-          // (pool.release destroys if reset fails, parks if it succeeds and
-          // there's cap). Original error wins.
-          await pool.release(vm).catch(() => {})
-          throw err
+        if (id) {
+          return await runWithIdAttachment(
+            attachments,
+            id,
+            fresh,
+            rootfs,
+            runtime,
+            scope,
+            view,
+            pattern,
+          )
         }
-        try {
-          return await runWithSandbox(transport, () => pattern.fn(scope, view))
-        } finally {
-          await transport.close().catch(() => {})
-          await pool.release(vm).catch(() => {})
+        if (fresh) {
+          return await runWithFreshVm(backend, rootfs, runtime, scope, view, pattern)
         }
+        return await runWithPool(backend, pool, rootfs, runtime, scope, view, pattern)
       } finally {
         slot.release()
       }
@@ -159,5 +188,79 @@ export function withSandbox(config?: WithSandboxConfig) {
       name: `withSandbox(${pattern.name})`,
       fn,
     }
+  }
+}
+
+// ============================================================================
+// Branch implementations — extracted so the main `fn` reads top-to-bottom.
+// ============================================================================
+
+async function runWithPool<T>(
+  backend: ComputeBackend,
+  pool: WarmPool,
+  rootfs: RootfsId,
+  runtime: RuntimeConfig,
+  scope: PatternScope<T>,
+  view: EventView,
+  pattern: ConfiguredPattern<T>,
+): Promise<PatternScope<T>> {
+  const vm = await pool.acquire(rootfs, runtime)
+  let transport
+  try {
+    transport = await backend.connectMcp(vm)
+  } catch (err) {
+    await pool.release(vm).catch(() => {})
+    throw err
+  }
+  try {
+    return await runWithSandbox(transport, () => pattern.fn(scope, view))
+  } finally {
+    await transport.close().catch(() => {})
+    await pool.release(vm).catch(() => {})
+  }
+}
+
+async function runWithFreshVm<T>(
+  backend: ComputeBackend,
+  rootfs: RootfsId,
+  runtime: RuntimeConfig,
+  scope: PatternScope<T>,
+  view: EventView,
+  pattern: ConfiguredPattern<T>,
+): Promise<PatternScope<T>> {
+  const vm = await backend.boot(rootfs, runtime)
+  let transport
+  try {
+    transport = await backend.connectMcp(vm)
+  } catch (err) {
+    await backend.destroy(vm).catch(() => {})
+    throw err
+  }
+  try {
+    return await runWithSandbox(transport, () => pattern.fn(scope, view))
+  } finally {
+    await transport.close().catch(() => {})
+    await backend.destroy(vm).catch(() => {})
+  }
+}
+
+async function runWithIdAttachment<T>(
+  attachments: AttachmentTable,
+  id: string,
+  fresh: boolean,
+  rootfs: RootfsId,
+  runtime: RuntimeConfig,
+  scope: PatternScope<T>,
+  view: EventView,
+  pattern: ConfiguredPattern<T>,
+): Promise<PatternScope<T>> {
+  if (fresh) {
+    await attachments.destroyById(id).catch(() => {})
+  }
+  const att = await attachments.acquire(id, rootfs, runtime)
+  try {
+    return await runWithSandbox(att.transport, () => pattern.fn(scope, view))
+  } finally {
+    attachments.release(att)
   }
 }

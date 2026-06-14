@@ -16,6 +16,7 @@ import { withSandbox } from '../../../lib/sandbox/with-sandbox.server'
 import { getActiveSandbox } from '../../../lib/sandbox/scope.server'
 import { WarmPool } from '../../../lib/sandbox/warm-pool.server'
 import { SandboxScheduler } from '../../../lib/sandbox/scheduler.server'
+import { AttachmentTable } from '../../../lib/sandbox/attachment-table.server'
 import type {
   ComputeBackend,
   HealthStatus,
@@ -329,5 +330,114 @@ describe('withSandbox scheduler + pool wiring', () => {
       ),
     ).rejects.toThrow('inner went pop')
     expect(scheduler.inflightCount()).toBe(0)
+  })
+})
+
+describe('withSandbox id/fresh (step 6)', () => {
+  function buildKit() {
+    const backend = fakeBackend()
+    backend.reset = vi.fn(async () => {})
+    const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 60_000 })
+    const scheduler = new SandboxScheduler({ globalCap: 4, perSessionCap: 4 })
+    const attachments = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+    return { backend, pool, scheduler, attachments }
+  }
+
+  it('{ id } reuses the same VM across consecutive invocations', async () => {
+    const kit = buildKit()
+    const inner = fakePattern(async (scope) => scope)
+    const wrap = withSandbox({ ...kit, id: 'session-42' })(inner)
+
+    await wrap.fn(fakeScope({}), fakeView)
+    await wrap.fn(fakeScope({}), fakeView)
+    await wrap.fn(fakeScope({}), fakeView)
+
+    // Only one boot — the attachment table reuses across calls.
+    expect(kit.backend.calls.boot).toHaveLength(1)
+    expect(kit.attachments.has('session-42')).toBe(true)
+    expect(kit.attachments.size()).toBe(1)
+  })
+
+  it('{ id } isolates separate ids (different VMs per id)', async () => {
+    const kit = buildKit()
+    // Need pool cap big enough for two attachments parked at refCount=0
+    // during overlap; but here we only have one in flight at a time, so
+    // pool sees one acquire then another. Cap 1 means second acquire boots
+    // since first hasn't been released to the pool. Bump cap to 2 to be safe.
+    const pool = new WarmPool(kit.backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const attachments = new AttachmentTable(kit.backend, pool, { idleMs: 60_000 })
+    const inner = fakePattern(async (scope) => scope)
+
+    await withSandbox({ backend: kit.backend, pool, scheduler: kit.scheduler, attachments, id: 'a' })(
+      inner,
+    ).fn(fakeScope({}), fakeView)
+    await withSandbox({ backend: kit.backend, pool, scheduler: kit.scheduler, attachments, id: 'b' })(
+      inner,
+    ).fn(fakeScope({}), fakeView)
+
+    expect(kit.backend.calls.boot).toHaveLength(2)
+    expect(attachments.has('a')).toBe(true)
+    expect(attachments.has('b')).toBe(true)
+  })
+
+  it('{ id, fresh: true } calls destroyById then reacquires under the same id', async () => {
+    const kit = buildKit()
+    const destroySpy = vi.spyOn(kit.attachments, 'destroyById')
+    const inner = fakePattern(async (scope) => scope)
+
+    await withSandbox({ ...kit, id: 'session-42' })(inner).fn(fakeScope({}), fakeView)
+    expect(destroySpy).not.toHaveBeenCalled()
+
+    await withSandbox({ ...kit, id: 'session-42', fresh: true })(inner).fn(
+      fakeScope({}),
+      fakeView,
+    )
+    expect(destroySpy).toHaveBeenCalledWith('session-42')
+    expect(kit.attachments.has('session-42')).toBe(true)
+    // Note: a pool-recycled VM may serve the re-acquire, so we don't assert
+    // boot was called twice — the user-visible semantic is "fresh state under
+    // this id", and pool.reset already guarantees a fresh container.
+  })
+
+  it('{ fresh: true } (no id) bypasses pool and attachment table', async () => {
+    const kit = buildKit()
+    const poolAcquireSpy = vi.spyOn(kit.pool, 'acquire')
+    const poolReleaseSpy = vi.spyOn(kit.pool, 'release')
+
+    const inner = fakePattern(async (scope) => scope)
+    await withSandbox({ ...kit, fresh: true })(inner).fn(fakeScope({}), fakeView)
+
+    expect(poolAcquireSpy).not.toHaveBeenCalled()
+    expect(poolReleaseSpy).not.toHaveBeenCalled()
+    expect(kit.backend.calls.boot).toHaveLength(1)
+    expect(kit.backend.calls.destroy).toHaveLength(1)
+    expect(kit.attachments.size()).toBe(0)
+    expect(kit.pool.size()).toBe(0)
+  })
+
+  it('{ fresh: true } (no id) destroys the VM even when the inner pattern throws', async () => {
+    const kit = buildKit()
+    const inner = fakePattern(async () => {
+      throw new Error('boom')
+    })
+
+    await expect(
+      withSandbox({ ...kit, fresh: true })(inner).fn(fakeScope({}), fakeView),
+    ).rejects.toThrow('boom')
+    expect(kit.backend.calls.destroy).toHaveLength(1)
+  })
+
+  it('{ id } refCount drops to 0 after release; reacquire reuses without booting', async () => {
+    const kit = buildKit()
+    const inner = fakePattern(async (scope) => scope)
+    const wrap = withSandbox({ ...kit, id: 'session-42' })(inner)
+
+    await wrap.fn(fakeScope({}), fakeView)
+    // After release, refCount=0 but entry stays. Sweeper hasn't run.
+    expect(kit.attachments.has('session-42')).toBe(true)
+    const before = kit.backend.calls.boot.length
+
+    await wrap.fn(fakeScope({}), fakeView)
+    expect(kit.backend.calls.boot.length).toBe(before) // no extra boot
   })
 })
