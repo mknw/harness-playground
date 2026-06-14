@@ -11,6 +11,7 @@ import { GraphVisualization } from './GraphVisualization';
 import { ObservabilityPanel } from './ObservabilityPanel';
 import { DataStashPanel, type StashAction } from './DataStashPanel';
 import { ToolsPanel } from './ToolsPanel';
+import { TerminalPanel } from './TerminalPanel';
 import { AllGraphTabWrapper } from './AllGraphTab';
 import type { ElementDefinition, StylesheetJsonBlock } from 'cytoscape';
 import type { ContextEvent, UnifiedContext } from '~/lib/harness-patterns';
@@ -200,6 +201,23 @@ export const SupportPanel = (props: SupportPanelProps) => {
           </Tabs.Trigger>
 
           <Tabs.Trigger
+            value="terminal"
+            p="x-3 y-2"
+            text="sm dark-text-primary"
+            cursor="pointer"
+            border="b-2 transparent"
+            transition="all"
+            data-state={selectedTab() === 'terminal' ? 'active' : 'inactive'}
+            style={{
+              "border-bottom-color": selectedTab() === 'terminal' ? '#10b981' : 'transparent',
+              "color": selectedTab() === 'terminal' ? '#10b981' : '#a1a1aa'
+            }}
+          >
+            <span mr="1">🖥️</span>
+            Terminal
+          </Tabs.Trigger>
+
+          <Tabs.Trigger
             value="actions"
             p="x-3 y-2"
             text="sm dark-text-tertiary"
@@ -284,6 +302,11 @@ export const SupportPanel = (props: SupportPanelProps) => {
           {/* Tools Tab */}
           <Tabs.Content value="tools" h="full">
             <ToolsPanel sessionId={props.sessionId} />
+          </Tabs.Content>
+
+          {/* Terminal Tab — read-only in-VM sandbox feed (#79) */}
+          <Tabs.Content value="terminal" h="full">
+            <TerminalPanel events={props.contextEvents ?? []} />
           </Tabs.Content>
 
           {/* Actions Tab (Future) */}
