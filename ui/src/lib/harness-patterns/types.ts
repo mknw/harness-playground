@@ -53,6 +53,7 @@ export type EventType =
   | 'approval_response'
   | 'error'
   | 'reference_attached'
+  | 'intent_compacted'
 
 /** A single event in the context stream */
 export interface ContextEvent {
@@ -588,6 +589,22 @@ export interface ReferenceAttachedEventData {
   skipped?: 'empty' | 'single' | 'cached'
 }
 
+/** Data payload for intent_compacted event — emitted by `compactIntent` once
+ *  per chain invocation. Carries the rewritten brief and enough provenance to
+ *  audit the rewrite in the observability panel. `llmCall` (on the
+ *  ContextEvent) holds the BAML call detail. */
+export interface IntentCompactedEventData {
+  /** The self-contained brief written to `scope.data.intent`. */
+  intent: string
+  /** The user's raw latest message before rewriting. */
+  latest: string
+  /** Number of prior history messages fed to the rewrite. */
+  historyLength: number
+  /** Set when the LLM call was skipped (turn 1 has no back-references to
+   *  resolve, so the latest message passes through unchanged). */
+  skipped?: 'no-history'
+}
+
 // ============================================================================
 // LLM Call Observability
 // ============================================================================
@@ -662,7 +679,8 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   router: true,
   routes: false,
   chain: false,
-  withApproval: true
+  withApproval: true,
+  compactIntent: 'intent_compacted'
 }
 
 /** Default commitStrategy by pattern type */
@@ -673,7 +691,8 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   router: 'always',
   routes: 'always',
   chain: 'always',
-  withApproval: 'on-success'
+  withApproval: 'on-success',
+  compactIntent: 'always'
 }
 
 /** Default errorSeverity by pattern type.
@@ -687,4 +706,7 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   routes: 'irrecoverable',
   chain: 'irrecoverable',
   withApproval: 'recoverable',
+  // compactIntent is best-effort: on failure it leaves intent unset and the
+  // downstream actor falls back to the raw user message — never fatal.
+  compactIntent: 'recoverable',
 }

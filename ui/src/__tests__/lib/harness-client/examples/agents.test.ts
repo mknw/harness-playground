@@ -240,6 +240,29 @@ describe('Agent Harnesses', () => {
     })
   })
 
+  describe('sandboxSessionAgent', () => {
+    it('should have valid config', async () => {
+      const { sandboxSessionAgent } = await import('../../../../lib/harness-client/examples/sandbox-session.server')
+      validateAgentConfig(sandboxSessionAgent)
+      expect(sandboxSessionAgent.id).toBe('sandbox-session')
+    })
+
+    it('should create patterns: compactIntent → withSandbox(actorCritic) → synthesizer', async () => {
+      const { sandboxSessionAgent } = await import('../../../../lib/harness-client/examples/sandbox-session.server')
+      const patterns = await validatePatterns(sandboxSessionAgent)
+
+      const names = patterns.map(p => p.name)
+      expect(patterns.length).toBe(3)
+      // #83: compactIntent runs first so the router-less actor gets a
+      // self-contained brief instead of a bare back-reference.
+      expect(names[0]).toBe('compactIntent')
+      expect(patterns[0].config.patternId).toBe('sandbox-session-intent')
+      expect(names[1]).toContain('withSandbox')
+      expect(names[1]).toContain('actorCritic')
+      expect(names[2]).toBe('synthesizer')
+    })
+  })
+
   describe('conversationalMemoryAgent', () => {
     it('should have valid config', async () => {
       const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
