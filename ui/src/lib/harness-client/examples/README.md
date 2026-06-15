@@ -1358,6 +1358,44 @@ return [
 ];
 ```
 
+### 10. Sandbox Demo (`withSandbox` ephemeral)
+
+**Servers**: none (in-VM `sandbox_*` tools via the ALS scope, not the gateway)
+**Patterns**: `chain(withSandbox({})(actorCritic), synth)`
+**Use case**: Run untrusted code in an isolated Docker VM for a single turn.
+
+```typescript
+const actor = createActorControllerAdapter({ contextPrefix: SANDBOX_ACTOR_GUIDANCE })
+const critic = createCriticAdapter()
+const loop = actorCritic<SessionData>(actor, critic, [], {
+  patternId: 'sandbox-loop',
+  availableTools: [],
+  liveEvents: true,
+})
+const sandboxed = withSandbox({ rootfs: 'base' })(loop)
+return [sandboxed, synthesizer({ mode: 'thread' })]
+```
+
+Each turn gets a fresh VM (warm-pool amortized). Tools surface as `sandbox_*`
+through the ALS scope — actor's adapter prepends them to the prompt at call
+time, no per-pattern wiring. See `sandbox-demo.server.ts`.
+
+### 11. Sandbox · Session (`withSandbox({ id })` persistent + xterm)
+
+**Servers**: none (same as Sandbox Demo)
+**Patterns**: `chain(withSandbox({ id: sessionId })(actorCritic), synth)`
+**Use case**: A persistent workspace shared with the **interactive Shell
+terminal** in the Terminal panel. Agent writes a file → user can `cat` it in
+the Shell; same VM. The `id` keys the attachment to the conversation in
+`AttachmentTable`; the `PtyManager` keys on the same `sessionId`.
+
+Composes any actor-style pattern with id-addressable attachment. The current
+cross-turn-context gap (actor sees only the latest message) is tracked in
+[#83](https://github.com/mknw/harness-playground/issues/83) (`compactIntent`).
+
+See `sandbox-session.server.ts`. Debugging modalities for live sandboxes:
+[`docs/sandbox/README.md`](../../../../docs/sandbox/README.md).
+
 ---
 
 ## Pattern Composition Matrix
