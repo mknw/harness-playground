@@ -36,6 +36,7 @@ Functional, composable framework for agentic tool execution.
   - [withApproval()](#withapprovalpattern-predicate)
   - [withReferences()](#withreferencespattern-config)
   - [synthesizer()](#synthesizerconfig)
+  - [compactIntent()](#compactintentconfig)
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
   - [chain()](#chainctx-patterns)
@@ -129,6 +130,8 @@ type EventType =
   | 'pattern_enter' | 'pattern_exit'
   | 'approval_request' | 'approval_response'
   | 'error'
+  | 'reference_attached'   // withReferences — selector decision (observability)
+  | 'intent_compacted'     // compactIntent — rewritten brief (observability)
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -494,6 +497,47 @@ synthesizer({
 })
 ```
 
+### `compactIntent(config?)`
+
+Rewrites the latest user message into a self-contained `scope.data.intent` brief
+before a router-less actor runs. The chain-based counterpart to `router` (which
+sets `data.intent` as a side-effect of classification) — `compactIntent` strips
+the classification, leaving only the rewrite. Writes the same carrier
+`actorCritic` / `simpleLoop` already read (`scope.data.intent ?? userContent`),
+so there is **no controller-prompt change**.
+
+```typescript
+chain(
+  compactIntent({ viewConfig: { fromLastNTurns: 5 } }),
+  withSandbox({ id: sessionId })(actorCritic(actor, critic, [], { … })),
+  synthesizer({ mode: 'thread' }),
+)
+
+type CompactIntentConfig = PatternConfig
+```
+
+**How it works:**
+1. Reads recent message history from its view (default `viewConfig`:
+   `{ fromLast: false, fromLastNTurns: 5, eventTypes: ['user_message', 'assistant_message'] }`,
+   think-blocks stripped — mirrors `router`).
+2. Splits into the latest user message + prior history, then calls BAML
+   `CompactIntent` on the cheap `DescribeAnthropic` client (one call per chain
+   invocation) to resolve back-references (*"try again"*, *"I can't find the
+   file"*) into a standalone instruction.
+3. Writes `scope.data.intent`; emits an `intent_compacted` event carrying the
+   LLM call for observability (mirrors `withReferences`' `reference_attached`).
+
+**Skip / safety:**
+- **Turn 1 (no history):** skips the LLM call, passes the message through
+  unchanged (`skipped: 'no-history'`).
+- **Backward-safe:** on any failure it leaves `intent` unset, so the actor falls
+  back to the raw user message — never fatal.
+
+> Use it upstream of a router-less actor (e.g. the Sandbox · Session agent).
+> Agents that already route don't need it — `router` fills `data.intent` itself.
+> Part E of [#83](https://github.com/mknw/harness-playground/issues/83) (the
+> `compact*` naming unification) is a deferred follow-up.
+
 ### `router(routeDescriptions, config?)`
 
 Classifies intent via BAML and sets `scope.data.route`. The first half of the router/routes pair.
@@ -734,6 +778,7 @@ router({ neo4j: 'Database queries' }, {
 - `simpleLoop`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
 - `actorCritic`: `trackHistory: 'tool_result'`, `commitStrategy: 'on-success'`
 - `synthesizer`: `trackHistory: 'assistant_message'`, `commitStrategy: 'always'`
+- `compactIntent`: `trackHistory: 'intent_compacted'`, `commitStrategy: 'always'`, default `viewConfig` of last 5 message turns
 
 ## Event → BAML Type Mapping
 
@@ -756,6 +801,8 @@ transformed into prompt-friendly types. The table below shows which harness
 | `approval_request` | `ApprovalRequestEventData` | _(not sent to BAML)_ | withApproval only |
 | `approval_response` | `ApprovalResponseEventData` | _(not sent to BAML)_ | withApproval only |
 | `error` | `ErrorEventData` | _(read via `view.hasErrors()`)_ | synthesizer (error context), harness error handling |
+| `reference_attached` | `ReferenceAttachedEventData` | _(not sent to BAML)_ | withReferences only (observability) |
+| `intent_compacted` | `IntentCompactedEventData` | _(not sent to BAML)_ | compactIntent only (observability) |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
 
@@ -831,6 +878,24 @@ BAML Return → string (assistant response text)
 > **Error scoping**: The synthesizer reads error state from EventView, not from the data stash.
 > This means errors are scoped by the synthesizer's `ViewConfig` (e.g. `fromLastNTurns: 1`) and
 > naturally expire — they don't persist across turns via serialization.
+
+#### compactIntent → `CompactIntent`
+
+```
+Events read (ViewConfig default: fromLastNTurns: 5, messages only)
+├── user_message       ──► latest (last user_message) + history (Message[])
+└── assistant_message  ──► history (Message[])
+
+BAML Inputs:
+  history : Message[]   ← prior turns' user/assistant messages
+  latest  : string      ← current user_message content
+
+BAML Return → string (the rewritten brief)
+  → written to scope.data.intent
+  → stored as an intent_compacted event (with the LLM call)
+
+Turn 1 (no history): LLM call skipped, latest passes through unchanged.
+```
 
 #### router() + routes()
 
@@ -1016,6 +1081,7 @@ harness-patterns/
     ├── hook.server.ts          # Lifecycle hook; wraps inner events with pattern_enter/exit
     ├── chain.server.ts         # Sequential composition; accepts onEvent? for SSE streaming
     ├── synthesizer.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE
+    ├── compactIntent.server.ts # Rewrites latest message → scope.data.intent for router-less actors; emits intent_compacted
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)
 ```
 
