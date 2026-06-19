@@ -120,7 +120,7 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 | `ControllerAnthropic` | Tool loop controllers (simpleLoop + actor) | AnthropicSonnet46 → AnthropicHaiku45 |
 | `CriticAnthropic` | Evaluation/critique | AnthropicHaiku45 → AnthropicSonnet46 |
 | `SynthesizerAnthropic` | Response synthesis | AnthropicSonnet46 → AnthropicHaiku45 |
-| `DescribeAnthropic` | Lightweight tool result summarization | AnthropicHaiku45 |
+| `DescribeAnthropic` | Lightweight tool result summarization, titles, intent compaction (`compactIntent`) | AnthropicHaiku45 |
 
 **Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — declared in `baml_src/clients.baml`:
 

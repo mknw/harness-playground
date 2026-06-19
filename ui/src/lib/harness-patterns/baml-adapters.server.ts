@@ -21,6 +21,7 @@ import { assertServerOnImport } from './assert.server'
 import type { ControllerFn, CriticFn, CodeModeControllerFn, ControllerAction, CriticResult, ScriptExecutionEvent, LLMCallData } from './types'
 import type { ToolDescription, LoopTurn, Attempt, PriorResult, FewShot } from '../../../baml_client/types'
 import { listTools as mcpListTools } from './mcp-client.server'
+import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 import { clientOverrideFor } from './clients.server'
@@ -294,6 +295,21 @@ async function filterToolDescriptions(
   return all.filter((t) => nameSet.has(t.name) || (pattern?.test(t.name) ?? false))
 }
 
+/** When a `withSandbox` wrapper is active, return its in-VM tool descriptions
+ *  in the adapter's `ToolDescription` shape. Outside any sandbox scope, returns
+ *  `[]`. See docs/sandbox-plan.md → "How tools reach the controller". The
+ *  transport caches its tool list internally, so this is cheap per call. */
+async function getActiveSandboxToolDescriptions(): Promise<ToolDescription[]> {
+  const sandbox = getActiveSandbox()
+  if (!sandbox) return []
+  const mcp = await sandbox.listTools()
+  return mcp.map((t) => ({
+    name: t.name,
+    description: t.description ?? '',
+    args_schema: t.inputSchema ? JSON.stringify(t.inputSchema) : undefined,
+  }))
+}
+
 // ============================================================================
 // Adapters for simpleLoop
 // ============================================================================
@@ -322,8 +338,12 @@ export function createLoopControllerAdapter(
     const { b } = await import('../../../baml_client')
     const startTime = Date.now()
 
-    // Get tool descriptions for available tools
-    const tools = await filterToolDescriptions(toolNames)
+    // Get tool descriptions for available tools. When a `withSandbox` wrapper
+    // is active, prepend its in-VM tool surface so the actor sees them in its
+    // first-turn prompt without the caller threading them through `toolNames`.
+    const sandboxTools = await getActiveSandboxToolDescriptions()
+    const gatewayTools = await filterToolDescriptions(toolNames)
+    const tools = [...sandboxTools, ...gatewayTools]
 
     // Parse previous results into LoopTurn format
     const turns: LoopTurn[] = parseResultsToTurns(previous_results, n_turn)
@@ -528,10 +548,15 @@ export function createActorControllerAdapter(
       : options.toolNames ?? []
 
     // Get tool descriptions — optionally refresh + include pattern matches.
-    const tools = await filterToolDescriptions(names, {
+    // When a `withSandbox` wrapper is active, prepend its in-VM tool surface
+    // so the actor sees them in its first-turn prompt without the caller
+    // threading them through `toolNames` / `toolNamesProvider`.
+    const sandboxTools = await getActiveSandboxToolDescriptions()
+    const gatewayTools = await filterToolDescriptions(names, {
       dynamicPattern: options.dynamicPattern,
       refresh: options.refreshOnCall,
     })
+    const tools = [...sandboxTools, ...gatewayTools]
 
     // Convert ScriptExecutionEvent to Attempt format. `toolName` records the
     // actor's actual tool_name per push — so a rejected `mcp-exec` attempt

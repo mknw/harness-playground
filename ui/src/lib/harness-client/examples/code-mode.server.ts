@@ -76,9 +76,9 @@ The kg-agent gateway exposes a "code-mode" factory tool. Use it to:
 3. SKIP REDUNDANT DISCOVERY. Tools already present in AVAILABLE TOOLS
    (above) don't need mcp-find or mcp-add — they're loaded.
 
-4. RETURN WHEN DONE OR NEAR BUDGET. When the script produces a usable
-   answer (or BUDGET shows you're near the max), call Return with the
-   data + a short summary. Do NOT chain more tools past that point.
+4. LET THE CRITIC DECIDE COMPLETION. You don't need a Return tool — the
+   critic evaluates each result and ends the loop when sufficient. Focus
+   on producing the right tool call; don't try to short-circuit.
 `.trim();
 
 /**

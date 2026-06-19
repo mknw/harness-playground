@@ -28,6 +28,7 @@ compositions across all available MCP servers.
 | `withApproval` | `(pattern, predicate)` | Pause for user approval on matching actions |
 | `withReferences` | `(pattern, config?)` | LLM-curated prior-result attachment at pattern ingress (cross-pattern data flow, [#30](../../../../docs/harness-patterns/with-references.md)) |
 | `synthesizer` | `(config)` | Transform tool results into natural language |
+| `compactIntent` | `(config?)` | Rewrite the latest message into a self-contained `data.intent` for a router-less actor ([#83](https://github.com/mknw/harness-playground/issues/83)) |
 | `router` | `(routeDescriptions, config?)` | Intent classification → sets `data.route` |
 | `routes` | `(patternMap, config?)` | Dispatch to matched sub-pattern; pass-through on `'user'` route |
 | `chain` | `(ctx, patterns)` | Sequential composition |
@@ -1357,6 +1358,48 @@ return [
   synthesizer({ mode: "thread", patternId: "retrieval-synth" }),
 ];
 ```
+
+### 10. Sandbox Demo (`withSandbox` ephemeral)
+
+**Servers**: none (in-VM `sandbox_*` tools via the ALS scope, not the gateway)
+**Patterns**: `chain(withSandbox({})(actorCritic), synth)`
+**Use case**: Run untrusted code in an isolated Docker VM for a single turn.
+
+```typescript
+const actor = createActorControllerAdapter({ contextPrefix: SANDBOX_ACTOR_GUIDANCE })
+const critic = createCriticAdapter()
+const loop = actorCritic<SessionData>(actor, critic, [], {
+  patternId: 'sandbox-loop',
+  availableTools: [],
+  liveEvents: true,
+})
+const sandboxed = withSandbox({ rootfs: 'base' })(loop)
+return [sandboxed, synthesizer({ mode: 'thread' })]
+```
+
+Each turn gets a fresh VM (warm-pool amortized). Tools surface as `sandbox_*`
+through the ALS scope — actor's adapter prepends them to the prompt at call
+time, no per-pattern wiring. See `sandbox-demo.server.ts`.
+
+### 11. Sandbox · Session (`withSandbox({ id })` persistent + xterm)
+
+**Servers**: none (same as Sandbox Demo)
+**Patterns**: `[compactIntent, withSandbox({ id: sessionId })(actorCritic), synth]`
+**Use case**: A persistent workspace shared with the **interactive Shell
+terminal** in the Terminal panel. Agent writes a file → user can `cat` it in
+the Shell; same VM. The `id` keys the attachment to the conversation in
+`AttachmentTable`; the `PtyManager` keys on the same `sessionId`.
+
+Composes any actor-style pattern with id-addressable attachment. Because this
+agent is **router-less**, `compactIntent` runs first ([#83](https://github.com/mknw/harness-playground/issues/83)
+Part A) to rewrite bare follow-ups (*"I can't find the file"*) into a
+self-contained `data.intent` the actor can act on — turn 1 passes through
+unchanged. The actor also carries two `tool_args` few-shots
+([#85](https://github.com/mknw/harness-playground/issues/85)) so multi-line
+`sandbox_write` / quoted `sandbox_bash` calls emit valid JSON on the first try.
+
+See `sandbox-session.server.ts`. Debugging modalities for live sandboxes:
+[`docs/sandbox/README.md`](../../../../docs/sandbox/README.md).
 
 ---
 

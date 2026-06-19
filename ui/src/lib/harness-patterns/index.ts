@@ -68,6 +68,7 @@ export type {
   ApprovalRequestEventData,
   ApprovalResponseEventData,
   ErrorEventData,
+  IntentCompactedEventData,
 
   // LLM Observability
   LLMCallData,
@@ -128,6 +129,7 @@ export {
   chain,
   runChain,
   synthesizer,
+  compactIntent,
   configurePattern,
   parallel,
   judge,
@@ -138,6 +140,8 @@ export {
   hook,
   type SimpleLoopData,
   type ActorCriticData,
+  type CompactIntentConfig,
+  type CompactIntentData,
   type ApprovalPredicate,
   type WithApprovalData,
   type JudgeConfig,

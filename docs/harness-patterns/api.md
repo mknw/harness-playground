@@ -43,6 +43,7 @@ type EventType =
   | 'pattern_enter' | 'pattern_exit'
   | 'approval_request' | 'approval_response'
   | 'error'
+  | 'reference_attached' | 'intent_compacted'  // observability events emitted by withReferences / compactIntent
 ```
 
 ### PatternScope
@@ -236,6 +237,35 @@ interface SynthesizerConfig extends PatternConfig {
   skipIfHasResponse?: boolean
 }
 ```
+
+### compactIntent
+
+Rewrite the latest user message into a self-contained `data.intent` brief
+before a router-less actor runs, resolving bare back-references (*"try again"*,
+*"I can't find the file"*) against recent message history. The chain-based
+counterpart to `router` (which sets `data.intent` as a side-effect of
+classification). Writes the carrier `actorCritic`/`simpleLoop` already read, so
+no controller-prompt change.
+
+```typescript
+function compactIntent<T>(config?: CompactIntentConfig): ConfiguredPattern<T>
+
+type CompactIntentConfig = PatternConfig
+// Default viewConfig: { fromLast: false, fromLastNTurns: 5,
+//   eventTypes: ['user_message', 'assistant_message'] }
+```
+
+**Behavior:**
+- Calls BAML `CompactIntent` (cheap `DescribeAnthropic` client) and writes the
+  result to `scope.data.intent`.
+- **Turn 1 (no history):** skips the LLM call and passes the message through
+  unchanged.
+- **Backward-safe:** on any failure it leaves `intent` unset, so the actor falls
+  back to the raw user message — never fatal.
+- Emits an `intent_compacted` observability event (carrying the LLM call),
+  mirroring `withReferences`' `reference_attached`.
+
+Adopted by the Sandbox · Session agent ([#83](https://github.com/mknw/harness-playground/issues/83) Part A). Part E (the `compact*` naming unification) is a deferred follow-up.
 
 ### router
 
@@ -571,6 +601,7 @@ interface ViewConfig {
 | simpleLoop | `'tool_result'` | `'on-success'` |
 | actorCritic | `'tool_result'` | `'on-success'` |
 | synthesizer | `'assistant_message'` | `'always'` |
+| compactIntent | `'intent_compacted'` | `'always'` |
 | router | `false` | `'always'` |
 | chain | `false` | `'always'` |
 | withApproval | `false` | `'on-success'` |
@@ -620,4 +651,4 @@ const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy>
 
 ---
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-06-15

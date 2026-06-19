@@ -4,6 +4,7 @@
   "scripts": {
     "baml-test": "baml-cli test",
     "baml-generate": "baml-cli generate",
+    "postinstall": "find node_modules -path '*/node-pty/prebuilds/*/spawn-helper' -exec chmod +x {} + 2>/dev/null || true",
     "dev": "vinxi dev --port 3444",
     "dev:exposed": "vinxi dev --port 3444 --host 0.0.0.0",
     "build": "pnpm baml-generate & vinxi build",
@@ -26,9 +27,12 @@
     "@utcp/mcp": "^1.1.1",
     "@utcp/sdk": "^1.1.0",
     "@utcp/text": "^1.1.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "cytoscape": "^3.33.2",
     "marked": "^17.0.6",
     "neo4j-driver": "^6.0.1",
+    "node-pty": "^1.1.0",
     "pg": "^8.20.0",
     "solid-js": "^1.9.12",
     "unocss": "^66.6.8",
@@ -37,6 +41,11 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "node-pty"
+    ]
   },
   "devDependencies": {
     "@boundaryml/baml": "0.219.0",
