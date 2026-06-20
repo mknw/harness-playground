@@ -453,7 +453,7 @@ Open problems `backgroundSession` surfaces (all genuinely v2):
 
 ## See also
 
-- [`docs/ROADMAP.md`](./ROADMAP.md) — where this fits in the broader plan
+- [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) — where this fits in the broader plan
 - [#79](https://github.com/mknw/harness-playground/issues/79) — implementation story
 - [#78](https://github.com/mknw/harness-playground/issues/78) — capability vision + rootfs flavor catalog
 - [`ui/src/lib/harness-patterns/README.md`](../ui/src/lib/harness-patterns/README.md) — pattern framework overview (`withReferences`, `withApproval` are the analogous wrappers)

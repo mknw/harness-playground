@@ -57,7 +57,7 @@ const CODE_MODE_TOOLS = ['mcp-find', 'mcp-add', 'code-mode', 'mcp-exec'];
  * `createActorControllerAdapter({ contextPrefix })`. Covers the four
  * behaviors the actor needs to do code-mode well. This is shipped as a
  * code-string today; when the harness gains Skill support
- * (docs/ROADMAP.md), the same content will live as a Skill the actor
+ * (issue #86), the same content will live as a Skill the actor
  * receives via the standard mechanism instead.
  */
 const CODE_MODE_ACTOR_GUIDANCE = `

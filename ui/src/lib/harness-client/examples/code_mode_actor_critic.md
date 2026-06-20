@@ -157,8 +157,8 @@ gate stay in sync.
 
 ## Future: migrate guidance to a Skill
 
-Once the harness gains Skill support (see [`docs/ROADMAP.md`](../../../../../docs/ROADMAP.md)
-§ Harness pattern: Skill support), the four-point guidance + few-shots
+Once the harness gains Skill support (see [#86](https://github.com/mknw/harness-playground/issues/86)),
+the four-point guidance + few-shots
 move out of `code-mode.server.ts` into a reusable Skill the actor receives
 via the standard mechanism. The shape stays the same (text + few-shots
 + optional budget signal); the storage location changes from "inline

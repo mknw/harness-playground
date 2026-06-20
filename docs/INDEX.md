@@ -7,7 +7,7 @@
 | Document | Description |
 |----------|-------------|
 | [README.md](../README.md) | Project overview and quick start |
-| [ROADMAP.md](ROADMAP.md) | Single roadmap (project + UI; `ui/ROADMAP.md` retired 2026-05-21) |
+| [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Planning board / roadmap (replaced `docs/ROADMAP.md`; planning now in GitHub Projects) |
 
 ---
 
@@ -87,7 +87,6 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 kg-agent/
 ├── docs/
 │   ├── INDEX.md                 # You are here
-│   ├── ROADMAP.md               # Project roadmap
 │   ├── UI_ARCHITECTURE.md       # Frontend architecture
 │   ├── DOCKER_COMPOSE.md        # Docker setup
 │   ├── MCP_GATEWAY.md           # MCP Gateway reference
@@ -100,7 +99,6 @@ kg-agent/
 │       └── with-references.md   # withReferences meta-pattern design (#30)
 ├── ui/
 │   ├── README.md                # UI quick start + index
-│   ├── ROADMAP.md               # UI deferred tasks
 │   └── src/lib/
 │       ├── harness-patterns/    # Pattern framework (source + README.md)
 │       └── harness-client/      # Frontend integration layer (examples/README.md)
