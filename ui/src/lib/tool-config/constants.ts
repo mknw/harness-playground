@@ -47,3 +47,40 @@ export const MINIMAL_TOOLS = getMinimalTools();
  *  CODE_MODE_TOOLS in `harness-client/examples/code-mode.server.ts` — keep
  *  in sync. */
 export const CODE_MODE_DEFAULTS = ["mcp-find", "mcp-add", "code-mode", "mcp-exec"];
+
+/** The "default code mode" preset — real gateway server names (the keys in
+ *  configs/custom-catalog.yaml, NOT the client `inferServer` namespaces).
+ *  When a conversation has no persisted selection, the actor is scoped to
+ *  these servers' tools so it can reach Neo4j/web on turn 0 (the failure in
+ *  .harness-logs/context-neo4j-vs-memory.json was the default being meta-tools
+ *  only, leaving Neo4j invisible). The "Default code mode" Switch applies this
+ *  set; everything else is selectable per-conversation in the Tools panel. */
+export const CODE_MODE_PRESET_SERVERS = [
+  "neo4j-cypher",
+  "web_search",
+  "fetch",
+  "context7",
+  "github",
+];
+
+/** One tool within a catalog server. */
+export interface CatalogTool {
+  name: string;
+  description?: string;
+}
+
+/** A gateway MCP server as the code-mode factory addresses it. `key` is the
+ *  REAL server name usable in `code-mode {servers:[key]}` (e.g. `neo4j-cypher`,
+ *  `web_search`) — distinct from the client-side `inferServer` namespace. */
+export interface CatalogServer {
+  key: string;
+  title: string;
+  tools: CatalogTool[];
+  /** Enabled in mcp-config.yaml AND reachable (cross-checked vs listTools). */
+  enabled: boolean;
+  /** Declares required secrets in the catalog — `mcp-add` will prompt for
+   *  them even though the server may already be configured. The factory
+   *  (`code-mode {servers}`) works regardless. */
+  secretGated: boolean;
+  secrets: string[];
+}

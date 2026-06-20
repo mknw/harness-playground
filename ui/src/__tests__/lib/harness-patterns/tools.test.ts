@@ -97,6 +97,23 @@ describe('tools', () => {
         expect(tools.web).toContain('fetch_content')
       })
 
+      it('should group neo4j tools under neo4j namespace (explicit mapping)', async () => {
+        const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
+
+        const tools = ToolsFrom([
+          { name: 'read_neo4j_cypher', description: 'Read', inputSchema: {} },
+          { name: 'write_neo4j_cypher', description: 'Write', inputSchema: {} },
+          { name: 'get_neo4j_schema', description: 'Schema', inputSchema: {} },
+        ])
+
+        expect(tools.neo4j).toHaveLength(3)
+        expect(tools.neo4j).toContain('read_neo4j_cypher')
+        expect(tools.neo4j).toContain('write_neo4j_cypher')
+        // get_neo4j_schema is pinned explicitly so a future verb-list edit
+        // can't regroup it (it would otherwise rely on the heuristic).
+        expect(tools.neo4j).toContain('get_neo4j_schema')
+      })
+
       it('should group github tools under github namespace', async () => {
         const { ToolsFrom } = await import('../../../lib/harness-patterns/tools.server')
 
