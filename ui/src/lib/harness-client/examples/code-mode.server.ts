@@ -45,6 +45,12 @@ import type { SessionData } from "../session.server";
 import type { AgentConfig } from "../registry.server";
 import { getRequestUserId } from "../request-user.server";
 import type { FewShot } from "../../../../baml_client/types";
+// Real-server-name catalog (factory scoping) + default-preset expansion.
+// Imported from the module directly (not the tool-config barrel) so we don't
+// pull config.server → session.server statically and reintroduce the
+// registry ↔ session circular import this file already guards against.
+import { getServerCatalog, getPresetTools } from "../../tool-config/server-catalog.server";
+import { CODE_MODE_PRESET_SERVERS, type CatalogServer } from "../../tool-config/constants";
 // NOTE: loadSession is imported dynamically inside the closure (not at the
 // top level) to avoid a circular import — registry.server.ts imports this
 // file, so any value import of session.server.ts would deadlock the
@@ -57,7 +63,7 @@ const CODE_MODE_TOOLS = ['mcp-find', 'mcp-add', 'code-mode', 'mcp-exec'];
  * `createActorControllerAdapter({ contextPrefix })`. Covers the four
  * behaviors the actor needs to do code-mode well. This is shipped as a
  * code-string today; when the harness gains Skill support
- * (docs/ROADMAP.md), the same content will live as a Skill the actor
+ * (issue #86), the same content will live as a Skill the actor
  * receives via the standard mechanism instead.
  */
 const CODE_MODE_ACTOR_GUIDANCE = `
@@ -68,17 +74,29 @@ The kg-agent gateway exposes a "code-mode" factory tool. Use it to:
    code-mode-<name> with {script} to execute JavaScript that can invoke
    any tool from the listed servers (await each call).
 
-2. BATCH OPERATIONS. Write ONE script that performs the whole user
-   request (multiple tool calls + transformations + aggregations) instead
-   of one round-trip per operation. The factory tool is the leverage —
-   under-using it wastes turns.
+2. SCOPE TO ENABLED SERVERS — DON'T RE-ADD THEM. The ENABLED SERVERS list
+   (below) names every server already wired into the gateway, by the exact
+   name to pass in {servers:[...]}. To use one, go straight to
+   code-mode {name, servers:[<server>]} — do NOT mcp-find or mcp-add a
+   server that is already listed (mcp-add can fail on a missing secret even
+   though the server works fine). Use mcp-find / mcp-add ONLY for servers
+   that are NOT in the list.
 
-3. SKIP REDUNDANT DISCOVERY. Tools already present in AVAILABLE TOOLS
-   (above) don't need mcp-find or mcp-add — they're loaded.
+3. PICK THE RIGHT STORE. The graph lives in two distinct stores:
+   neo4j-cypher (read_neo4j_cypher / get_neo4j_schema) and memory
+   (read_graph / search_nodes). If the user names one ("the neo4j db"),
+   scope to THAT server and query it — never substitute the other store.
 
-4. LET THE CRITIC DECIDE COMPLETION. You don't need a Return tool — the
-   critic evaluates each result and ends the loop when sufficient. Focus
-   on producing the right tool call; don't try to short-circuit.
+4. BATCH OPERATIONS. Write ONE script that performs the whole request
+   (multiple tool calls + transforms + aggregations) instead of one
+   round-trip per operation — that is the leverage.
+
+5. RECORD PROVENANCE. Have each script return
+   { _source: { server, tool }, result: ... } so the answer can be verified
+   against the store the user asked for.
+
+6. LET THE CRITIC DECIDE COMPLETION. You don't need a Return tool — the
+   critic evaluates each result and ends the loop when sufficient.
 `.trim();
 
 /**
@@ -124,7 +142,7 @@ const CODE_MODE_FEW_SHOTS: FewShot[] = [
         "const deg = new Map();",
         "for (const r of g.relations) { deg.set(r.from, (deg.get(r.from)||0)+1); deg.set(r.to, (deg.get(r.to)||0)+1); }",
         "const top2 = [...deg.entries()].sort((a,b)=>b[1]-a[1]).slice(0,2).map(([n])=>n);",
-        "const out = { top_nodes: top2, searches: {} };",
+        "const out = { _source: { server: 'memory', tool: 'read_graph' }, top_nodes: top2, searches: {} };",
         "for (const name of top2) { out.searches[name] = await search({query: name + ' related technologies'}); }",
         "return out;",
       ].join("\n"),
@@ -192,29 +210,82 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   // re-resolves and is consulted on every actor turn.
   const initialDefaults = await getDefaultCodeTools();
 
-  // Resolves the actor's tool allowlist live per invocation. Reads the
-  // user's per-conversation selection from data.codeModeAllowedTools (set
-  // by the Tools tab via setCodeModeAllowedTools) and unions it with the
-  // meta-tools the actor always needs. When no userId scope is active
-  // (defensive — should never happen during a real turn) or no selection
-  // exists yet, falls back to the meta-tools alone.
-  const toolNamesProvider = async (): Promise<string[]> => {
-    const defaults = await getDefaultCodeTools();
+  // Reads the conversation's persisted code-mode selection (tool names), or
+  // null when the user hasn't curated one yet. Shared by `toolNamesProvider`
+  // (the allowlist) and `contextProvider` (the catalog block). loadSession is
+  // imported dynamically to avoid the registry ↔ session circular import.
+  const getSelectedTools = async (): Promise<string[] | null> => {
     const userId = getRequestUserId();
-    if (!userId) return defaults;
+    if (!userId) return null;
     try {
       const { loadSession } = await import("../session.server");
       const loaded = await loadSession(sessionId, userId);
-      if (!loaded) return defaults;
+      if (!loaded) return null;
       const ctx = deserializeContext<SessionData>(loaded.serializedContext);
       const allowed = ctx.data?.codeModeAllowedTools;
-      if (!allowed || allowed.length === 0) return defaults;
-      // User picks *additions*; meta-tools are always reachable so the
-      // agent's factory dance still works even with a sparse selection.
-      return Array.from(new Set([...defaults, ...allowed]));
+      return allowed && allowed.length > 0 ? allowed : null;
     } catch {
-      return defaults;
+      return null;
     }
+  };
+
+  // Resolves the actor's tool allowlist live per invocation: meta-tools ∪ the
+  // user's per-conversation selection. When no selection exists yet, the
+  // fallback is the DEFAULT PRESET's tools (not meta-tools alone) — that's the
+  // core fix: a fresh code-mode conversation can reach Neo4j/web on turn 0
+  // instead of being blind to every data server (see
+  // .harness-logs/context-neo4j-vs-memory.json).
+  const toolNamesProvider = async (): Promise<string[]> => {
+    const defaults = await getDefaultCodeTools();
+    const selected = await getSelectedTools();
+    let dataTools: string[];
+    try {
+      dataTools = selected ?? (await getPresetTools());
+    } catch {
+      dataTools = selected ?? [];
+    }
+    return Array.from(new Set([...defaults, ...dataTools]));
+  };
+
+  // Renders the ENABLED SERVERS block for the actor prompt — real server names
+  // (the keys to pass in `code-mode {servers:[...]}`) + their live tools,
+  // per-server name list capped to bound the prompt.
+  const buildCatalogBlock = (servers: CatalogServer[]): string => {
+    if (servers.length === 0) return "";
+    const lines = servers.map((s) => {
+      const names = s.tools.map((t) => t.name);
+      const shown = names.slice(0, 15).join(", ");
+      const more = names.length > 15 ? `, …(+${names.length - 15} more)` : "";
+      const gated = s.secretGated ? " (secret-configured)" : "";
+      return `- ${s.key}${gated}: ${shown}${more}`;
+    });
+    return [
+      "ENABLED SERVERS (scope a code-mode tool to these via code-mode {servers:[...]}; do NOT mcp-add them):",
+      ...lines,
+    ].join("\n");
+  };
+
+  // Per-turn actor context = guidance + the catalog of servers the
+  // conversation is scoped to (its selected servers, or the preset when
+  // uncurated). Tracks live selection changes from the Tools panel.
+  const contextProvider = async (): Promise<string> => {
+    let block = "";
+    try {
+      const catalog = await getServerCatalog();
+      const selected = await getSelectedTools();
+      let servers: CatalogServer[];
+      if (selected) {
+        const sel = new Set(selected);
+        servers = catalog.filter((s) => s.tools.some((t) => sel.has(t.name)));
+      } else {
+        const preset = new Set(CODE_MODE_PRESET_SERVERS);
+        servers = catalog.filter((s) => preset.has(s.key));
+      }
+      block = buildCatalogBlock(servers);
+    } catch {
+      block = "";
+    }
+    return block ? `${CODE_MODE_ACTOR_GUIDANCE}\n\n${block}` : CODE_MODE_ACTOR_GUIDANCE;
   };
 
   const actor = createActorControllerAdapter({
@@ -225,9 +296,10 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     // gateway and reappear in fresh listTools calls).
     dynamicPattern: /^code-mode-/,
     refreshOnCall: true,
-    // Teach the actor about the factory protocol + batching heuristic.
-    // See code_mode_actor_critic.md and the constants above for rationale.
-    contextPrefix: CODE_MODE_ACTOR_GUIDANCE,
+    // Teach the actor the factory protocol + batching heuristic, and fold in
+    // the live ENABLED SERVERS catalog (real server names to scope the factory
+    // to) per turn. See code_mode_actor_critic.md and the constants above.
+    contextProvider,
     fewShots: CODE_MODE_FEW_SHOTS,
   });
   const critic = createCriticAdapter();

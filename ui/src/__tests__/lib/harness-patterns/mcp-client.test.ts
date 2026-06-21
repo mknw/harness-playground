@@ -198,7 +198,6 @@ describe('mcp-client', () => {
     })
 
     it('does not demote unrelated text starting with a capital word', async () => {
-      // "Error: foo" alone (no preceding tool-name token) should not match.
       mockCallTool.mockResolvedValue({
         content: [{ type: 'text', text: 'Hello world — nothing wrong here.' }]
       })
@@ -209,6 +208,38 @@ describe('mcp-client', () => {
 
       expect(result.success).toBe(true)
       expect(result.data).toBe('Hello world — nothing wrong here.')
+    })
+
+    // The kg-agent gateway's meta-tools (mcp-add, code-mode) emit failures as a
+    // bare "Error: ..." text result with no preceding tool-name token. The old
+    // regex required "<Word> Error:" and missed these, so a failed mcp-add was
+    // stamped success:true (see .harness-logs/context-neo4j-nosecrets.json).
+    it('demotes a bare "Error:" prefixed text result (gateway meta-tools)', async () => {
+      const text =
+        "Error: Cannot add server 'neo4j-cypher'. Missing required secrets (neo4j-cypher.password)."
+      mockCallTool.mockResolvedValue({ content: [{ type: 'text', text }] })
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('mcp-add', { name: 'neo4j-cypher' })
+
+      expect(result.success).toBe(false)
+      expect(result.data).toBeNull()
+      expect(result.error).toMatch(/^Error: Cannot add server/)
+    })
+
+    it('does not demote text that merely contains "Error:" mid-string', async () => {
+      // Anchored at start — a mid-string "Error:" must not trip demotion.
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: 'The result has no Error: here' }]
+      })
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('test_tool', {})
+
+      expect(result.success).toBe(true)
+      expect(result.data).toBe('The result has no Error: here')
     })
   })
 

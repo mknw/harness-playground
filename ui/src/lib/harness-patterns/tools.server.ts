@@ -64,6 +64,12 @@ for (const t of [
   'open_nodes', 'search_nodes', 'read_graph',
 ]) KNOWN_TOOL_SERVERS[t] = 'memory'
 
+// Neo4j Cypher server. These already resolve to 'neo4j' via the verb-strip
+// heuristic below (read_/write_/get_ → parts[1]), but pin them explicitly so
+// a future edit to the `verbs` list can't silently regroup them.
+for (const t of ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema'])
+  KNOWN_TOOL_SERVERS[t] = 'neo4j'
+
 // Context7 documentation server
 for (const t of ['resolve-library-id', 'get-library-docs'])
   KNOWN_TOOL_SERVERS[t] = 'context7'

@@ -176,7 +176,7 @@ Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secon
 | Doc | Contents |
 |-----|----------|
 | [`docs/INDEX.md`](docs/INDEX.md) | Full documentation index |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Single project roadmap (UI items consolidated 2026-05-21) |
+| [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Planning board / roadmap — replaced `docs/ROADMAP.md`; planning lives in GitHub Projects now |
 | [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
 | [`ui/README.md`](ui/README.md) | UI quick start and file index |
 | [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md) | Harness patterns full API |

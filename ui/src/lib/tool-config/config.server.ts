@@ -20,6 +20,7 @@ import { listTools } from "../harness-patterns/mcp-client.server";
 import { loadSession, saveSession, type SessionData } from "../harness-client/session.server";
 import { getAuthenticatedUser } from "../auth/server";
 import { CODE_MODE_DEFAULTS, type CodeModeToolsState } from "./constants";
+import { getPresetTools } from "./server-catalog.server";
 
 // Constants and types live in ./constants because SolidStart's `"use server"`
 // transform rewrites every export from this file into an RPC stub on the
@@ -72,7 +73,20 @@ export async function getCodeModeAllowedTools(
     }
   }
 
-  const allowed = persisted && persisted.length > 0 ? persisted : defaults;
+  // Fresh conversation (no persisted pick) defaults to the "default code mode"
+  // preset's tools ∪ meta-tools — so the actor (and the panel's pre-checked
+  // state) start scoped to Neo4j/web rather than meta-tools alone. Mirrors
+  // toolNamesProvider in code-mode.server.ts.
+  let presetTools: string[] = [];
+  try {
+    presetTools = await getPresetTools();
+  } catch {
+    presetTools = [];
+  }
+  const allowed =
+    persisted && persisted.length > 0
+      ? persisted
+      : Array.from(new Set([...defaults, ...presetTools]));
   return { allowed, available, defaults };
 }
 

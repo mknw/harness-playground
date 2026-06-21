@@ -142,14 +142,22 @@ export async function callTool(
   }
 }
 
-/** Some MCP servers (notably `mcp-neo4j-cypher`'s `write_neo4j_cypher`) report
- *  failures by returning the error message as a normal text result, leaving
- *  the call's `success` indicator implicitly true. Detect that shape and
- *  demote to `{ success: false, error }` so downstream gating
- *  (`view.hasErrors()`, `iteration.success`, the enricher's success guard)
- *  treats it as a real failure. Matches `"<ToolName> Error:"` prefixes
- *  generically — the immediate offender is `"Neo4j Error:"`. */
-const ERROR_STRING_PREFIX = /^[A-Z][A-Za-z0-9]*\s+Error:/;
+/** Some MCP servers report failures by returning the error message as a
+ *  normal text result, leaving the call's `success` indicator implicitly
+ *  true. Detect that shape and demote to `{ success: false, error }` so
+ *  downstream gating (`view.hasErrors()`, `iteration.success`, the enricher's
+ *  success guard) treats it as a real failure.
+ *
+ *  Two offending shapes:
+ *    - `"<ToolName> Error: ..."` — e.g. `mcp-neo4j-cypher`'s `"Neo4j Error:"`.
+ *    - bare `"Error: ..."`        — the kg-agent gateway's meta-tools
+ *      (`mcp-add`, `code-mode`) emit `"Error: Cannot add server ..."` /
+ *      `"Error: Server '...' not found ..."`. Before this they were stamped
+ *      success:true, so the actor/critic treated a failed `mcp-add` as a
+ *      result (see .harness-logs/context-neo4j-nosecrets.json).
+ *
+ *  The leading `<ToolName>` token is therefore optional. */
+const ERROR_STRING_PREFIX = /^(?:[A-Z][A-Za-z0-9]*\s+)?Error:/;
 
 function demoteErrorString(
   text: string

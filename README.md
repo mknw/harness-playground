@@ -251,7 +251,7 @@ kg-agent/
 | [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md) | SolidStart UI structure and patterns |
 | [docs/DOCKER_COMPOSE.md](docs/DOCKER_COMPOSE.md) | Service configuration details |
 | [docs/MCP_GATEWAY.md](docs/MCP_GATEWAY.md) | MCP Gateway reference |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Development roadmap |
+| [GitHub Project](https://github.com/users/mknw/projects/5) | Development roadmap / planning board (replaced docs/ROADMAP.md) |
 | [docs/harness-patterns/README.md](docs/harness-patterns/README.md) | Harness patterns overview + tutorials |
 | [ui/src/lib/harness-patterns/README.md](ui/src/lib/harness-patterns/README.md) | Harness patterns API reference |
 | [neo4j_dumps/README.md](neo4j_dumps/README.md) | Neo4j data versioning workflow |

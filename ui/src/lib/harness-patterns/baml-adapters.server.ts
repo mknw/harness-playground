@@ -504,6 +504,11 @@ export interface ActorAdapterOptions {
    *  Used by the code-mode agent to teach the actor about the factory
    *  protocol, batching heuristics, etc. */
   contextPrefix?: string
+  /** Like `contextPrefix` but resolved per actor invocation — use when the
+   *  context varies with live state (e.g. code-mode folds the conversation's
+   *  current ENABLED SERVERS catalog into the prompt so the actor knows which
+   *  servers to scope the factory to). Wins over `contextPrefix` when set. */
+  contextProvider?: () => Promise<string>
   /** Optional FewShot examples rendered into the actor's prompt under
    *  `EXAMPLES:`. Mirrors LoopController's few-shots. Keep small (2–4). */
   fewShots?: FewShot[]
@@ -577,7 +582,9 @@ export function createActorControllerAdapter(
       feedback: undefined
     }))
 
-    const context = options.contextPrefix
+    const context = options.contextProvider
+      ? await options.contextProvider()
+      : options.contextPrefix
     const fewShots = options.fewShots
     const variables = {
       user_message,
