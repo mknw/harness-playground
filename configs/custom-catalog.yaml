@@ -180,10 +180,6 @@ registry:
       - name: scan_all_keys
       - name: search_redis_documents
       - name: client_list
-    secrets:
-      - name: redis.password
-        env: REDIS_PWD
-        example: ""
     env:
       - name: REDIS_HOST
         value: "{{redis.host}}"
