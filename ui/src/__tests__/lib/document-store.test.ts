@@ -261,6 +261,42 @@ describe('document-store (Issue #6)', () => {
     it('returns [] for an empty/unknown session', async () => {
       expect(await listDocuments('ghost', fake.callTool)).toEqual([])
     })
+
+    // The live Redis MCP returns ONE text block per set member, so callTool
+    // yields a *bare string* for a 1-member set (not an array). listDocuments
+    // must still resolve it (regression: lists came back empty against the
+    // real gateway because of a strict Array.isArray check).
+    it('lists a single doc when smembers returns a bare member string', async () => {
+      const stored = await storeDocument(
+        { sessionId: 's1', filename: 'solo.txt', mimeType: 'text/plain', content: 'x' },
+        fake.callTool,
+      )
+      const liveShape: CallTool = async (name, args) =>
+        name === 'smembers'
+          ? { success: true, data: stored.id } // bare string, not array
+          : fake.callTool(name, args)
+
+      const list = await listDocuments('s1', liveShape)
+      expect(list.map((d) => d.id)).toEqual([stored.id])
+    })
+
+    it('lists docs when smembers returns a JSON-string array', async () => {
+      await storeDocument(
+        { sessionId: 's2', filename: 'a', mimeType: 'text/plain', content: 'x', id: 'id-a' },
+        fake.callTool,
+      )
+      await storeDocument(
+        { sessionId: 's2', filename: 'b', mimeType: 'text/plain', content: 'y', id: 'id-b' },
+        fake.callTool,
+      )
+      const liveShape: CallTool = async (name, args) =>
+        name === 'smembers'
+          ? { success: true, data: JSON.stringify(['id-a', 'id-b']) } // JSON-string
+          : fake.callTool(name, args)
+
+      const list = await listDocuments('s2', liveShape)
+      expect(list.map((d) => d.id).sort()).toEqual(['id-a', 'id-b'])
+    })
   })
 
   describe('setDocumentFlags', () => {

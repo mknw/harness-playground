@@ -133,6 +133,50 @@ function byteLength(str: string): number {
 }
 
 /**
+ * Coerce a `smembers` result into a string[] of ids. The Redis MCP may hand the
+ * set back as a real array, a JSON string (`'["a","b"]'`), a double-encoded
+ * string, or wrapped in `{ result: [...] }` — only some of which survive
+ * `callTool`'s single JSON.parse. `getDocument` already tolerates this for
+ * RedisJSON via {@link unwrapJsonGet}; `listDocuments` needs the same robustness
+ * (a strict `Array.isArray` check silently dropped every uploaded doc against
+ * the live gateway).
+ */
+function parseSetMembers(data: unknown): string[] {
+  let value: unknown = data
+  // Unwrap up to a couple layers of JSON-string encoding. A bare, non-JSON
+  // scalar is a single set member returned as one text block (the live MCP
+  // returns one text block per member, so callTool yields a string for a
+  // 1-member set and an array for N members).
+  for (let i = 0; i < 3 && typeof value === 'string'; i++) {
+    const s = value.trim()
+    if (!s) return []
+    if (!/^[[{"]/.test(s)) return [s]
+    try {
+      value = JSON.parse(s)
+    } catch {
+      return [s]
+    }
+  }
+  // Some MCP shapes wrap the array in an object.
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>
+    let inner = obj.result ?? obj.members ?? obj.data
+    if (typeof inner === 'string') {
+      try {
+        inner = JSON.parse(inner)
+      } catch {
+        /* leave as-is */
+      }
+    }
+    value = inner
+  }
+  if (Array.isArray(value)) {
+    return value.filter((m): m is string => typeof m === 'string')
+  }
+  return typeof value === 'string' && value.trim() ? [value.trim()] : []
+}
+
+/**
  * RedisJSON returns the value at `$` wrapped in a single-element array
  * (`["...stringified..."]` or `[{...}]`), and the MCP layer may hand it back
  * either parsed or as a JSON string. Normalise to the contained value.
@@ -280,9 +324,9 @@ export async function listDocuments(
   callTool: CallTool = defaultCallTool,
 ): Promise<StashDocumentMeta[]> {
   const members = await callTool('smembers', { name: indexKey(sessionId) })
-  if (!members.success || !Array.isArray(members.data)) return []
+  if (!members.success) return []
 
-  const ids = members.data.filter((m): m is string => typeof m === 'string')
+  const ids = parseSetMembers(members.data)
   const out: StashDocumentMeta[] = []
 
   for (const id of ids) {
