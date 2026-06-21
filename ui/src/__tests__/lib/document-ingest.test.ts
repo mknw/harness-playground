@@ -132,14 +132,19 @@ describe('document-ingest', () => {
       expect(result.indexName).toBe(indexNameFor('s1', result.space))
       expect(result.prefix).toBe(prefixFor('s1', result.space))
 
-      // One hash per chunk, each carrying a vector + content + provenance.
+      // One hash per chunk: vector + a single JSON `meta` field carrying
+      // content AND provenance — 2 writes/chunk (the gateway's redis MCP is
+      // serial stdio, so call count is the cost).
       expect(fake.hashes.size).toBe(result.chunks)
       for (const h of fake.hashes.values()) {
         expect(Array.isArray(h.vector)).toBe(true)
-        expect(typeof h.content).toBe('string')
-        expect(h.doc_id).toBe('doc1')
-        expect(h.source).toBe('notes.txt')
-        expect(h.model).toBe('fake-model')
+        const raw = h.meta as string
+        expect(raw.startsWith('b64:')).toBe(true) // opaque, non-JSON (gateway-safe)
+        const meta = JSON.parse(Buffer.from(raw.slice(4), 'base64').toString('utf8'))
+        expect(typeof meta.content).toBe('string')
+        expect(meta.doc_id).toBe('doc1')
+        expect(meta.source).toBe('notes.txt')
+        expect(meta.model).toBe('fake-model')
       }
     })
 

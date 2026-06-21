@@ -129,6 +129,35 @@ function spaceKey(sessionId: string): string {
   return `${SPACE_KEY_PREFIX}:${sessionId}`
 }
 
+/**
+ * Encode a chunk's content+provenance as an opaque, non-JSON string. The MCP
+ * gateway auto-parses JSON-looking string arguments into objects (so a JSON
+ * `hset` value is rejected as a dict, and a chunk that is itself valid JSON
+ * would be mangled). `b64:`-prefixed base64 sidesteps both.
+ */
+function encodeMeta(obj: Record<string, unknown>): string {
+  return 'b64:' + Buffer.from(JSON.stringify(obj), 'utf8').toString('base64')
+}
+
+/** Inverse of {@link encodeMeta}; tolerant of an already-object or plain-JSON value. */
+export function decodeMeta(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>
+  if (typeof raw !== 'string') return {}
+  let s = raw
+  if (s.startsWith('b64:')) {
+    try {
+      s = Buffer.from(s.slice(4), 'base64').toString('utf8')
+    } catch {
+      return {}
+    }
+  }
+  try {
+    return JSON.parse(s) as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
 // ============================================================================
 // Embedding-space bookkeeping
 // ============================================================================
@@ -203,39 +232,39 @@ export async function ingestDocument(
   const prefix = prefixFor(doc.sessionId, space)
   await ensureVectorIndex(callTool, indexName, prefix, space.dimensions)
 
-  for (let i = 0; i < chunks.length; i++) {
-    const c = chunks[i]
+  // Write each chunk in just TWO round-trips: the vector (must be a packed
+  // float blob, so set_vector_in_hash) plus a single JSON `meta` field holding
+  // the content AND provenance. The gateway runs the redis MCP over one serial
+  // stdio pipe, so call count is the ingest cost and concurrent writes only
+  // queue up and time out — keep it minimal and sequential. TTL is set on the
+  // meta write (per-key; it covers the whole hash).
+  for (let idx = 0; idx < chunks.length; idx++) {
+    const c = chunks[idx]
     const key = chunkKey(prefix, doc.id, c.index)
 
-    const setVec = await callTool('set_vector_in_hash', { name: key, vector: vectors[i] })
+    const setVec = await callTool('set_vector_in_hash', { name: key, vector: vectors[idx] })
     const vecErr = redisWriteError(setVec)
-    if (vecErr) {
-      throw new Error(`Failed to store vector for chunk ${c.index}: ${vecErr}`)
-    }
+    if (vecErr) throw new Error(`Failed to store vector for chunk ${c.index}: ${vecErr}`)
 
-    const fields: Array<[string, string | number]> = [
-      ['content', c.content],
-      ['doc_id', doc.id],
-      ['session_id', doc.sessionId],
-      ['source', doc.filename],
-      ['chunk_index', c.index],
-      ['start_offset', c.startOffset],
-      ['end_offset', c.endOffset],
-      ['model', space.model],
-      ['provider', space.provider],
-      ['dim', space.dimensions],
-    ]
-    for (let f = 0; f < fields.length; f++) {
-      const [k, v] = fields[f]
-      // Set the key TTL on the final field write (TTL is per-key; HSET on an
-      // existing key preserves it, so one expiring write covers the whole hash).
-      await callTool('hset', {
-        name: key,
-        key: k,
-        value: v,
-        ...(f === fields.length - 1 ? { expire_seconds: ttl } : {}),
-      })
-    }
+    // base64 the JSON blob: the gateway auto-parses JSON-looking string args
+    // into objects (hset then rejects the dict), and a raw chunk could itself
+    // be valid JSON — so encode to an opaque string. The `b64:` prefix makes it
+    // unambiguously non-JSON. Decoded in parseSearchHits.
+    const meta = encodeMeta({
+      content: c.content,
+      doc_id: doc.id,
+      session_id: doc.sessionId,
+      source: doc.filename,
+      chunk_index: c.index,
+      start_offset: c.startOffset,
+      end_offset: c.endOffset,
+      model: space.model,
+      provider: space.provider,
+      dim: space.dimensions,
+    })
+    const metaRes = await callTool('hset', { name: key, key: 'meta', value: meta, expire_seconds: ttl })
+    const metaErr = redisWriteError(metaRes)
+    if (metaErr) throw new Error(`Failed to store chunk ${c.index} meta: ${metaErr}`)
   }
 
   await recordSpace(callTool, doc.sessionId, space, ttl)
@@ -307,14 +336,9 @@ export async function searchDocuments(
     index_name: indexNameFor(sessionId, recorded),
     query_vector: q.vector,
     k: opts.k ?? 5,
-    return_fields: [
-      'content',
-      'doc_id',
-      'source',
-      'chunk_index',
-      'start_offset',
-      'end_offset',
-    ],
+    // Content + provenance travel in a single JSON `meta` field (see ingest);
+    // ask for flat names too in case a backend version flattens them.
+    return_fields: ['meta', 'content', 'doc_id', 'source', 'chunk_index'],
   })
   if (!res.success || res.data == null) return []
   return parseSearchHits(res.data)
@@ -345,15 +369,17 @@ function parseSearchHits(data: unknown): SearchHit[] {
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue
     const r = row as Record<string, unknown>
-    const content = str(r.content)
+    // Content + provenance live in the base64 `meta` field; fall back to flat.
+    const meta = decodeMeta(r.meta)
+    const content = str(meta.content) ?? str(r.content)
     if (content == null) continue
     hits.push({
-      docId: str(r.doc_id) ?? '',
-      source: str(r.source) ?? '',
-      chunkIndex: num(r.chunk_index) ?? 0,
+      docId: str(meta.doc_id) ?? str(r.doc_id) ?? '',
+      source: str(meta.source) ?? str(r.source) ?? '',
+      chunkIndex: num(meta.chunk_index) ?? num(r.chunk_index) ?? 0,
       content,
-      startOffset: num(r.start_offset),
-      endOffset: num(r.end_offset),
+      startOffset: num(meta.start_offset) ?? num(r.start_offset),
+      endOffset: num(meta.end_offset) ?? num(r.end_offset),
       score: num(r.score ?? r.distance ?? r.__vector_score),
     })
   }
