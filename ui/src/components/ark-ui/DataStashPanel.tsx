@@ -11,15 +11,19 @@
  * Hovering shows the LLM summary (or a raw preview if no summary yet).
  */
 
-import { For, Show, createSignal, createMemo } from 'solid-js'
+import { For, Show, createSignal, createMemo, createResource } from 'solid-js'
+import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
 import type { ContextEvent, ToolResultEventData } from '~/lib/harness-patterns'
+import type { StashDocumentMeta } from '~/lib/document-store.server'
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export type StashAction = 'hide' | 'unhide' | 'archive' | 'unarchive'
+/** Document actions add `delete` (uploads are removable; tool results are not). */
+export type DocAction = StashAction | 'delete'
 
 export interface DataStashPanelProps {
   events: ContextEvent[]
@@ -76,6 +80,25 @@ function getRefLabel(tool: string, eventId: string): string {
   const skip = new Set(['read', 'write', 'get', 'set', 'list', 'create', 'delete', 'fetch', 'run', 'execute'])
   const key = parts.find(p => !skip.has(p)) ?? parts[0] ?? tool
   return `${key}:${shortId}`
+}
+
+/** Icon for an uploaded document, chosen from its MIME type / extension. */
+function getDocIcon(mimeType: string, filename: string): string {
+  const m = mimeType.toLowerCase()
+  const f = filename.toLowerCase()
+  if (m.includes('json') || f.endsWith('.json')) return 'i-mdi-code-json'
+  if (m.includes('csv') || m.includes('tab-separated') || f.endsWith('.csv')) return 'i-mdi-table-large'
+  if (m.includes('markdown') || f.endsWith('.md')) return 'i-mdi-language-markdown-outline'
+  if (m.includes('pdf') || f.endsWith('.pdf')) return 'i-mdi-file-pdf-box'
+  if (m.includes('html') || m.includes('xml')) return 'i-mdi-file-code-outline'
+  return 'i-mdi-file-document-outline'
+}
+
+/** Format a byte count compactly (e.g. 2.4 KB). */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 // ============================================================================
@@ -357,10 +380,287 @@ const IconGallery = (props: { items: ToolResultItem[]; onAction: (id: string, ac
 )
 
 // ============================================================================
+// Document Chip — a single uploaded document (Issue #6 upload path)
+// ============================================================================
+
+const DocChip = (props: {
+  doc: StashDocumentMeta
+  onAction: (id: string, action: DocAction) => Promise<void>
+}) => {
+  const d = () => props.doc
+  const grayed = () => !!(d().hidden || d().archived)
+  const [loading, setLoading] = createSignal(false)
+  const [menuOpen, setMenuOpen] = createSignal(false)
+
+  const handle = async (action: DocAction) => {
+    setMenuOpen(false)
+    setLoading(true)
+    try {
+      await props.onAction(d().id, action)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const menuActions = (): { label: string; action: DocAction }[] => {
+    const base: { label: string; action: DocAction }[] = d().archived
+      ? [{ label: 'Unarchive', action: 'unarchive' }]
+      : d().hidden
+        ? [
+            { label: 'Unhide', action: 'unhide' },
+            { label: 'Archive', action: 'archive' },
+          ]
+        : [
+            { label: 'Hide', action: 'hide' },
+            { label: 'Archive', action: 'archive' },
+          ]
+    return [...base, { label: 'Delete', action: 'delete' }]
+  }
+
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      {/* Native title tooltip — keeps the chip simple; Ark's Tooltip is used by
+          the tool-result chips above. */}
+      <div
+        title={`${d().filename}\n${d().mimeType} · ${formatBytes(d().size)}`}
+        flex="~ col"
+        items="center"
+        gap="1"
+        p="2"
+        w="16"
+        cursor="pointer"
+        rounded="lg"
+        bg={menuOpen() ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-secondary'}
+        border={menuOpen() ? '1 dark-border-secondary' : '1 transparent hover:dark-border-primary'}
+        transition="all"
+        opacity={grayed() ? '35' : loading() ? '50' : '100'}
+        onClick={() => setMenuOpen(!menuOpen())}
+      >
+        <span
+          class={getDocIcon(d().mimeType, d().filename)}
+          style={{
+            width: '28px',
+            height: '28px',
+            color: grayed() ? '#52525b' : '#34d399',
+            transition: 'all 0.15s',
+          }}
+        />
+        <span
+          style={{
+            'font-family': '"Fira Code", ui-monospace, monospace',
+            'font-size': '9px',
+            color: grayed() ? '#52525b' : '#a1a1aa',
+            'text-align': 'center',
+            'word-break': 'break-all',
+            'line-height': '1.2',
+            'max-width': '60px',
+          }}
+        >
+          {truncate(d().filename, 18)}
+        </span>
+      </div>
+
+      <Show when={menuOpen()}>
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            'z-index': '100',
+            background: '#1a1a24',
+            border: '1px solid #2a2a3a',
+            'border-radius': '6px',
+            padding: '4px',
+            'min-width': '100px',
+            'box-shadow': '0 4px 16px rgba(0,0,0,0.4)',
+          }}
+        >
+          <For each={menuActions()}>
+            {(btn) => (
+              <button
+                onClick={() => handle(btn.action)}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '5px 10px',
+                  'text-align': 'left',
+                  background: 'transparent',
+                  border: 'none',
+                  'border-radius': '4px',
+                  'font-size': '11px',
+                  color: btn.action === 'delete' ? '#f87171' : '#a1a1aa',
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#22222f')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              >
+                {btn.label}
+              </button>
+            )}
+          </For>
+        </div>
+      </Show>
+
+      <Show when={menuOpen()}>
+        <div
+          style={{ position: 'fixed', inset: '0', 'z-index': '99' }}
+          onClick={() => setMenuOpen(false)}
+        />
+      </Show>
+    </div>
+  )
+}
+
+// ============================================================================
+// Upload Zone — file picker + drag-and-drop (Issue #6)
+// ============================================================================
+
+const UploadZone = (props: {
+  uploading: boolean
+  error: string | null
+  onFiles: (files: File[]) => void
+}) => {
+  const [dragOver, setDragOver] = createSignal(false)
+  let inputRef: HTMLInputElement | undefined
+
+  const pick = (list: FileList | null) => {
+    if (list && list.length > 0) props.onFiles(Array.from(list))
+  }
+
+  return (
+    <div p="3" flex="~ col" gap="2">
+      <div
+        onClick={() => inputRef?.click()}
+        onDragOver={(e) => {
+          e.preventDefault()
+          setDragOver(true)
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDragOver(false)
+          pick(e.dataTransfer?.files ?? null)
+        }}
+        flex="~ col"
+        items="center"
+        justify="center"
+        gap="1"
+        p="4"
+        rounded="lg"
+        cursor="pointer"
+        border={dragOver() ? '2 dashed neon-cyan/60' : '2 dashed dark-border-primary'}
+        bg={dragOver() ? 'cyber-800/40' : 'transparent hover:dark-bg-secondary'}
+        transition="all"
+      >
+        <span
+          class={props.uploading ? 'i-mdi-loading' : 'i-mdi-cloud-upload-outline'}
+          style={{
+            width: '24px',
+            height: '24px',
+            color: dragOver() ? '#22d3ee' : '#71717a',
+            ...(props.uploading ? { animation: 'spin 1s linear infinite' } : {}),
+          }}
+        />
+        <span text="xs dark-text-secondary">
+          {props.uploading ? 'Uploading…' : 'Drop a file or click to upload'}
+        </span>
+        <span text="xs dark-text-tertiary">Text, Markdown, JSON, CSV</span>
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            pick(e.currentTarget.files)
+            e.currentTarget.value = '' // allow re-selecting the same file
+          }}
+        />
+      </div>
+      <Show when={props.error}>
+        <div text="xs red-400" font="mono">
+          {props.error}
+        </div>
+      </Show>
+    </div>
+  )
+}
+
+// ============================================================================
 // Main Component
 // ============================================================================
 
+async function fetchDocuments(sessionId: string): Promise<StashDocumentMeta[]> {
+  const res = await fetch(`/api/stash/upload?sessionId=${encodeURIComponent(sessionId)}`)
+  if (!res.ok) return []
+  const body = (await res.json()) as { documents?: StashDocumentMeta[] }
+  return body.documents ?? []
+}
+
 export const DataStashPanel = (props: DataStashPanelProps) => {
+  // Uploaded documents live in Redis (Issue #6), separate from the tool_result
+  // events in `props.events`. Fetched on mount and refetched after mutations.
+  // Guarded against SSR — relative-URL fetch has no origin on the server.
+  const [documents, { refetch }] = createResource(
+    () => (isServer ? undefined : props.sessionId || undefined),
+    fetchDocuments,
+  )
+  const [uploading, setUploading] = createSignal(false)
+  const [uploadError, setUploadError] = createSignal<string | null>(null)
+
+  const uploadFiles = async (files: File[]) => {
+    if (!props.sessionId) {
+      setUploadError('Start a conversation before uploading')
+      return
+    }
+    setUploading(true)
+    setUploadError(null)
+    try {
+      for (const file of files) {
+        const form = new FormData()
+        form.set('sessionId', props.sessionId)
+        form.set('file', file)
+        const res = await fetch('/api/stash/upload', { method: 'POST', body: form })
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: string }
+          throw new Error(body.error ?? `Upload failed (${res.status})`)
+        }
+      }
+      await refetch()
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const handleDocAction = async (id: string, action: DocAction) => {
+    if (!props.sessionId) return
+    if (action === 'delete') {
+      await fetch(
+        `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(props.sessionId)}`,
+        { method: 'DELETE' },
+      )
+    } else {
+      const patch =
+        action === 'hide'
+          ? { hidden: true }
+          : action === 'unhide'
+            ? { hidden: false }
+            : action === 'archive'
+              ? { archived: true, hidden: false }
+              : { archived: false }
+      await fetch(`/api/stash/document/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: props.sessionId, ...patch }),
+      })
+    }
+    await refetch()
+  }
+
+  const docs = createMemo(() => documents() ?? [])
+
   const partitioned = createMemo(() => {
     const toolResults: ToolResultItem[] = props.events
       .filter(e => e.type === 'tool_result' && e.id)
@@ -388,10 +688,11 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
     return { current, previous, archived }
   })
 
-  const totalCount = createMemo(() => {
+  const toolCount = createMemo(() => {
     const p = partitioned()
     return p.current.length + p.previous.length + p.archived.length
   })
+  const totalCount = createMemo(() => toolCount() + docs().length)
 
   return (
     <div flex="~ col" h="full" overflow="auto" bg="dark-bg-primary">
@@ -412,18 +713,33 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         <span text="xs dark-text-tertiary" font="mono">{totalCount()} items</span>
       </div>
 
-      <Show when={totalCount() === 0}>
-        <div flex="~ col" items="center" justify="center" p="8" text="dark-text-tertiary" gap="2">
+      {/* Uploads — file ingestion into the Redis-backed stash (Issue #6) */}
+      <div border="b dark-border-primary">
+        <div p="x-3 y-2" flex="~" items="center" gap="2">
+          <span text="xs dark-text-tertiary" font="medium">Uploads</span>
+          <span text="xs dark-text-tertiary" font="mono">({docs().length})</span>
+        </div>
+        <UploadZone uploading={uploading()} error={uploadError()} onFiles={uploadFiles} />
+        <Show when={docs().length > 0}>
+          <div flex="~ wrap" gap="2" p="x-3 y-2">
+            <For each={docs()}>
+              {(doc) => <DocChip doc={doc} onAction={handleDocAction} />}
+            </For>
+          </div>
+        </Show>
+      </div>
+
+      <Show when={toolCount() === 0}>
+        <div flex="~ col" items="center" justify="center" p="6" text="dark-text-tertiary" gap="2">
           <span
             class="i-mdi-package-variant-closed-remove"
-            style={{ width: '36px', height: '36px', color: '#3f3f46', opacity: '0.6' }}
+            style={{ width: '32px', height: '32px', color: '#3f3f46', opacity: '0.6' }}
           />
-          <span text="sm m-t-2">No tool results yet</span>
-          <span text="xs dark-text-tertiary">Run an agent to see data here</span>
+          <span text="xs m-t-1">No tool results yet — run an agent to see data here</span>
         </div>
       </Show>
 
-      <Show when={totalCount() > 0}>
+      <Show when={toolCount() > 0}>
         {/* Current Turn */}
         <Show when={partitioned().current.length > 0}>
           <div border="b dark-border-primary">
