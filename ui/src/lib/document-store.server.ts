@@ -152,6 +152,32 @@ function unwrapJsonGet(data: unknown): unknown {
   return value
 }
 
+/**
+ * The Redis MCP server reports some command-level failures (auth errors,
+ * WRONGTYPE, misconfiguration) as a *normal text payload* with `success: true`
+ * — the MCP transport succeeded, but the Redis command did not. The shared
+ * `callTool` only demotes `"<Name> Error:"`-prefixed strings, so a write that
+ * actually failed otherwise looks like a stored document. Detect that shape on
+ * writes so a failed write surfaces instead of silently "succeeding".
+ *
+ * Returns the error text when the result indicates a Redis-level failure, else
+ * null. Conservative on success payloads: a RedisJSON SET returns `"OK"`, SADD
+ * returns a count — neither matches these patterns.
+ */
+export function redisWriteError(result: ToolCallResult): string | null {
+  if (!result.success) return result.error ?? 'unknown error'
+  const candidates: unknown[] = [result.data]
+  if (result.data && typeof result.data === 'object' && 'result' in result.data) {
+    candidates.push((result.data as { result?: unknown }).result)
+  }
+  for (const c of candidates) {
+    if (typeof c === 'string' && (/^error\b/i.test(c.trim()) || /\b(NO)?AUTH\b/.test(c) || /WRONGTYPE|misconfigur/i.test(c))) {
+      return c
+    }
+  }
+  return null
+}
+
 // ============================================================================
 // Store
 // ============================================================================
@@ -193,16 +219,21 @@ export async function storeDocument(
     value: JSON.stringify(doc),
     expire_seconds: ttl,
   })
-  if (!set.success) {
-    throw new Error(`Failed to store document: ${set.error ?? 'unknown error'}`)
+  const setErr = redisWriteError(set)
+  if (setErr) {
+    throw new Error(`Failed to store document: ${setErr}`)
   }
 
   // Register in the per-session index, refreshing its TTL to outlive the docs.
-  await callTool('sadd', {
+  const idx = await callTool('sadd', {
     name: indexKey(doc.sessionId),
     value: doc.id,
     expire_seconds: ttl,
   })
+  const idxErr = redisWriteError(idx)
+  if (idxErr) {
+    throw new Error(`Failed to index document: ${idxErr}`)
+  }
 
   return doc
 }
@@ -302,8 +333,9 @@ export async function setDocumentFlags(
     value: JSON.stringify(doc),
     expire_seconds: DEFAULT_TTL_SECONDS,
   })
-  if (!set.success) {
-    throw new Error(`Failed to update document: ${set.error ?? 'unknown error'}`)
+  const setErr = redisWriteError(set)
+  if (setErr) {
+    throw new Error(`Failed to update document: ${setErr}`)
   }
   return doc
 }

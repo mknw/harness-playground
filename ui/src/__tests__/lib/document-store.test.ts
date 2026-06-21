@@ -29,6 +29,7 @@ import {
   setDocumentFlags,
   deleteDocument,
   toPriorResult,
+  redisWriteError,
   DEFAULT_TTL_SECONDS,
   MAX_CONTENT_BYTES,
   type CallTool,
@@ -160,6 +161,41 @@ describe('document-store (Issue #6)', () => {
       await expect(
         storeDocument({ sessionId: 's1', filename: 'a', mimeType: 'text/plain', content: 'x' }, failing),
       ).rejects.toThrow(/boom/)
+    })
+
+    it('throws when the MCP reports success but Redis returned an error payload', async () => {
+      // The Redis MCP can surface AUTH/WRONGTYPE failures as a `success: true`
+      // text payload — a stored doc must not silently "succeed" in that case.
+      const authFail: CallTool = async (name) =>
+        name === 'json_set'
+          ? {
+              success: true,
+              data: 'Error setting JSON value: AUTH <password> called without any password configured',
+            }
+          : { success: true, data: 1 }
+      await expect(
+        storeDocument({ sessionId: 's1', filename: 'a', mimeType: 'text/plain', content: 'x' }, authFail),
+      ).rejects.toThrow(/AUTH|Failed to store/)
+    })
+  })
+
+  describe('redisWriteError', () => {
+    it('passes clean success payloads (OK / count)', () => {
+      expect(redisWriteError({ success: true, data: 'OK' })).toBeNull()
+      expect(redisWriteError({ success: true, data: 1 })).toBeNull()
+    })
+    it('flags transport failures', () => {
+      expect(redisWriteError({ success: false, data: null, error: 'boom' })).toBe('boom')
+    })
+    it('flags Redis errors smuggled in as success-data', () => {
+      expect(redisWriteError({ success: true, data: 'Error doing thing: WRONGTYPE' })).toMatch(/WRONGTYPE/)
+      expect(
+        redisWriteError({ success: true, data: 'AUTH <password> called without any password configured' }),
+      ).toMatch(/AUTH/)
+      expect(redisWriteError({ success: true, data: { result: 'Error: NOAUTH' } })).toMatch(/NOAUTH/)
+    })
+    it('does not false-positive on normal content containing the word later', () => {
+      expect(redisWriteError({ success: true, data: 'stored without issue' })).toBeNull()
     })
   })
 
