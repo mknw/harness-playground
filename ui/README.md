@@ -38,6 +38,11 @@ src/
 │   ├── db/
 │   │   ├── client.server.ts         # Lazy pg.Pool singleton + idempotent schema bootstrap
 │   │   └── conversations.server.ts  # Conversations repo (load/save/list/delete + deriveTitle)
+│   ├── document-store.server.ts # Data Stash: RedisJSON document storage (#6)
+│   ├── chunking.server.ts       # Data Stash: fixed/sentence/paragraph chunking (#9)
+│   ├── embeddings.server.ts     # Data Stash: provider-pluggable embeddings (#8)
+│   ├── document-ingest.server.ts # Data Stash: chunk→embed→HNSW index + KNN search
+│   ├── stash/                   # Data Stash upload HTTP helpers (parse + auth). See docs/DATA_STASH.md
 │   ├── settings.ts            # HarnessSettings type, defaults, MODEL_CONTEXT_WINDOWS
 │   ├── settings-store.ts      # Client-side reactive store (localStorage persistence)
 │   ├── settings-context.server.ts # Request-scoped settings via AsyncLocalStorage
@@ -112,4 +117,5 @@ See [examples/README.md](src/lib/harness-client/examples/README.md) for detailed
 | [src/lib/harness-patterns/README.md](src/lib/harness-patterns/README.md) | Harness patterns full API reference |
 | [src/lib/harness-client/examples/README.md](src/lib/harness-client/examples/README.md) | Example agent implementations (10 agents) |
 | [../docs/UI_ARCHITECTURE.md](../docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
+| [../docs/DATA_STASH.md](../docs/DATA_STASH.md) | Data Stash upload → chunk → embed → search pipeline (#6/#9/#8) |
 | [../docs/INDEX.md](../docs/INDEX.md) | Full project documentation index |
