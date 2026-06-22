@@ -114,17 +114,42 @@ export async function callTool(
   try {
     const result = await withReconnect((c) => c.callTool({ name, arguments: args }));
 
-    // Extract text content
+    // Extract text content. Some MCP servers return ONE text block PER element
+    // (Redis `smembers`/`lrange`, search-style tools); the previous `.find`
+    // kept only the first block and silently dropped the rest. Collect all text
+    // blocks: a single block keeps its scalar shape (unchanged — preserves
+    // `json_get` and every existing single-value tool); multiple blocks become
+    // an array. Only the previously-lossy multi-block case changes behavior.
     if (result.content && Array.isArray(result.content)) {
-      const textContent = result.content.find((c) => c.type === 'text');
-      if (textContent && 'text' in textContent) {
-        const demoted = demoteErrorString(textContent.text);
+      const textItems = result.content.filter(
+        (c): c is { type: 'text'; text: string } =>
+          c.type === 'text' && typeof (c as { text?: unknown }).text === 'string'
+      );
+
+      if (textItems.length === 1) {
+        const { text } = textItems[0];
+        const demoted = demoteErrorString(text);
         if (demoted) return demoted;
         try {
-          return { success: true, data: JSON.parse(textContent.text) };
+          return { success: true, data: JSON.parse(text) };
         } catch {
-          return { success: true, data: textContent.text };
+          return { success: true, data: text };
         }
+      }
+
+      if (textItems.length > 1) {
+        // A failure is still reported as a single leading block in practice, so
+        // check the first block before treating this as a multi-value success.
+        const demoted = demoteErrorString(textItems[0].text);
+        if (demoted) return demoted;
+        const data = textItems.map((t) => {
+          try {
+            return JSON.parse(t.text);
+          } catch {
+            return t.text;
+          }
+        });
+        return { success: true, data };
       }
     }
 

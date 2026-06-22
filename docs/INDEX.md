@@ -37,6 +37,12 @@ Authoritative source-level docs (closer to the code):
 
 Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 
+### Data Stash
+
+| Document | Description |
+|----------|-------------|
+| [DATA_STASH.md](DATA_STASH.md) | Document upload → chunk → embed → search pipeline (#6/#9/#8): modules, API routes, Redis storage model, embedding-space rule, redis-stack + local-embedder requirements |
+
 ---
 
 ## Infrastructure Documentation
@@ -70,7 +76,9 @@ Scripts: `scripts/export-neo4j.sh` · `scripts/import-neo4j.sh` · `scripts/rese
 | Variable | Purpose |
 |----------|---------|
 | `GROQ_API_KEY` | Groq LLM inference (GroqFast, GroqGPT120B, GroqQwen3_32b) |
-| `OPENROUTER_API_KEY` | OpenRouter models (Nemotron, Gemma4, MiniMax) |
+| `OPENROUTER_API_KEY` | OpenRouter models (Nemotron, Gemma4, MiniMax) + the `openrouter` embedding provider |
+| `EMBEDDINGS_PROVIDER` | Data Stash embedding provider: `local` (default) or `openrouter` (see [DATA_STASH.md](DATA_STASH.md)) |
+| `EMBEDDINGS_LOCAL_URL` / `EMBEDDINGS_LOCAL_MODEL` | Override the local embedder URL (`http://localhost:8090/v1`) / model (`Qwen3-Embedding-0.6B`) |
 | `OPENAI_API_KEY` | OpenAI models (GPT-5, GPT-5 Mini, GPT-5 Nano) |
 | `ANTHROPIC_API_KEY` | Anthropic models (Opus 4, Sonnet 4, Haiku) |
 | `VITE_STACK_PROJECT_ID` | Stack Auth project |

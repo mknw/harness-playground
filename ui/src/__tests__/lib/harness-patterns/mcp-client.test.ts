@@ -241,6 +241,59 @@ describe('mcp-client', () => {
       expect(result.success).toBe(true)
       expect(result.data).toBe('The result has no Error: here')
     })
+
+    // Multi-value Redis tools (smembers, lrange, search-style) return ONE text
+    // block PER element. callTool used to `.find` only the first block and
+    // silently drop the rest (so e.g. a 3-member set listed as 1); it now
+    // aggregates them into an array. Single-block behavior is unchanged.
+    it('aggregates multiple text blocks into an array (e.g. smembers)', async () => {
+      mockCallTool.mockResolvedValue({
+        content: [
+          { type: 'text', text: 'id-a' },
+          { type: 'text', text: 'id-b' },
+          { type: 'text', text: 'id-c' },
+        ]
+      })
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('smembers', { name: 'some:set' })
+
+      expect(result.success).toBe(true)
+      expect(result.data).toEqual(['id-a', 'id-b', 'id-c'])
+    })
+
+    it('JSON-parses each block when aggregating', async () => {
+      mockCallTool.mockResolvedValue({
+        content: [
+          { type: 'text', text: '{"k":1}' },
+          { type: 'text', text: '{"k":2}' },
+        ]
+      })
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('search', {})
+
+      expect(result.success).toBe(true)
+      expect(result.data).toEqual([{ k: 1 }, { k: 2 }])
+    })
+
+    it('demotes a multi-block result whose leading block is an error', async () => {
+      mockCallTool.mockResolvedValue({
+        content: [
+          { type: 'text', text: 'Error: something went wrong' },
+          { type: 'text', text: 'trailing detail' },
+        ]
+      })
+
+      const { callTool } = await import('../../../lib/harness-patterns/mcp-client.server')
+
+      const result = await callTool('some_tool', {})
+
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/^Error: something went wrong/)
+    })
   })
 
   describe('listTools', () => {

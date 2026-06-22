@@ -14,8 +14,13 @@ pnpm test:run         # Run all tests once (vitest)
 pnpm test             # Watch mode
 pnpm baml-generate    # Regenerate baml_client/ from baml_src/
 pnpm baml-test        # Run BAML tests
-pnpm dev:llama        # Start local GLM-4.7-Flash inference server (port 8080)
+pnpm dev:llama        # Start local GLM-4.7-Flash *chat* model (port 8080)
 pnpm exec tsc --noEmit --project tsconfig.json  # Type-check (from ui/)
+```
+
+Local **embedding** server for the Data Stash pipeline (separate from `dev:llama`'s chat model — different model, port 8090):
+```bash
+llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --ctx-size 8192
 ```
 
 Run a single test file:
@@ -151,6 +156,11 @@ Tool namespaces in `tools.server.ts`: `neo4j`, `web`, `context7`, `filesystem`, 
 
 `KNOWN_TOOL_SERVERS` maps tool names to namespaces when auto-detection would fail.
 
+**Redis MCP quirks** (encapsulated by `document-store.server.ts` / `document-ingest.server.ts`; full detail in [`docs/DATA_STASH.md`](docs/DATA_STASH.md)):
+- The `redis` service must be **redis-stack** (RedisJSON + RediSearch); plain `redis` has no modules. On Apple-Silicon/colima, run it `platform: linux/amd64` (a git-ignored `docker-compose.override.yml`) — the arm64 `redisearch.so` SIGILLs on vector ops.
+- Param names: `json_get`/`json_set` use `name`/`path`; `expire`/`hset`/`sadd` take `expire_seconds`; `delete` uses `key` (not `name`); `set_vector_in_hash`/`vector_search_hash` use `name`/`index_name` + a float `vector`/`query_vector`.
+- The gateway runs each redis server over **serial stdio** (so bulk writes are sequential), returns multi-value results (e.g. `smembers`) as **one text block per element** (`callTool` aggregates these into an array), and **auto-parses JSON-looking string args into objects** (so chunk metadata is base64-encoded before `hset`).
+
 ---
 
 ## Styling
@@ -178,5 +188,6 @@ Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secon
 | [`docs/INDEX.md`](docs/INDEX.md) | Full documentation index |
 | [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Planning board / roadmap — replaced `docs/ROADMAP.md`; planning lives in GitHub Projects now |
 | [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
+| [`docs/DATA_STASH.md`](docs/DATA_STASH.md) | Data Stash pipeline: upload → chunk → embed → search (#6/#9/#8), API routes, Redis storage, redis-stack + local-embedder requirements |
 | [`ui/README.md`](ui/README.md) | UI quick start and file index |
 | [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md) | Harness patterns full API |
