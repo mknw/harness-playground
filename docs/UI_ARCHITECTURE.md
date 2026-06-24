@@ -371,7 +371,7 @@ Tabbed right panel. **Context manager is the default tab.** Uses `lazyMount` + `
 | Memory | Graph visualization for Memory MCP entities |
 | All (Turn Explorer) | Turn-based graph explorer — select specific turns, color-coded |
 | **Context manager** *(default)* | Event timeline + LLM call detail |
-| Data | Data Stash — document upload (drag-drop/picker) + tool-result icons, with hide/archive/delete. See [DATA_STASH.md](DATA_STASH.md) for the upload→chunk→embed→search pipeline. |
+| Data | Data Stash — two collapsible groups: **Your Uploads** (drag-drop/picker + document chips) and **Agent Findings** (tool-result icons by turn), each with hide/archive/delete. See [DATA_STASH.md](DATA_STASH.md) for the upload→chunk→embed→search pipeline. |
 | Tools | MCP tool configuration via `ToolsPanel` |
 
 **Conversation Sync toggle:** The Neo4j and Memory graph tabs have a ⏸/▶ "Sync" button (cyan when live, amber when paused). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
