@@ -713,12 +713,9 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         <span text="xs dark-text-tertiary" font="mono">{totalCount()} items</span>
       </div>
 
-      {/* Uploads — file ingestion into the Redis-backed stash (Issue #6) */}
-      <div border="b dark-border-primary">
-        <div p="x-3 y-2" flex="~" items="center" gap="2">
-          <span text="xs dark-text-tertiary" font="medium">Uploads</span>
-          <span text="xs dark-text-tertiary" font="mono">({docs().length})</span>
-        </div>
+      {/* ── Your Uploads ── user-provided documents (Redis-backed, Issue #6).
+          Always available (the drop zone needs to be reachable with 0 docs). */}
+      <CollapsibleSection title="Your Uploads" count={docs().length} defaultOpen={true}>
         <UploadZone uploading={uploading()} error={uploadError()} onFiles={uploadFiles} />
         <Show when={docs().length > 0}>
           <div flex="~ wrap" gap="2" p="x-3 y-2">
@@ -727,22 +724,23 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
             </For>
           </div>
         </Show>
-      </div>
+      </CollapsibleSection>
 
-      <Show when={toolCount() === 0}>
-        <div flex="~ col" items="center" justify="center" p="6" text="dark-text-tertiary" gap="2">
-          <span
-            class="i-mdi-package-variant-closed-remove"
-            style={{ width: '32px', height: '32px', color: '#3f3f46', opacity: '0.6' }}
-          />
-          <span text="xs m-t-1">No tool results yet — run an agent to see data here</span>
-        </div>
-      </Show>
+      {/* ── Agent Findings ── tool results the agent produced (neo4j, web, …). */}
+      <CollapsibleSection title="Agent Findings" count={toolCount()} defaultOpen={true}>
+        <Show when={toolCount() === 0}>
+          <div flex="~ col" items="center" justify="center" p="6" text="dark-text-tertiary" gap="2">
+            <span
+              class="i-mdi-flask-empty-outline"
+              style={{ width: '28px', height: '28px', color: '#3f3f46', opacity: '0.6' }}
+            />
+            <span text="xs m-t-1">No tool results yet — run an agent to see data here</span>
+          </div>
+        </Show>
 
-      <Show when={toolCount() > 0}>
         {/* Current Turn */}
         <Show when={partitioned().current.length > 0}>
-          <div border="b dark-border-primary">
+          <div>
             <div p="x-3 y-2" flex="~" items="center" gap="2">
               <span text="xs dark-text-tertiary" font="medium">Current Turn</span>
               <span text="xs dark-text-tertiary" font="mono">({partitioned().current.length})</span>
@@ -772,7 +770,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
             <IconGallery items={partitioned().archived} onAction={props.onStashAction} />
           </CollapsibleSection>
         </Show>
-      </Show>
+      </CollapsibleSection>
     </div>
   )
 }
