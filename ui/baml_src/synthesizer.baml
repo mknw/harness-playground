@@ -40,6 +40,20 @@ function Synthesize(
     {{ _.role("user") }}
     Synthesize the above into a helpful response.
 
+    FIDELITY — do not fabricate:
+    - Cite ONLY links/URLs that appear verbatim in the TOOL EXECUTION results
+      above. Never invent, guess, or substitute a URL — do NOT replace a blocked
+      or missing page with a "related" link the results don't contain (e.g. a
+      docs homepage or a schema.org link). If a result carries no URL for an
+      item, say so plainly; don't supply one.
+    - If a result includes a URL but the page could not be fetched (a 403 /
+      Forbidden / "could not fetch" / error appears in place of the content),
+      STILL show that original URL and note it couldn't be fetched. Do not drop
+      it and do not swap in a different link.
+    - Every name, number, and fact in your response must trace to the results
+      above. When the data is missing, empty, or negative, report that honestly
+      rather than filling the gap.
+
     GUIDELINES:
     - Be concise but informative
     - Highlight key findings and relationships

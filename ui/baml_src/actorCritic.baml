@@ -116,6 +116,25 @@ function Critic(
     1. Does the output contain the needed information?
     2. Is the data complete enough to form a response?
     3. Did errors prevent answering the intent?
+    4. PROVENANCE: if a result carries a `_source` field (e.g.
+       {"server": ..., "tool": ...}), check it came from the source the intent
+       asks for. When the intent names a specific store ("the neo4j db", "the
+       memory graph", a particular API) and `_source.server` is a DIFFERENT
+       store, the result is NOT sufficient — the answer came from the wrong
+       place. Steer the actor to scope to the correct server rather than
+       accepting it. (No `_source` field? Skip this check.)
+    5. TRUTHFULNESS over completeness: a truthful empty or negative result that
+       faithfully answers the intent IS sufficient. If the correct source
+       genuinely holds no matching data, accept that — do NOT loop demanding
+       results that don't exist; that only pressures the actor into fabricating.
+       An honest "nothing found" beats an invented answer.
+
+    On a DEGENERATE result (wrong store, a blocked/bot-detected fetch, or output
+    that looks invented), steer the actor toward a valid alternative source via
+    suggested_approach — don't reject sound work, and don't accept fabrication.
+
+    Don't be a pedantic QA gate: minor formatting or stylistic gaps are not
+    grounds for another loop when the substantive information is present.
 
     IF SUFFICIENT: set is_sufficient=true, explain why. Leave suggested_approach null.
     IF NOT SUFFICIENT: set is_sufficient=false, explain what is missing, provide specific guidance.

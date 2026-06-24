@@ -91,12 +91,25 @@ The kg-agent gateway exposes a "code-mode" factory tool. Use it to:
    (multiple tool calls + transforms + aggregations) instead of one
    round-trip per operation — that is the leverage.
 
-5. RECORD PROVENANCE. Have each script return
+5. TOOL OUTPUT SHAPES & SCRIPT HYGIENE. Inside a script every tool returns a
+   STRING. Graph/Cypher reads (read_neo4j_cypher, get_neo4j_schema, read_graph,
+   search_nodes) return JSON strings — JSON.parse is safe. Web search (search)
+   and fetch_content return human-readable TEXT, not JSON — NEVER JSON.parse
+   them; pull URLs/snippets out with plain string ops. Prefer .indexOf() /
+   .slice() / .split() / .includes() over regex literals: backslash escaping
+   inside the script string is the #1 cause of "Unexpected token" failures.
+   Wrap every fetch_content in try/catch; on failure KEEP the page's URL in the
+   output with a short "could not fetch" note — never drop the URL (the answer
+   still needs the link).
+
+6. RECORD PROVENANCE. Have each script return
    { _source: { server, tool }, result: ... } so the answer can be verified
    against the store the user asked for.
 
-6. LET THE CRITIC DECIDE COMPLETION. You don't need a Return tool — the
-   critic evaluates each result and ends the loop when sufficient.
+7. LET THE CRITIC DECIDE COMPLETION. You don't need a Return tool — the
+   critic evaluates each result and ends the loop when sufficient. A truthful
+   empty result (the store really has no match) is a complete answer — report
+   it honestly instead of inventing data to look complete.
 `.trim();
 
 /**
@@ -134,7 +147,7 @@ const CODE_MODE_FEW_SHOTS: FewShot[] = [
   {
     user: "Find the 2 most-connected nodes in the knowledge graph and search the web for related tech for each.",
     reasoning:
-      "Two servers (memory + web_search) in one script: read graph → count degree from relations → pick top-2 → loop a web search per name. ONE factory tool, ONE script — not four round-trips.",
+      "Two servers (memory + web_search) in one script: read graph → count degree from relations → pick top-2 → web search per name. search() returns TEXT, so pull the first link out with string ops (no JSON.parse, no regex). ONE factory tool, ONE script — not four round-trips.",
     tool: "code-mode-graph_web_analysis",
     args: JSON.stringify({
       script: [
@@ -142,8 +155,14 @@ const CODE_MODE_FEW_SHOTS: FewShot[] = [
         "const deg = new Map();",
         "for (const r of g.relations) { deg.set(r.from, (deg.get(r.from)||0)+1); deg.set(r.to, (deg.get(r.to)||0)+1); }",
         "const top2 = [...deg.entries()].sort((a,b)=>b[1]-a[1]).slice(0,2).map(([n])=>n);",
-        "const out = { _source: { server: 'memory', tool: 'read_graph' }, top_nodes: top2, searches: {} };",
-        "for (const name of top2) { out.searches[name] = await search({query: name + ' related technologies'}); }",
+        "const out = { _source: { server: 'memory', tool: 'read_graph' }, top_nodes: top2, results: [] };",
+        "for (const name of top2) {",
+        "  const text = await search({ query: name + ' related technologies' });",
+        "  // search returns TEXT — extract the first link with string ops, never JSON.parse",
+        "  const at = text.indexOf('http');",
+        "  const url = at >= 0 ? text.slice(at).split(' ')[0].split('\\n')[0] : null;",
+        "  out.results.push({ node: name, url, snippet: text.slice(0, 500) });",
+        "}",
         "return out;",
       ].join("\n"),
     }),
