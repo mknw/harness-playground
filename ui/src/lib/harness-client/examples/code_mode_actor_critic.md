@@ -55,14 +55,17 @@ Three additions to the generic `ActorController` BAML function
 
 ### What the guidance teaches
 
-The prelude covers four behaviors, in priority order:
+`CODE_MODE_ACTOR_GUIDANCE` covers seven behaviors, in priority order:
 
 | # | Rule | Why it's there |
 |---|---|---|
 | 1 | Factory protocol: `code-mode {name, servers}` → `code-mode-<name>({script})` | Without this the actor doesn't know the factory step exists and tries `mcp-exec` as a shim. |
-| 2 | Write ONE script that batches multiple operations server-side | The failure case (`hallucination-code-mode.json`) was the actor calling `code-mode-<name>` with `return read_graph({})` — a one-liner that dumped data instead of doing the full pipeline. |
-| 3 | Skip `mcp-find` / `mcp-add` for tools already in `AVAILABLE TOOLS` | The user's per-conversation allowlist pre-loads tools; rediscovery wastes turns. |
-| 4 | Return when done or near budget exhaustion | Combined with the `BUDGET:` line from Decision 3, this lets the actor wrap partial work into a final answer instead of being cut off mid-thought. |
+| 2 | Scope to ENABLED SERVERS — don't re-`mcp-add` an already-enabled server | `mcp-add` can fail a missing-secret check even when the server already works; the up-front catalog (Theme 1) names the servers to scope directly. |
+| 3 | Pick the right store (neo4j-cypher vs memory) and never substitute the other | The original failure (`context-neo4j-vs-memory.json`) queried the near-empty `memory` graph when the user asked for "the neo4j db". |
+| 4 | Write ONE script that batches multiple operations server-side | The failure case (`hallucination-code-mode.json`) was the actor calling `code-mode-<name>` with `return read_graph({})` — a one-liner that dumped data instead of doing the full pipeline. |
+| 5 | Tool output shapes & script hygiene: Cypher/graph reads return JSON; **search/fetch return TEXT — never `JSON.parse` them**; prefer string ops over regex; wrap `fetch_content` in try/catch and keep the URL on failure | The recurring turn-burners (`context-verywell.json` turns 2–3, `context-neo4j-nosecrets.json` turn 7): `JSON.parse` of non-JSON search text, and `^`/`\s` regex escaping breaking inside the JSON-encoded script string. Keeping the URL on a failed fetch also feeds the synthesizer the real link. |
+| 6 | Record provenance: return `{ _source: { server, tool }, result }` | Lets the critic verify the answer came from the store the user asked for (Theme 2) and gives downstream patterns a checkable origin. |
+| 7 | Let the critic decide completion; a truthful empty result is a complete answer | Post-P0 there is no `Return` tool — the critic owns the exit. Inventing data to "look done" is the failure this guards against. |
 
 ---
 
@@ -133,6 +136,35 @@ invented confident-but-fake content over incomplete tool results (see
 Error scoping is naturally bounded by the synthesizer's own view window —
 see the "Error scoping" note in
 [`ui/src/lib/harness-patterns/README.md`](../../harness-patterns/README.md).
+
+### Synthesizer fidelity (no invented links)
+
+The `Synthesize` prompt (`baml_src/synthesizer.baml`) carries a **FIDELITY**
+block: cite only URLs that appear verbatim in the tool results, and on a fetch
+failure keep the original URL with a "couldn't fetch" note rather than dropping
+it or substituting a "related" link. This addresses `context-verywell.json`,
+where a page returned `403 Forbidden`, the synth dropped the real
+`verywellmind.com` URL, and fabricated `schema.org` / `neo4j docs` links absent
+from the results. The block lives on the shared `Synthesize` function (it's a
+universally good anti-hallucination guardrail); the script-side half is item 5
+of `CODE_MODE_ACTOR_GUIDANCE` (keep the URL in the output on a failed fetch), so
+the link is still in the synthesizer's view to cite.
+
+## Critic: provenance & truthfulness
+
+The `Critic` prompt (`baml_src/actorCritic.baml`) consumes the `{_source}` the
+actor emits (item 6 above):
+
+- **Provenance** — if a result carries `_source`, the critic checks it came from
+  the store the intent names; a result from the wrong store (memory when the
+  user asked for neo4j) is rejected *with steering* toward the right server, not
+  accepted. Guards the `context-neo4j-vs-memory.json` false-accept. The check is
+  conditional on a `_source` field being present, so other actorCritic agents
+  (`guardrailed-agent`, the sandbox agents) are unaffected.
+- **Truthfulness over completeness** — a truthful empty/negative result is
+  sufficient; the critic won't loop demanding data that doesn't exist (which
+  only pressures the actor to fabricate). It steers on degenerate results
+  (wrong store, bot-blocked fetch) rather than acting as a pedantic QA gate.
 
 ---
 
