@@ -68,6 +68,18 @@ vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
   listTools: mockListTools(mockToolSets.all)
 }))
 
+// Mock embeddings — the Semantic Cache embeds queries on read + write; keep it
+// deterministic and offline. The vector-store the cache uses still routes its
+// Redis calls through callToolMock above.
+vi.mock('../../../../lib/embeddings.server', () => ({
+  embedOne: vi.fn(async () => ({
+    provider: 'local',
+    model: 'test-embed',
+    dimensions: 4,
+    vector: [0.1, 0.2, 0.3, 0.4],
+  })),
+}))
+
 // Mock BAML client
 vi.mock('../../../../../baml_client', () => ({
   b: {
@@ -626,17 +638,22 @@ describe('Semantic Cache Patterns', () => {
       const patterns = await semanticCacheAgent.createPatterns('test-session') as Pattern[]
       const cachePattern = patterns.find(p => p.config.patternId === 'semantic-cache')
 
-      // Mock cache miss from json_get but hit from vector search
+      // L1 (json_get) misses; L2 KNN returns a near neighbour within the distance
+      // threshold whose payload carries the cached result (no second lookup).
       callToolMock
-        .mockResolvedValueOnce({ success: false, data: null }) // json_get fails
-        .mockResolvedValueOnce({ success: true, data: [{ key: 'similar:key', score: 0.95 }] }) // vector_search_hash
-        .mockResolvedValueOnce({ success: true, data: { result: 'similar result' } }) // json_get for similar
+        .mockResolvedValueOnce({ success: false, data: null }) // json_get (L1) miss
+        .mockResolvedValueOnce({
+          success: true,
+          data: [{ meta: JSON.stringify({ result: 'similar result' }), score: 0.05 }],
+        }) // vector_search_hash (L2) — distance 0.05 < threshold
 
       const scope = createMockScope({ input: 'test query' })
       const view = createMockView()
 
       const result = await cachePattern!.fn(scope, view)
-      expect((result as typeof scope).data.cacheHit).toBe(true)
+      const out = (result as typeof scope).data as Record<string, unknown>
+      expect(out.cacheHit).toBe(true)
+      expect(out.cacheKind).toBe('semantic')
     })
   })
 
