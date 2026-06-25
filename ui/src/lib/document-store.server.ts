@@ -56,6 +56,14 @@ export interface StashDocumentMeta {
   hidden?: boolean
   /** Moved to the Archived section (also excluded from LLM context). */
   archived?: boolean
+  /**
+   * Content encoding. `'utf8'` (default, omitted) → `content` is literal text.
+   * `'base64'` → `content` is base64 of the original binary bytes (xlsx, pdf,
+   * images); decode before use. `size` is always the ORIGINAL byte count.
+   * Added for the sandbox `/work` round-trip (#89) — binary deliverables need
+   * byte-faithful storage, which the text-only upload path could not provide.
+   */
+  encoding?: 'utf8' | 'base64'
 }
 
 /** A stored document: metadata + its (already text-extracted) content. */
@@ -78,6 +86,11 @@ export interface StoreDocumentInput {
   id?: string
   /** TTL override in seconds; falls back to {@link DEFAULT_TTL_SECONDS}. */
   ttlSeconds?: number
+  /**
+   * Content encoding; defaults to `'utf8'`. Set `'base64'` when `content` is
+   * base64-encoded binary (the size limit then applies to the decoded bytes).
+   */
+  encoding?: 'utf8' | 'base64'
 }
 
 // ============================================================================
@@ -130,6 +143,16 @@ function byteLength(str: string): number {
   return typeof Buffer !== 'undefined'
     ? Buffer.byteLength(str, 'utf8')
     : new TextEncoder().encode(str).length
+}
+
+/** Decoded byte count of a base64 string (server-only — Buffer always present;
+ *  whitespace-tolerant fallback otherwise). Used so the size limit and stored
+ *  `size` reflect the ORIGINAL bytes, not the ≈33%-larger base64 string. */
+function base64ByteLength(b64: string): number {
+  if (typeof Buffer !== 'undefined') return Buffer.from(b64, 'base64').length
+  const clean = b64.replace(/[^A-Za-z0-9+/]/g, '')
+  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor((clean.length * 3) / 4) - padding)
 }
 
 /**
@@ -237,7 +260,11 @@ export async function storeDocument(
   input: StoreDocumentInput,
   callTool: CallTool = defaultCallTool,
 ): Promise<StashDocument> {
-  const size = byteLength(input.content)
+  const encoding = input.encoding ?? 'utf8'
+  // `size` is the ORIGINAL byte count: for base64 that's the decoded length
+  // (the limit applies to the real file, not the larger encoded string).
+  const size =
+    encoding === 'base64' ? base64ByteLength(input.content) : byteLength(input.content)
   if (size > MAX_CONTENT_BYTES) {
     throw new Error(
       `Document too large: ${size} bytes exceeds limit of ${MAX_CONTENT_BYTES} bytes`,
@@ -252,6 +279,8 @@ export async function storeDocument(
     size,
     uploadedAt: Date.now(),
     content: input.content,
+    // Omit when utf8 so existing docs/tests stay byte-identical.
+    ...(encoding === 'base64' ? { encoding } : {}),
   }
 
   const ttl = input.ttlSeconds ?? DEFAULT_TTL_SECONDS
@@ -415,7 +444,10 @@ export function toPriorResult(
   doc: StashDocumentMeta & { content?: string },
   previewChars = 200,
 ): PriorResult {
-  const preview = doc.content
+  // Base64 (binary) content is not human-readable — fall back to a metadata
+  // preview rather than slicing the encoded blob into the summary.
+  const isBinary = doc.encoding === 'base64'
+  const preview = doc.content && !isBinary
     ? doc.content.slice(0, previewChars).replace(/\s+/g, ' ').trim() +
       (doc.content.length > previewChars ? '…' : '')
     : `${doc.filename} (${doc.mimeType}, ${doc.size} bytes)`

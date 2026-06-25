@@ -34,6 +34,14 @@ export async function POST(event: APIEvent) {
 
     const doc = await getDocument(body.sessionId, body.docId)
     if (!doc) return json({ error: 'Document not found' }, 404)
+    // Binary (base64) documents hold raw bytes, not text — chunking/embedding
+    // them would index garbage. RAG ingestion is text-only (#89).
+    if (doc.encoding === 'base64') {
+      return json(
+        { error: 'Cannot ingest a binary document; text search applies to text content only' },
+        415,
+      )
+    }
 
     try {
       const result = await ingestDocument(doc, {

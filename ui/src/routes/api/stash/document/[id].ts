@@ -1,7 +1,9 @@
 /**
  * Data Stash single-document API (Issue #6)
  *
- *   GET    /api/stash/document/:id?sessionId  — full document (content + meta)
+ *   GET    /api/stash/document/:id?sessionId            — full document (content + meta)
+ *   GET    /api/stash/document/:id?sessionId&download   — raw file stream
+ *                                               (base64-decoded for binary)
  *   DELETE /api/stash/document/:id?sessionId  — remove from Redis + index
  *   PATCH  /api/stash/document/:id            — toggle hide/archive flags
  *                                               body: { sessionId, hidden?, archived? }
@@ -28,6 +30,27 @@ export async function GET(event: APIEvent) {
     if (!sessionId) return json({ error: 'sessionId is required' }, 400)
     const doc = await getDocument(sessionId, event.params.id)
     if (!doc) return json({ error: 'Document not found' }, 404)
+
+    // ?download → stream the raw file with its original content-type, so the
+    // DataStash UI can offer a real download. Binary docs are base64-decoded
+    // back to bytes; text docs stream verbatim.
+    if (new URL(event.request.url).searchParams.has('download')) {
+      const isBinary = doc.encoding === 'base64'
+      const body = isBinary ? Buffer.from(doc.content, 'base64') : doc.content
+      const filename = doc.filename.replace(/["\r\n]/g, '')
+      return new Response(body as BodyInit, {
+        headers: {
+          'Content-Type': doc.mimeType || 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Content-Length': String(
+            isBinary
+              ? (body as Buffer).length
+              : Buffer.byteLength(doc.content, 'utf8'),
+          ),
+        },
+      })
+    }
+
     return json({ document: doc })
   })
 }
