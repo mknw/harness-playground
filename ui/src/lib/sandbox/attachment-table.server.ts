@@ -30,6 +30,14 @@ export interface Attachment {
   readonly transport: McpTransport
   refCount: number
   lastUsedAt: number
+  /**
+   * True until the workspace has been hydrated into this (fresh) container.
+   * Set `true` on first boot; the `withSandbox` wrapper hydrates `/work` from
+   * the document store once and flips it to `false` so subsequent same-session
+   * turns (which reuse this live attachment) don't re-hydrate (#89). A reconnect
+   * after idle eviction boots a fresh container → new attachment → `true` again.
+   */
+  isFirstBoot: boolean
 }
 
 export interface AttachmentTableConfig {
@@ -84,6 +92,7 @@ export class AttachmentTable {
         transport,
         refCount: 1,
         lastUsedAt: Date.now(),
+        isFirstBoot: true,
       }
       this.table.set(id, att)
       return att

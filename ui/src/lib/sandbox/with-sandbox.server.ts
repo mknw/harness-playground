@@ -24,6 +24,7 @@ import { DockerBackend } from './docker-backend.server'
 import { runWithSandbox } from './scope.server'
 import { SandboxScheduler } from './scheduler.server'
 import { WarmPool } from './warm-pool.server'
+import { hydrateWorkspace, snapshotOutputs, promoteOutputs } from './work-artifacts.server'
 import type { ComputeBackend, RootfsId, RuntimeConfig } from './types'
 import type {
   ConfiguredPattern,
@@ -62,6 +63,14 @@ export interface WithSandboxConfig {
   scheduler?: SandboxScheduler
   /** Attachment table override. Defaults to a process-shared instance. */
   attachments?: AttachmentTable
+  /**
+   * Durable workspace sync (#89). When true (id-addressable path only), the
+   * session's stored documents are hydrated into `/work/in` on first boot and
+   * new/changed files under `/work/out` are promoted back to the document store
+   * on each turn's exit. Off by default — opt in per agent (Sandbox · Session
+   * does). Requires the MCP gateway (document store lives in Redis).
+   */
+  syncWorkspace?: boolean
 }
 
 // Process-shared singletons, lazily constructed from DEFAULT_SETTINGS. Cap
@@ -147,6 +156,7 @@ export function withSandbox(config?: WithSandboxConfig) {
     const sessionId = config?.sessionId ?? 'default'
     const id = config?.id
     const fresh = config?.fresh === true
+    const syncWorkspace = config?.syncWorkspace === true
 
     const fn = async (
       scope: PatternScope<T>,
@@ -172,6 +182,8 @@ export function withSandbox(config?: WithSandboxConfig) {
             scope,
             view,
             pattern,
+            sessionId,
+            syncWorkspace,
           )
         }
         if (fresh) {
@@ -253,13 +265,39 @@ async function runWithIdAttachment<T>(
   scope: PatternScope<T>,
   view: EventView,
   pattern: ConfiguredPattern<T>,
+  sessionId: string,
+  syncWorkspace: boolean,
 ): Promise<PatternScope<T>> {
   if (fresh) {
     await attachments.destroyById(id).catch(() => {})
   }
   const att = await attachments.acquire(id, rootfs, runtime)
   try {
-    return await runWithSandbox(att.transport, () => pattern.fn(scope, view))
+    // Without workspace sync (the default), run the pattern directly — no
+    // document-store / extra transport traffic. Keeps plain `{ id }` sandboxes
+    // (and their tests) free of the persistence machinery.
+    if (!syncWorkspace) {
+      return await runWithSandbox(att.transport, () => pattern.fn(scope, view))
+    }
+    return await runWithSandbox(att.transport, async () => {
+      // First boot of a fresh container → restore the session's stored
+      // documents into /work/in. Reused live attachments skip this (#89).
+      if (att.isFirstBoot) {
+        await hydrateWorkspace(att.transport, sessionId).catch(() => {})
+        att.isFirstBoot = false
+      }
+      // Promote only what THIS turn produces: snapshot /work/out before the
+      // turn, diff after. In `finally` so deliverables are saved even if the
+      // pattern throws.
+      const baseline = await snapshotOutputs(att.transport).catch(
+        () => new Map<string, string>(),
+      )
+      try {
+        return await pattern.fn(scope, view)
+      } finally {
+        await promoteOutputs(att.transport, sessionId, baseline).catch(() => {})
+      }
+    })
   } finally {
     attachments.release(att)
   }

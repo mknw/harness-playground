@@ -1,0 +1,136 @@
+/**
+ * work-artifacts tests — hydrate (store → /work/in) and promote
+ * (/work/out → store), with the document store mocked and a simulated `/work`
+ * transport. Verifies routing (which docs land where), the text/binary encoding
+ * decision, and that promotion only stores files changed since the baseline.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createHash } from 'node:crypto'
+
+vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+  assertServerOnImport: vi.fn(),
+}))
+
+vi.mock('../../../lib/document-store.server', () => ({
+  listDocuments: vi.fn(),
+  getDocument: vi.fn(),
+  storeDocument: vi.fn(async () => ({})),
+}))
+
+import type { McpTransport } from '../../../lib/sandbox/types'
+import type { ToolCallResult } from '../../../lib/harness-patterns/types'
+import { listDocuments, getDocument, storeDocument } from '../../../lib/document-store.server'
+import { hydrateWorkspace, promoteOutputs } from '../../../lib/sandbox/work-artifacts.server'
+
+const unq = (s: string): string => s.replace(/^'|'$/g, '').replace(/'\\''/g, "'")
+function bashOk(stdout = ''): ToolCallResult {
+  return { success: true, data: { stdout, stderr: '', exit_code: 0, timed_out: false } }
+}
+
+function makeFsTransport() {
+  const fs = new Map<string, string>()
+  const runBash = (cmd: string): ToolCallResult => {
+    let m = /^base64 -d (\S+) > (\S+) && rm -f (\S+)$/.exec(cmd)
+    if (m) {
+      fs.set(unq(m[2]), Buffer.from(fs.get(unq(m[1])) ?? '', 'base64').toString('latin1'))
+      fs.delete(unq(m[3]))
+      return bashOk()
+    }
+    m = /^base64 -w 0 (\S+) > (\S+)$/.exec(cmd)
+    if (m) {
+      fs.set(unq(m[2]), Buffer.from(fs.get(unq(m[1])) ?? '', 'latin1').toString('base64'))
+      return bashOk()
+    }
+    m = /cd (\S+) && find \. -type f/.exec(cmd)
+    if (m) {
+      const dir = unq(m[1]).replace(/\/$/, '')
+      const lines: string[] = []
+      for (const [p, content] of fs) {
+        if (p.startsWith(dir + '/')) {
+          const hash = createHash('sha256').update(Buffer.from(content, 'latin1')).digest('hex')
+          lines.push(`${hash}  ./${p.slice(dir.length + 1)}`)
+        }
+      }
+      return bashOk(lines.join('\n'))
+    }
+    return bashOk()
+  }
+  const transport: McpTransport = {
+    vmId: 'vm',
+    toolNames: async () => [],
+    listTools: async () => [],
+    ownsTool: (n) => n.startsWith('sandbox_'),
+    close: async () => {},
+    callTool: async (name, args): Promise<ToolCallResult> => {
+      if (name === 'sandbox_write') {
+        fs.set(args.path as string, args.content as string)
+        return { success: true, data: 'ok' }
+      }
+      if (name === 'sandbox_read') {
+        const p = args.path as string
+        return fs.has(p) ? { success: true, data: fs.get(p) } : { success: false, data: null, error: 'nf' }
+      }
+      if (name === 'sandbox_bash') return runBash(args.command as string)
+      return { success: false, data: null, error: 'unknown' }
+    },
+  }
+  return { transport, fs }
+}
+
+beforeEach(() => vi.clearAllMocks())
+
+describe('hydrateWorkspace', () => {
+  it('writes visible docs into /work/in (text verbatim, binary decoded) and skips hidden/archived', async () => {
+    vi.mocked(listDocuments).mockResolvedValue([
+      { id: 'd1', sessionId: 's', filename: 'data.csv', mimeType: 'text/csv', size: 3, uploadedAt: 1 },
+      { id: 'd2', sessionId: 's', filename: 'sheet.xlsx', mimeType: 'application/vnd…', size: 4, uploadedAt: 2, encoding: 'base64' },
+      { id: 'd3', sessionId: 's', filename: 'old.txt', mimeType: 'text/plain', size: 1, uploadedAt: 3, hidden: true },
+    ] as never)
+    const xlsxBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04]) // "PK.." zip/xlsx magic
+    vi.mocked(getDocument).mockImplementation(async (_s, id) => {
+      if (id === 'd1') return { id: 'd1', sessionId: 's', filename: 'data.csv', mimeType: 'text/csv', size: 3, uploadedAt: 1, content: 'a,b' } as never
+      if (id === 'd2') return { id: 'd2', sessionId: 's', filename: 'sheet.xlsx', mimeType: 'x', size: 4, uploadedAt: 2, encoding: 'base64', content: xlsxBytes.toString('base64') } as never
+      return null
+    })
+
+    const { transport, fs } = makeFsTransport()
+    const n = await hydrateWorkspace(transport, 's', (async () => ({ success: true, data: null })) as never)
+
+    expect(n).toBe(2) // d3 skipped (hidden)
+    expect(fs.get('/work/in/data.csv')).toBe('a,b')
+    expect(fs.get('/work/in/sheet.xlsx')).toBe(xlsxBytes.toString('latin1'))
+    expect(fs.has('/work/in/old.txt')).toBe(false)
+    // getDocument never fetched the hidden doc.
+    expect(vi.mocked(getDocument)).not.toHaveBeenCalledWith('s', 'd3', expect.anything())
+  })
+})
+
+describe('promoteOutputs', () => {
+  it('stores only files new/changed since baseline, with correct text/binary encoding', async () => {
+    const { transport, fs } = makeFsTransport()
+    // report.csv is new; chart.png is new binary; notes.md is unchanged vs baseline.
+    fs.set('/work/out/report.csv', 'x,y\n1,2')
+    fs.set('/work/out/notes.md', '# unchanged')
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47])
+    fs.set('/work/out/chart.png', pngBytes.toString('latin1'))
+
+    const notesHash = createHash('sha256').update(Buffer.from('# unchanged', 'latin1')).digest('hex')
+    const baseline = new Map([['notes.md', notesHash]])
+
+    const promoted = await promoteOutputs(transport, 's', baseline, (async () => ({ success: true, data: null })) as never)
+
+    expect(promoted.sort()).toEqual(['chart.png', 'report.csv'])
+    const calls = vi.mocked(storeDocument).mock.calls.map((c) => c[0])
+    const csv = calls.find((c) => c.filename === 'report.csv')!
+    const png = calls.find((c) => c.filename === 'chart.png')!
+    expect(csv.mimeType).toBe('text/csv')
+    expect(csv.encoding).toBeUndefined()
+    expect(csv.content).toBe('x,y\n1,2')
+    expect(png.mimeType).toBe('image/png')
+    expect(png.encoding).toBe('base64')
+    expect(Buffer.from(png.content, 'base64').equals(pngBytes)).toBe(true)
+    // notes.md (unchanged) was not promoted.
+    expect(calls.find((c) => c.filename === 'notes.md')).toBeUndefined()
+  })
+})
