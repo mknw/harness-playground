@@ -1384,11 +1384,18 @@ time, no per-pattern wiring. See `sandbox-demo.server.ts`.
 ### 11. Sandbox · Session (`withSandbox({ id })` persistent + xterm)
 
 **Servers**: none (same as Sandbox Demo)
-**Patterns**: `[compactIntent, withSandbox({ id: sessionId })(actorCritic), synth]`
+**Patterns**: `[compactIntent, withSandbox({ id: sessionId, syncWorkspace: true })(actorCritic), synth]`
 **Use case**: A persistent workspace shared with the **interactive Shell
 terminal** in the Terminal panel. Agent writes a file → user can `cat` it in
 the Shell; same VM. The `id` keys the attachment to the conversation in
 `AttachmentTable`; the `PtyManager` keys on the same `sessionId`.
+
+With `syncWorkspace: true` ([#89](https://github.com/mknw/harness-playground/issues/89))
+the workspace is **durable across sessions**, not just turns: stored documents
+are restored into `/work/in` on first boot and `/work/out` deliverables are
+promoted to the DataStash each turn — so an uploaded spreadsheet survives idle
+eviction, restart, and next-day reconnects. The layout contract + mechanism
+live in [`docs/sandbox-plan.md → Durable workspaces`](../../../../docs/sandbox-plan.md#durable-workspaces-89).
 
 Composes any actor-style pattern with id-addressable attachment. Because this
 agent is **router-less**, `compactIntent` runs first ([#83](https://github.com/mknw/harness-playground/issues/83)

@@ -41,7 +41,7 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 
 | Document | Description |
 |----------|-------------|
-| [DATA_STASH.md](DATA_STASH.md) | Document upload → chunk → embed → search pipeline (#6/#9/#8): modules, API routes, Redis storage model, embedding-space rule, redis-stack + local-embedder requirements |
+| [DATA_STASH.md](DATA_STASH.md) | Document upload → chunk → embed → search pipeline (#6/#9/#8): modules, API routes, Redis storage model (incl. base64 binary, #89), embedding-space rule, redis-stack + local-embedder requirements |
 
 ---
 
@@ -51,7 +51,8 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 |----------|-------------|
 | [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md) | Neo4j, MCP Gateway, Redis service configuration |
 | [MCP_GATEWAY.md](MCP_GATEWAY.md) | MCP Gateway reference, CLI, troubleshooting |
-| [sandbox-plan.md](sandbox-plan.md) | Sandbox compute plan — `withSandbox` wrapper, attachment model, MCP-in-VM architecture, backend interface (Docker + Firecracker), substrate options, failure modes |
+| [sandbox-plan.md](sandbox-plan.md) | Sandbox compute plan — `withSandbox` wrapper, attachment model, MCP-in-VM architecture, durable workspaces (`syncWorkspace`, #89), backend interface (Docker + Firecracker), substrate options, failure modes |
+| [sandbox/README.md](sandbox/README.md) | Sandbox debugging — identify/inspect/reap containers, `/work` durable-workspace layout, `.harness-logs` jq recipes |
 
 **Key config files:**
 - `docker-compose.yaml` — service orchestration

@@ -28,6 +28,7 @@ query ─────────────────────── embe
 | `POST /api/stash/upload` | Store a document (multipart `file`, or JSON `{sessionId, filename, content}`) |
 | `GET /api/stash/upload?sessionId=` | List a session's documents (metadata) |
 | `GET /api/stash/document/:id?sessionId=` | Fetch a document (content + metadata) |
+| `GET /api/stash/document/:id?sessionId=&download` | Stream the raw file (base64 decoded for binary) with `Content-Disposition` (#89) |
 | `DELETE /api/stash/document/:id?sessionId=` | Remove a document + its index entry |
 | `PATCH /api/stash/document/:id` | Toggle `hidden` / `archived` (`{sessionId, hidden?, archived?}`) |
 | `POST /api/stash/ingest` | Chunk → embed → index a stored doc (`{sessionId, docId, chunk?, embedding?}`) |
@@ -37,13 +38,13 @@ Auth follows the existing posture (dev-bypass aware; see `lib/auth/dev-bypass.ts
 
 ## Storage model (Redis)
 
-- **Document**: RedisJSON blob at `stash:doc:{sessionId}:{docId}`, TTL default 7 days. `content` is opaque UTF-8 text (binary extraction is the upstream caller's job — not done yet).
+- **Document**: RedisJSON blob at `stash:doc:{sessionId}:{docId}`, TTL default 7 days. `content` is UTF-8 text by default; binary files (xlsx, pdf, images) are stored with `encoding: 'base64'` and `size` = the original (decoded) byte count (#89). Binary content is byte-faithful but **not** semantically searchable — `POST /api/stash/ingest` rejects base64 docs (chunking/embedding is text-only).
 - **Session index**: a Redis SET `stash:docs:{sessionId}` of doc ids (self-healing — stale entries pruned on list).
 - **Chunk**: a Redis HASH `stashvec:{sessionId}:{spaceTag}:{docId}:{chunkIndex}` with `vector` (float blob) + `meta` (base64 of a JSON `{content, doc_id, source, chunk_index, offsets, model, provider, dim}`). 2 writes/chunk.
 - **Vector index**: a RediSearch HNSW index per `(session, embedding-space)`; `dim` matches the embedding model.
 - **Embedding space**: recorded at `stash:space:{sessionId}` as `{provider, model, dimensions}`.
 
-`MAX_CONTENT_BYTES` = 5 MiB. Accepts any text-decodable file; the picker hints Text/Markdown/JSON/CSV (no hard allow-list — binaries decode as garbage today).
+`MAX_CONTENT_BYTES` = 5 MiB (applies to the original bytes, base64 or not). Text files store verbatim; recognized binary types are base64-encoded by the upload service (`isTextMime` decides). Text remains the path for anything you want to search; binary is for byte-faithful round-trips (e.g. the sandbox `/work` flow, #89).
 
 ## Chunking (#9)
 
@@ -72,5 +73,5 @@ llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --
 
 ## Relationships
 
-- **#89** (sandbox `/work` ⇄ DataStash artifact sync) builds on the store/retrieve path (`getDocument` / `toPriorResult`); it does not require vector search.
+- **#89** (sandbox `/work` ⇄ DataStash artifact sync) builds on the store/retrieve path (`storeDocument` / `getDocument` / `listDocuments`) and added the base64 `encoding` field + the `?download` route for byte-faithful binaries. It does not require vector search. Mechanism: [`docs/sandbox-plan.md → Durable workspaces`](sandbox-plan.md#durable-workspaces-89).
 - Distinct from **#17** (RDF/OWL → Neo4j): this is documents → Redis + vectors.
