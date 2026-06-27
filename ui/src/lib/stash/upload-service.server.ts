@@ -10,10 +10,11 @@
  *   - `application/json` `{ sessionId, filename, mimeType, content, ttlSeconds? }`
  *     — the programmatic path (and what #89 / the sandbox lane can call).
  *
- * Both yield a {@link StoreDocumentInput} for `document-store.server.ts`. Binary
- * formats (PDF, xlsx, …) are decoded as UTF-8 text here — true text extraction
- * is left to the caller, matching the document-store contract ("`content` is
- * opaque UTF-8 text").
+ * Both yield a {@link StoreDocumentInput} for `document-store.server.ts`. Text
+ * formats are stored as UTF-8; recognized binary formats (xlsx, pdf, images, …)
+ * are base64-encoded with `encoding: 'base64'` so the original bytes round-trip
+ * through the sandbox `/work` flow (#89). Semantic text extraction from binaries
+ * (for RAG/search) is still left to the caller.
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
@@ -35,6 +36,19 @@ const MIME_BY_EXT: Record<string, string> = {
   yaml: 'application/yaml',
   yml: 'application/yaml',
   log: 'text/plain',
+  // Common binary types — so a file arriving without a usable `blob.type`
+  // (e.g. the JSON intake path) is still classified binary and base64-encoded.
+  pdf: 'application/pdf',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  zip: 'application/zip',
+  parquet: 'application/vnd.apache.parquet',
 }
 
 /** Best-effort MIME from a filename extension; defaults to `text/plain`. */
@@ -43,6 +57,17 @@ export function guessMimeType(filename: string): string {
   if (dot < 0 || dot === filename.length - 1) return 'text/plain'
   const ext = filename.slice(dot + 1).toLowerCase()
   return MIME_BY_EXT[ext] ?? 'text/plain'
+}
+
+/**
+ * Whether a MIME type holds UTF-8 text we can store verbatim. Everything else
+ * (xlsx, pdf, images, zip, …) is treated as binary → base64. Covers `text/*`
+ * plus the structured text application types and `+json`/`+xml` suffixes.
+ */
+export function isTextMime(mimeType: string): boolean {
+  const m = mimeType.toLowerCase()
+  if (m.startsWith('text/')) return true
+  return /^application\/(json|xml|yaml|x-yaml|x-ndjson|.*\+json|.*\+xml)$/.test(m)
 }
 
 /**
@@ -69,11 +94,17 @@ export async function parseUploadRequest(
     const ttlRaw = form.get('ttlSeconds')
     const ttlSeconds =
       ttlRaw != null && ttlRaw !== '' ? Number(ttlRaw) : undefined
+    const mimeType = blob.type || guessMimeType(filename)
+    const isText = isTextMime(mimeType)
+    const content = isText
+      ? await blob.text()
+      : Buffer.from(await blob.arrayBuffer()).toString('base64')
     return {
       sessionId,
       filename,
-      mimeType: blob.type || guessMimeType(filename),
-      content: await blob.text(),
+      mimeType,
+      content,
+      ...(isText ? {} : { encoding: 'base64' as const }),
       ...(Number.isFinite(ttlSeconds) ? { ttlSeconds } : {}),
     }
   }
@@ -94,6 +125,7 @@ export async function parseUploadRequest(
     filename,
     mimeType: body.mimeType?.trim() || guessMimeType(filename),
     content: body.content,
+    ...(body.encoding === 'base64' ? { encoding: 'base64' as const } : {}),
     ...(typeof body.ttlSeconds === 'number' ? { ttlSeconds: body.ttlSeconds } : {}),
   }
 }

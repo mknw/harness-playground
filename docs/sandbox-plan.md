@@ -58,6 +58,8 @@ Auto is the default. The wrapper's runtime context — re-entries within a sessi
 
 **Vocabulary:** we use *attachment* rather than *scope* because `Scope` is already a concept on UnifiedContext / View. The two are unrelated.
 
+**Workspace persistence vs. attachment lifetime.** The attachment keeps a VM *live* between turns, so `/work` survives turn-to-turn while the container exists — but a container is disposable (idle eviction, warm-pool `reset`, process restart all destroy it). For state that must outlive the container, add `syncWorkspace: true` to an `{ id }` sandbox: the session's stored documents are restored into `/work/in` on first boot and `/work/out` deliverables are promoted back to the DataStash on each turn's exit. See [Durable workspaces](#durable-workspaces-89).
+
 ---
 
 ## Architecture: MCP-in-VM
@@ -256,9 +258,33 @@ Tools the agent does **not** see in v0:
 
 8. withSandbox exits → backend.reset() → VM returns to the warm pool
    (or stays attached if id was explicit and session is alive).
+   With syncWorkspace, anything the actor wrote under /work/out is first
+   promoted to the DataStash, so the result survives the VM (see below).
 ```
 
-Same shape works for document extraction, format conversion, dataset profiling — the conversation changes, the wrapper doesn't.
+Same shape works for document extraction, format conversion, dataset profiling — the conversation changes, the wrapper doesn't. When the input file was *uploaded* (rather than written by the actor), `syncWorkspace` restores it from the DataStash into `/work/in` automatically on the next session, so the user can leave and come back to it.
+
+---
+
+## Durable workspaces (#89)
+
+A container is disposable; the workspace shouldn't be. The 5-minute-class idle window, warm-pool `reset`, and process restarts all destroy `/work`, so anything written there is lost once the live attachment goes away. [#89](https://github.com/mknw/harness-playground/issues/89) decouples the two: **`/work` stays ephemeral scratch; the DataStash is the durable store.** Opt in per agent with `withSandbox({ id, sessionId, syncWorkspace: true })` (the Sandbox · Session agent does).
+
+**Workspace layout (the contract the agent is taught):**
+
+| Path | Role | Lifetime |
+|------|------|----------|
+| `/work/in` | Uploads + prior deliverables, **restored on first boot** of each session's container. | Durable (DataStash). Read-only by convention. |
+| `/work/out` | Files the agent wants kept. **Promoted to the DataStash on every turn exit.** | Durable (DataStash). |
+| `/work` (elsewhere) | Scratch. | Ephemeral — gone when the container recycles. |
+
+**Mechanism** (`ui/src/lib/sandbox/work-artifacts.server.ts` + `work-sync.server.ts`):
+
+- **Hydrate** — on first boot only (tracked by `Attachment.isFirstBoot`), `listDocuments(sessionId)` → write each into `/work/in`. Reused live attachments skip this, so a multi-turn session doesn't re-hydrate every turn.
+- **Promote** — snapshot `/work/out` (in-VM `sha256sum`) at turn entry, diff at exit, and `storeDocument` each new/changed file. Runs in a `finally`, so deliverables are saved even if the turn throws. Deletions are ignored (promotion never removes stored docs).
+- **Binary-faithful** — text files store verbatim; everything else (xlsx, pdf, images) moves as base64 staged through a `.b64` text file (the in-VM filesystem MCP is text-only) and is stored with `encoding: 'base64'`. See [DATA_STASH.md → Storage model](DATA_STASH.md#storage-model-redis).
+
+**Boundaries.** Only the `{ id }` path syncs; anonymous (`withSandbox({})`) and one-shot (`{ fresh: true }`) sandboxes have no session identity and are untouched. Sync requires the MCP gateway (the DataStash lives in Redis). The window in which a *live* container is reused before falling back to hydrate-from-store is the warm-cache horizon — see `idleEvictMs` in [Settings](#settings).
 
 ---
 
@@ -377,7 +403,7 @@ Devs working specifically on `FirecrackerBackend` bugs opt into Lima / UTM / Orb
 | `sandbox.globalCap` | 16 | Max concurrent sandbox VMs across all sessions |
 | `sandbox.perSessionCap` | 4 | Max concurrent sandbox VMs per session |
 | `sandbox.warmPool.base` | 1–2 | Pre-booted VMs of the base flavor |
-| `sandbox.idleEvictMs` | 300_000 | Idle time before warm-pool VM destroyed |
+| `sandbox.idleEvictMs` | 3_600_000 | Idle time before a parked VM is destroyed. With durable workspaces (#89) this is only the *warm-cache* horizon — instant reuse of the live container within the window; beyond it, the next turn re-hydrates `/work/in` from the DataStash. Was 300_000 before #89. |
 | `sandbox.defaultTimeoutSec` | 60 | Per-tool-call wall-clock cap |
 | `sandbox.defaultMemoryMB` | 512 | Per-VM memory cap |
 | `sandbox.defaultEgress` | `'mcp-only'` | Default egress profile |
@@ -409,8 +435,8 @@ Each step de-risks the next.
 - Dedicated `sandbox_python` MCP tool (Jupyter-shaped, REPL state across calls).
 - Rootfs flavor catalog (#78): Polars, PyPDF, sentence-transformers, etc.
 - Rust shell-exec MCP server (replaces JS) if cold-start becomes felt.
-- DataStash → sandbox flow: auto-mount referenced entries, or explicit `sandbox_fetch_stash(id, path)` tool.
-- UI-initiated file uploads into a running sandbox.
+- ~~DataStash → sandbox flow: auto-mount referenced entries~~ — **landed in #89** as `syncWorkspace`: stored docs hydrate into `/work/in`, `/work/out` deliverables promote back. Still v1+: *selective* hydration (only `withReferences`-selected entries, vs. the whole session set), an explicit `sandbox_publish` tool (vs. the `/work/out` convention; needs an actorCritic synthetic-tool layer), and version/lineage UI.
+- UI-initiated file uploads into a *running* sandbox (today an upload lands in the DataStash and reaches `/work/in` on the next session boot, not mid-session).
 
 **v2: `backgroundSession` primitive.**
 

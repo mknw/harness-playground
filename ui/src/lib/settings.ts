@@ -52,7 +52,10 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
     globalCap: 16,
     perSessionCap: 4,
     warmPool: { base: 1 },
-    idleEvictMs: 300_000,
+    // Hot-cache window only: a parked VM is reused instantly within this window.
+    // Durable workspace state lives in the document store (hydrated into /work on
+    // first boot, promoted from /work/out on exit), so this need not be long — 1h.
+    idleEvictMs: 3_600_000,
     defaultTimeoutSec: 60,
     defaultMemoryMB: 512,
     defaultEgress: 'mcp-only',

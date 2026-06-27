@@ -55,6 +55,29 @@ The `/work` directory is the agent's workspace — files written via
 Inspecting it is the fastest way to confirm "did the agent actually write
 what it claimed to write?".
 
+### Durable workspace (`syncWorkspace`, [#89](https://github.com/mknw/harness-playground/issues/89))
+
+For agents that opt in (e.g. **Sandbox · Session**), `/work` has a convention:
+
+| Path | Meaning |
+|------|---------|
+| `/work/in`  | Uploads + prior deliverables, restored from the DataStash on first boot. |
+| `/work/out` | Files the agent wants kept — promoted to the DataStash on each turn exit. |
+| `/work/*`   | Scratch, lost when the container recycles. |
+
+```sh
+docker exec sbx-xxxx ls -la /work/in /work/out   # what was restored / will persist
+```
+
+The durable copy lives in Redis, not the container. Inspect it via the MCP
+gateway (keys `stash:doc:<sessionId>:*`, index `stash:docs:<sessionId>`) or the
+DataStash side panel. Binary deliverables (xlsx, pdf, images) are stored
+base64-encoded (`encoding: 'base64'`) and downloadable from the panel; a
+`GET /api/stash/document/:id?sessionId=…&download` streams the decoded bytes.
+A promoted file lists in the DataStash panel alongside uploads (same
+`GET /api/stash/upload?sessionId=` document list) — it is a stored document,
+not a synthetic `tool_result`. See [`docs/DATA_STASH.md`](../DATA_STASH.md).
+
 ## Reap leftovers
 
 The harness calls `--rm` so a stop auto-removes, and on graceful shutdown the
@@ -80,9 +103,16 @@ anything else. Same command is in
 
 After light use you'll typically see **0 or 1 anonymous warm-pool VM** plus
 **one VM per active session id**. The lazy idle sweep destroys parked entries
-~5 min after last use, but only fires on the next sandbox action — see issue
+~1 h after last use (the `idleEvictMs` warm-cache horizon; was 5 min before
+[#89](https://github.com/mknw/harness-playground/issues/89)), but only fires on
+the next sandbox action — see issue
 [#82](https://github.com/mknw/harness-playground/issues/82) for the
 timer-driven follow-up if dormant accumulation becomes an issue.
+
+Losing the VM no longer loses the work: agents that opt into durable workspaces
+(`syncWorkspace: true`, e.g. **Sandbox · Session**) restore prior files into
+`/work/in` on the next boot and promote `/work/out` deliverables to the
+DataStash each turn — see below.
 
 ## Inspecting an agent run after the fact
 

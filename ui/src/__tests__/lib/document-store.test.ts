@@ -390,4 +390,43 @@ describe('document-store (Issue #6)', () => {
       expect(pr.summary).toContain('text/csv')
     })
   })
+
+  describe('base64 encoding (#89)', () => {
+    it('stores binary content with encoding=base64 and size = decoded bytes', async () => {
+      const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0x00]) // 6 raw bytes
+      const b64 = bytes.toString('base64')
+      const doc = await storeDocument(
+        { sessionId: 's1', filename: 'sheet.xlsx', mimeType: 'application/vnd.x', content: b64, encoding: 'base64' },
+        fake.callTool,
+      )
+      expect(doc.encoding).toBe('base64')
+      expect(doc.content).toBe(b64)
+      // size reflects the ORIGINAL bytes, not the larger base64 string.
+      expect(doc.size).toBe(bytes.length)
+      expect(doc.size).toBeLessThan(b64.length)
+    })
+
+    it('round-trips a stored binary doc unchanged via getDocument', async () => {
+      const bytes = Buffer.from([1, 2, 3, 250, 251, 252])
+      const b64 = bytes.toString('base64')
+      const stored = await storeDocument(
+        { sessionId: 's1', filename: 'x.bin', mimeType: 'application/octet-stream', content: b64, encoding: 'base64' },
+        fake.callTool,
+      )
+      const got = await getDocument('s1', stored.id, fake.callTool)
+      expect(got?.encoding).toBe('base64')
+      expect(Buffer.from(got!.content, 'base64').equals(bytes)).toBe(true)
+    })
+
+    it('toPriorResult uses a metadata preview for binary (never slices base64)', () => {
+      const b64 = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64')
+      const pr = toPriorResult({
+        id: 'doc-9', sessionId: 's1', filename: 'chart.png', mimeType: 'image/png',
+        size: 4, uploadedAt: Date.now(), encoding: 'base64', content: b64,
+      })
+      expect(pr.summary).toContain('chart.png')
+      expect(pr.summary).toContain('image/png')
+      expect(pr.summary).not.toContain(b64)
+    })
+  })
 })

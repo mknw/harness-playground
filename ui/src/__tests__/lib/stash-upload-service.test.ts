@@ -14,6 +14,7 @@ vi.mock('../../lib/harness-patterns/assert.server', () => ({
 
 import {
   guessMimeType,
+  isTextMime,
   parseUploadRequest,
 } from '../../lib/stash/upload-service.server'
 
@@ -131,6 +132,46 @@ describe('upload-service (Issue #6)', () => {
     it('throws when no file field is present', async () => {
       const req = multipart([{ name: 'sessionId', value: 's2' }])
       await expect(parseUploadRequest(req)).rejects.toThrow(/file/i)
+    })
+
+    it('base64-encodes a binary file and sets encoding (#89)', async () => {
+      const req = multipart([
+        { name: 'sessionId', value: 's2' },
+        { name: 'file', filename: 'doc.pdf', type: 'application/pdf', content: '%PDF-1.4 fake' },
+      ])
+      const input = await parseUploadRequest(req)
+      expect(input.mimeType).toBe('application/pdf')
+      expect(input.encoding).toBe('base64')
+      expect(Buffer.from(input.content, 'base64').toString('utf8')).toBe('%PDF-1.4 fake')
+    })
+  })
+
+  describe('isTextMime / binary JSON (#89)', () => {
+    it('classifies text vs binary mimetypes', () => {
+      expect(isTextMime('text/csv')).toBe(true)
+      expect(isTextMime('application/json')).toBe(true)
+      expect(isTextMime('application/ld+json')).toBe(true)
+      expect(isTextMime('application/pdf')).toBe(false)
+      expect(isTextMime('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).toBe(false)
+      expect(isTextMime('image/png')).toBe(false)
+    })
+
+    it('passes through encoding=base64 on the JSON path', async () => {
+      const b64 = Buffer.from([1, 2, 3, 255]).toString('base64')
+      const req = new Request('http://x/api/stash/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 's1',
+          filename: 'x.bin',
+          mimeType: 'application/octet-stream',
+          content: b64,
+          encoding: 'base64',
+        }),
+      })
+      const input = await parseUploadRequest(req)
+      expect(input.encoding).toBe('base64')
+      expect(input.content).toBe(b64)
     })
   })
 })

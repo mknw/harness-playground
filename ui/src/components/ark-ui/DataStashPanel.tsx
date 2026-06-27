@@ -22,8 +22,9 @@ import type { StashDocumentMeta } from '~/lib/document-store.server'
 // ============================================================================
 
 export type StashAction = 'hide' | 'unhide' | 'archive' | 'unarchive'
-/** Document actions add `delete` (uploads are removable; tool results are not). */
-export type DocAction = StashAction | 'delete'
+/** Document actions add `delete` (removable) and `download` (fetch the raw
+ *  file — base64-decoded for binary via the `?download` route). */
+export type DocAction = StashAction | 'delete' | 'download'
 
 export interface DataStashPanelProps {
   events: ContextEvent[]
@@ -414,7 +415,7 @@ const DocChip = (props: {
             { label: 'Hide', action: 'hide' },
             { label: 'Archive', action: 'archive' },
           ]
-    return [...base, { label: 'Delete', action: 'delete' }]
+    return [{ label: 'Download', action: 'download' as DocAction }, ...base, { label: 'Delete', action: 'delete' }]
   }
 
   return (
@@ -636,6 +637,18 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
 
   const handleDocAction = async (id: string, action: DocAction) => {
     if (!props.sessionId) return
+    if (action === 'download') {
+      // Stream the raw file via the ?download route (binary is base64-decoded
+      // server-side). Anchor-click so the Content-Disposition filename is used.
+      const a = document.createElement('a')
+      a.href = `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(props.sessionId)}&download`
+      a.download = ''
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      return
+    }
     if (action === 'delete') {
       await fetch(
         `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(props.sessionId)}`,

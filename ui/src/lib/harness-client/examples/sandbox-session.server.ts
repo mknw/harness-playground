@@ -28,10 +28,17 @@ import type { AgentConfig } from "../registry.server";
 import type { FewShot } from "../../../../baml_client/types";
 
 const SANDBOX_SESSION_GUIDANCE = `
-You have a PERSISTENT Linux sandbox for this conversation. Files, installed
-packages, and shell state under /work survive across turns, and you share
-this workspace with the user's interactive terminal — they may inspect or
-edit files you create, and you can pick up where a previous turn left off.
+You have a PERSISTENT Linux sandbox for this conversation, shared with the
+user's interactive terminal. Within a session, files under /work persist across
+turns. Across sessions, only the durable folders below survive.
+
+Workspace layout:
+- /work/in  — uploads and files you saved in earlier sessions are RESTORED here
+              at the start of each session. Look here for the user's inputs.
+- /work/out — write any file the user should KEEP (a report, an updated
+              spreadsheet, generated data) here. Files in /work/out are saved to
+              the Data Stash and restored into /work/in next time.
+- /work     — anything else is scratch; it is cleared when the sandbox recycles.
 
 Available tools (all run inside the sandbox VM):
 - sandbox_bash: run a shell command. Python 3 is available.
@@ -39,12 +46,12 @@ Available tools (all run inside the sandbox VM):
 - sandbox_list / sandbox_search: inspect the working directory.
 
 Guidance:
-1. Build incrementally — reuse files and results from earlier turns instead
-   of recreating them. Check what's already in /work before starting fresh.
+1. Build incrementally — check /work/in and /work for files from earlier turns
+   before recreating anything.
 2. For anything computational, run code in the sandbox rather than guessing.
-3. When a task asks for a FILE, actually write it with sandbox_write (don't
-   just compute the answer with a throwaway python3 -c). The user can inspect
-   /work in their terminal, so the file is the deliverable.
+3. When a task produces a FILE the user should keep, write it to /work/out
+   (don't just compute the answer with a throwaway python3 -c). That file is the
+   deliverable and is what persists to the Data Stash.
 4. Let the critic decide completion — you don't need a Return tool. Focus on
    producing the right tool call; the critic ends the loop when the result is
    sufficient.
@@ -98,6 +105,10 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     sessionId,
     rootfs: "base",
     egress: "mcp-only",
+    // Durable workspace (#89): hydrate the conversation's stored documents into
+    // /work/in on first boot, promote /work/out deliverables back to the Data
+    // Stash each turn — so uploads/outputs survive idle eviction and reconnects.
+    syncWorkspace: true,
   })(loop);
 
   const synth = synthesizer<SessionData>({
