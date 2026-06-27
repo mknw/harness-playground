@@ -37,6 +37,18 @@ const MIXED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
   describe: 'DescribeFallback',
 }
 
+/** The BAML-declared (default) client per role — the Anthropic-only chain each
+ *  function declares in `baml_src/`. Used to resolve the *actual* model behind
+ *  a call when no mixed-chain override is active. Keep in sync with the
+ *  `client X` lines in baml_src/*.baml. */
+const DECLARED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
+  controller: 'ControllerAnthropic',
+  critic: 'CriticAnthropic',
+  synth: 'SynthesizerAnthropic',
+  router: 'RouterAnthropic',
+  describe: 'DescribeAnthropic',
+}
+
 /**
  * Returns `{ client: 'XFallback' }` when `USE_MIXED_CHAINS=1` is set,
  * otherwise `undefined` — letting the BAML function fall through to its
@@ -52,4 +64,16 @@ const MIXED_CLIENT_BY_ROLE: Record<BamlRole, string> = {
 export function clientOverrideFor(role: BamlRole): { client: string } | undefined {
   if (process.env.USE_MIXED_CHAINS !== '1') return undefined
   return { client: MIXED_CLIENT_BY_ROLE[role] }
+}
+
+/**
+ * The client BAML will actually use for `role` right now: the mixed-chain
+ * override when `USE_MIXED_CHAINS=1`, else the function's declared Anthropic
+ * client. Patterns use this to look up the real model's context window for
+ * prompt trimming (`getContextWindow(resolveClientForRole(role))`) instead of
+ * hardcoding the `*Fallback` label — which, when missing from
+ * `MODEL_CONTEXT_WINDOWS`, silently defaulted to 16K and over-trimmed prompts.
+ */
+export function resolveClientForRole(role: BamlRole): string {
+  return clientOverrideFor(role)?.client ?? DECLARED_CLIENT_BY_ROLE[role]
 }

@@ -88,6 +88,25 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   CerebrasQwen3_235B: 131_072,     // qwen-3-235b-a22b-instruct-2507
   // Local (local-client.baml, not used in chains)
   LocalGLM: 16_384,
+  // Strategy-level chain clients — the names patterns actually pass to
+  // getContextWindow() (via resolveClientForRole). Without these the lookup
+  // fell through to the 16_384 default and over-trimmed prompts, dropping real
+  // tool results before the LLM saw them (see .harness-logs/neo4j-no-results.json).
+  // Anthropic-only chains (dev default) → Sonnet 4.6 / Haiku 4.5, 200K each.
+  RouterAnthropic: 200_000,
+  ControllerAnthropic: 200_000,
+  CriticAnthropic: 200_000,
+  SynthesizerAnthropic: 200_000,
+  DescribeAnthropic: 200_000,
+  // Mixed-provider fallback chains (USE_MIXED_CHAINS=1). Conservative floor =
+  // the smallest window any client in the chain can fall back to (32_768), so
+  // trimming never overflows a downstream model regardless of which one BAML
+  // lands on.
+  RouterFallback: 32_768,
+  ControllerFallback: 32_768,
+  CriticFallback: 32_768,
+  SynthesizerFallback: 32_768,
+  DescribeFallback: 32_768,
 }
 
 export const SETTINGS_STORAGE_KEY = 'kg_agent_settings'

@@ -43,7 +43,7 @@ import { getErrorHint } from '../error-hints'
 import { stripThinkBlocks } from '../content-transforms'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { extractLLMCallData, extractFailureLLMCallData } from '../baml-adapters.server'
-import { clientOverrideFor } from '../clients.server'
+import { clientOverrideFor, resolveClientForRole } from '../clients.server'
 
 assertServerOnImport()
 
@@ -118,8 +118,9 @@ export function compactIntent<T extends CompactIntentData>(
         return scope
       }
 
-      // Trim oldest history if it would overflow the describe-tier model.
-      const contextWindow = getContextWindow('DescribeFallback')
+      // Trim oldest history if it would overflow the describe-tier model
+      // (the client this call will actually use, not the hardcoded Fallback).
+      const contextWindow = getContextWindow(resolveClientForRole('describe'))
       const history = trimToFit(rawHistory, h => JSON.stringify(h), 300, contextWindow)
 
       const { b } = await import('../../../../baml_client')

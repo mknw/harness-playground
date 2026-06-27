@@ -27,6 +27,7 @@ import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { getActiveSandbox } from '../../sandbox/scope.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
+import { resolveClientForRole } from '../clients.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
 import { dedupByRefId, annotateExpansions, LLMCallError } from '../baml-adapters.server'
 import type { LLMCallData } from '../types'
@@ -195,7 +196,8 @@ export function simpleLoop<T extends SimpleLoopData>(
     try {
       for (let turn = 0; turn < maxTurns; turn++) {
         // Trim oldest turns if they would overflow the controller's context window
-        const contextWindow = getContextWindow('ControllerFallback')
+        // (the client this call will actually use, not the hardcoded Fallback).
+        const contextWindow = getContextWindow(resolveClientForRole('controller'))
         // ~500 chars base prompt overhead (template, schema, intent, etc.)
         const trimmedTurns = trimToFit(turns, t => JSON.stringify(t), 500, contextWindow)
         const previousResults = JSON.stringify(trimmedTurns)

@@ -370,3 +370,92 @@ describe('synthesizer execution', () => {
     expect(result.data.synthesizedResponse).toContain('Iterations')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Regression: large tool results must survive into the synthesizer's turns.
+//
+// .harness-logs/neo4j-no-results.json — two read_neo4j_cypher turns returned
+// ~58KB/~65KB of rows, then the loop's `Return`. The synth trimmed against
+// `getContextWindow('SynthesizerFallback')`, which wasn't in
+// MODEL_CONTEXT_WINDOWS → 16K default → budget ~12K tokens, so trimToFit
+// dropped BOTH data turns and kept only the `Return` (result: null). The synth
+// then truthfully reported "returned null". Fix: trim against the client the
+// call actually uses (resolveClientForRole('synth') → SynthesizerAnthropic =
+// 200K by default), so the data reaches the synth. b.Synthesize is mocked — no
+// real LLM call / tokens.
+// ---------------------------------------------------------------------------
+describe('synthesizer — context-window trimming regression', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('keeps large multi-turn tool results in the turns passed to Synthesize', async () => {
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+    const { b } = await import('../../../../../baml_client')
+
+    // Two large cypher results (>49KB each → would each blow the old 12K-token
+    // budget) plus the loop's Return, all under the loop's patternId.
+    const big0 = { rows: [{ name: 'NODE_REDIS_DEG17', degree: 17, blob: 'R'.repeat(60_000) }] }
+    const big1 = { rows: [{ name: 'NODE_SCHEMA_DEG12', degree: 12, blob: 'S'.repeat(60_000) }] }
+    const ts = Date.now()
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: ts,
+      events: [
+        { type: 'user_message' as const, ts, patternId: 'harness', data: { content: 'Sort nodes by centrality' } },
+        { type: 'pattern_enter' as const, ts: ts + 1, patternId: 'neo4j-query', data: { pattern: 'simpleLoop' } },
+        { type: 'controller_action' as const, ts: ts + 2, patternId: 'neo4j-query', data: { action: { tool_name: 'read_neo4j_cypher', tool_args: '{}', reasoning: '', status: 'success', is_final: false } } },
+        { type: 'tool_result' as const, ts: ts + 3, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher', result: big0, success: true } },
+        { type: 'controller_action' as const, ts: ts + 4, patternId: 'neo4j-query', data: { action: { tool_name: 'read_neo4j_cypher', tool_args: '{}', reasoning: '', status: 'success', is_final: false } } },
+        { type: 'tool_result' as const, ts: ts + 5, patternId: 'neo4j-query', data: { tool: 'read_neo4j_cypher', result: big1, success: true } },
+        { type: 'controller_action' as const, ts: ts + 6, patternId: 'neo4j-query', data: { action: { tool_name: 'Return', tool_args: '## answer', reasoning: '', status: 'success', is_final: false } } },
+        { type: 'pattern_exit' as const, ts: ts + 7, patternId: 'neo4j-query', data: { status: 'completed' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'Sort nodes by centrality',
+    }
+
+    // Default synthesis (no custom fn) → defaultSynthesize → b.Synthesize + trimToFit.
+    const pattern = synthesizer({ mode: 'thread', patternId: 'response-synth' })
+    const scope = createScope('test', {})
+    const view = createEventView(mockContext)
+
+    await pattern.fn(scope, view)
+
+    const synthMock = vi.mocked(b.Synthesize)
+    expect(synthMock).toHaveBeenCalledTimes(1)
+    // Synthesize(userMessage, intent, turns, hasError, errorMessage) → turns is arg[2].
+    const turns = synthMock.mock.calls[0][2] as unknown[]
+    const turnsJson = JSON.stringify(turns)
+    // Both large results survive into the synth's view (pre-fix: only the
+    // Return/null turn remained and neither marker was present).
+    expect(turnsJson).toContain('NODE_REDIS_DEG17')
+    expect(turnsJson).toContain('NODE_SCHEMA_DEG12')
+  })
+
+  it('resolves the trim window from the real client, not the missing Fallback key', async () => {
+    const { getContextWindow } = await import('../../../../lib/harness-patterns/token-budget.server')
+    const { resolveClientForRole } = await import('../../../../lib/harness-patterns/clients.server')
+
+    // The keys that were missing (→ 16K default → over-trim).
+    expect(getContextWindow('SynthesizerAnthropic')).toBe(200_000)
+    expect(getContextWindow('SynthesizerFallback')).toBe(32_768)
+
+    // Default (Anthropic-only) → declared client; not the Fallback label.
+    expect(resolveClientForRole('synth')).toBe('SynthesizerAnthropic')
+    expect(resolveClientForRole('controller')).toBe('ControllerAnthropic')
+
+    // Under mixed chains → the Fallback client.
+    const prev = process.env.USE_MIXED_CHAINS
+    process.env.USE_MIXED_CHAINS = '1'
+    try {
+      expect(resolveClientForRole('synth')).toBe('SynthesizerFallback')
+    } finally {
+      if (prev === undefined) delete process.env.USE_MIXED_CHAINS
+      else process.env.USE_MIXED_CHAINS = prev
+    }
+  })
+})

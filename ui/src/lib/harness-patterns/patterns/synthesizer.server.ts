@@ -24,7 +24,7 @@ import { trackEvent, resolveConfig } from '../context.server'
 import { Collector } from '@boundaryml/baml'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { extractFailureLLMCallData } from '../baml-adapters.server'
-import { clientOverrideFor } from '../clients.server'
+import { clientOverrideFor, resolveClientForRole } from '../clients.server'
 
 assertServerOnImport()
 
@@ -77,7 +77,11 @@ async function defaultSynthesize(input: SynthesizerInput, collector?: Collector)
   }
 
   // Trim oldest turns if they would overflow the synthesizer's context window
-  const contextWindow = getContextWindow('SynthesizerFallback')
+  // Trim against the window of the client this call will ACTUALLY use
+  // (Anthropic 200K by default, the mixed-chain floor under USE_MIXED_CHAINS).
+  // Hardcoding 'SynthesizerFallback' here trimmed against a 16K default and
+  // dropped real tool results (see .harness-logs/neo4j-no-results.json).
+  const contextWindow = getContextWindow(resolveClientForRole('synth'))
   const trimmedTurns = trimToFit(turns, t => JSON.stringify(t), 500, contextWindow)
 
   const variables = {
