@@ -18,6 +18,7 @@ import { deserializeContext, serializeContext } from "../harness-patterns";
 import type { UnifiedContext } from "../harness-patterns";
 import { listTools } from "../harness-patterns/mcp-client.server";
 import { loadSession, saveSession, type SessionData } from "../harness-client/session.server";
+import { agentUsesCodeMode } from "../harness-client/registry.server";
 import { getAuthenticatedUser } from "../auth/server";
 import { CODE_MODE_DEFAULTS, type CodeModeToolsState } from "./constants";
 import { getPresetTools } from "./server-catalog.server";
@@ -87,7 +88,17 @@ export async function getCodeModeAllowedTools(
     persisted && persisted.length > 0
       ? persisted
       : Array.from(new Set([...defaults, ...presetTools]));
-  return { allowed, available, defaults };
+
+  // Does this conversation's agent actually consume the allowlist? Auto-detected
+  // from its pattern graph. When the session isn't persisted yet (pre-first-
+  // message, no agentId), stay optimistic (true) — the panel can't save before
+  // the first turn anyway, and greying the bundled code-mode agent would be the
+  // more harmful error.
+  const usesCodeMode = loaded
+    ? await agentUsesCodeMode(loaded.agentId, sessionId)
+    : true;
+
+  return { allowed, available, defaults, usesCodeMode };
 }
 
 /**

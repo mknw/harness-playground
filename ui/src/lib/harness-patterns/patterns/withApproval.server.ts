@@ -138,7 +138,8 @@ export function withApproval<T extends WithApprovalData>(
     fn,
     config: resolved,
     // Approval gate doesn't add work — delegate to the wrapped pattern.
-    estimateTurns: (s) => wrappedPattern.estimateTurns?.(s) ?? 1
+    estimateTurns: (s) => wrappedPattern.estimateTurns?.(s) ?? 1,
+    children: [wrappedPattern]
   }
 }
 

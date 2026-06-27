@@ -272,6 +272,7 @@ export function routes<T extends RouterData & Record<string, unknown>>(
     // drives perceived progress duration. UI can refine downward once the
     // dispatched branch's `pattern_enter` arrives.
     estimateTurns: (s) =>
-      Math.max(...Object.values(patternMap).map((p) => p.estimateTurns?.(s) ?? 1))
+      Math.max(...Object.values(patternMap).map((p) => p.estimateTurns?.(s) ?? 1)),
+    children: Object.values(patternMap)
   }
 }

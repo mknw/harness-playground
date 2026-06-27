@@ -28,6 +28,11 @@ export interface CodeModeToolsState {
   /** Meta-tools the actor always needs (`mcp-find`, `mcp-add`, `code-mode`,
    *  `mcp-exec`). UI should render them pre-checked and locked-on. */
   defaults: string[];
+  /** Whether this conversation's agent actually composes a code-mode pattern
+   *  (the only runtime consumer of the allowlist). When false, the Tools panel
+   *  greys out — the selection would have no effect. Auto-detected from the
+   *  agent's pattern graph; see `registry.server.ts` `agentUsesCodeMode`. */
+  usesCodeMode: boolean;
 }
 
 /** Default "starter set" highlighted with a `Core` badge in the UI. */

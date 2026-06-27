@@ -231,6 +231,24 @@ export const ToolsPanel = (props: ToolsPanelProps) => {
             load shows a panel skeleton instead of blanking the whole app via
             the empty-fallback root <Suspense> in app.tsx. */}
         <Suspense fallback={<div p="4" text="sm dark-text-tertiary">Loading tools…</div>}>
+        {/* Gate the whole code-mode-specific body on whether the conversation's
+            agent actually composes a code-mode pattern (the sole consumer of
+            this allowlist). Reading state() here stays inside the local
+            <Suspense> so a pending load can't bubble to the app-root boundary
+            and flash the app. `usesCodeMode !== false` keeps the body for the
+            true case AND the error case (state() === null → undefined). */}
+        <Show
+          when={state()?.usesCodeMode !== false}
+          fallback={
+            <div p="6" text="center" flex="~ col 1" justify="center" items="center">
+              <div text="sm dark-text-secondary">Tool selection applies to code-mode agents.</div>
+              <div text="xs dark-text-tertiary" m="t-1">
+                This conversation's agent doesn't run a code-mode pattern, so the
+                allowlist has no effect here.
+              </div>
+            </div>
+          }
+        >
         {/* Controls header — always in sight */}
         <div p="4" border="b dark-border-primary" flex="~ col" gap="3">
           {/* "Default code mode" preset switch */}
@@ -400,7 +418,6 @@ export const ToolsPanel = (props: ToolsPanelProps) => {
             </div>
           </Show>
         </div>
-        </Suspense>
 
         {/* Coded Tools Repository Section */}
         <div p="4">
@@ -441,6 +458,8 @@ export const ToolsPanel = (props: ToolsPanelProps) => {
             </div>
           </Show>
         </div>
+        </Show>
+        </Suspense>
       </Show>
     </div>
   );
