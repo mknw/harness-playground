@@ -53,6 +53,11 @@ async function requireUser(): Promise<{ id: string }> {
  */
 export async function getCodeModeAllowedTools(
   sessionId: string,
+  /** The conversation's currently-selected agent (from the client). Drives the
+   *  `usesCodeMode` gate so it reflects the live selection immediately — before
+   *  the first message persists the session — rather than lagging a turn behind.
+   *  Falls back to the persisted agent, then optimistic. */
+  selectedAgentId?: string,
 ): Promise<CodeModeToolsState> {
   const user = await requireUser();
 
@@ -90,12 +95,12 @@ export async function getCodeModeAllowedTools(
       : Array.from(new Set([...defaults, ...presetTools]));
 
   // Does this conversation's agent actually consume the allowlist? Auto-detected
-  // from its pattern graph. When the session isn't persisted yet (pre-first-
-  // message, no agentId), stay optimistic (true) — the panel can't save before
-  // the first turn anyway, and greying the bundled code-mode agent would be the
-  // more harmful error.
-  const usesCodeMode = loaded
-    ? await agentUsesCodeMode(loaded.agentId, sessionId)
+  // from its pattern graph. Prefer the client's live selection so a fresh chat
+  // greys immediately on agent switch; fall back to the persisted agent, then
+  // optimistic (true) when neither is known.
+  const agentId = selectedAgentId ?? loaded?.agentId;
+  const usesCodeMode = agentId
+    ? await agentUsesCodeMode(agentId, sessionId)
     : true;
 
   return { allowed, available, defaults, usesCodeMode };

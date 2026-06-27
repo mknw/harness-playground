@@ -6,7 +6,7 @@
  */
 
 import { Tabs } from '@ark-ui/solid/tabs';
-import { Show, createSignal, createMemo } from 'solid-js';
+import { Show, createSignal, createMemo, Suspense } from 'solid-js';
 import { GraphVisualization } from './GraphVisualization';
 import { ObservabilityPanel } from './ObservabilityPanel';
 import { DataStashPanel, type StashAction } from './DataStashPanel';
@@ -61,6 +61,9 @@ export interface SupportPanelProps {
   onCypherWrite?: (cypher: string, params?: Record<string, unknown>) => Promise<void>;
   /** Session ID for stash API calls */
   sessionId?: string;
+  /** The conversation's currently-selected agent — forwarded to the Tools
+   *  panel so its code-mode gate tracks the live selection. */
+  agentId?: string;
   /** Callback for data stash actions (hide/unhide/archive/unarchive) */
   onStashAction?: (eventId: string, action: StashAction) => Promise<void>;
 }
@@ -290,18 +293,25 @@ export const SupportPanel = (props: SupportPanelProps) => {
             />
           </Tabs.Content>
 
-          {/* Data Stash Tab */}
+          {/* Data Stash Tab. Local Suspense so the panel's resource load on
+              (lazy) mount can't bubble to the empty-fallback root <Suspense>
+              in app.tsx and flash the whole app white. */}
           <Tabs.Content value="data" h="full">
-            <DataStashPanel
-              events={props.contextEvents ?? []}
-              sessionId={props.sessionId ?? ''}
-              onStashAction={props.onStashAction ?? (async () => {})}
-            />
+            <Suspense fallback={<div p="4" text="sm dark-text-tertiary">Loading data…</div>}>
+              <DataStashPanel
+                events={props.contextEvents ?? []}
+                sessionId={props.sessionId ?? ''}
+                onStashAction={props.onStashAction ?? (async () => {})}
+              />
+            </Suspense>
           </Tabs.Content>
 
-          {/* Tools Tab */}
+          {/* Tools Tab. Same local-Suspense guard (belt-and-braces with the
+              panel's own internal boundary) against the tab-mount white flash. */}
           <Tabs.Content value="tools" h="full">
-            <ToolsPanel sessionId={props.sessionId} />
+            <Suspense fallback={<div p="4" text="sm dark-text-tertiary">Loading tools…</div>}>
+              <ToolsPanel sessionId={props.sessionId} agentId={props.agentId} />
+            </Suspense>
           </Tabs.Content>
 
           {/* Terminal Tab — read-only feed + interactive shell (#79) */}
