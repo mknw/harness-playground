@@ -306,6 +306,7 @@ export function withReferences<T>(
     name: `withReferences(${wrappedPattern.name})`,
     fn,
     config: resolved,
-    estimateTurns: (s) => wrappedPattern.estimateTurns?.(s) ?? 1
+    estimateTurns: (s) => wrappedPattern.estimateTurns?.(s) ?? 1,
+    children: [wrappedPattern]
   }
 }

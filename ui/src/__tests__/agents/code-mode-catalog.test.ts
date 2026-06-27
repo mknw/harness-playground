@@ -111,4 +111,15 @@ describe('code-mode agent — up-front ENABLED SERVERS catalog', () => {
     expect(context).toContain('neo4j-cypher')
     expect(context).toContain('read_neo4j_cypher')
   })
+
+  it('usesCodeMode detects the real (nested) code-mode pattern graph', async () => {
+    // Exercises the real combinators (router → routes → chain) populating
+    // `children` + the actorCritic loop's `dynamicToolPattern` marker. This is
+    // what `agentUsesCodeMode` (registry) runs to keep the Tools panel active.
+    const { codeModeAgent } = await import('../../lib/harness-client/examples/code-mode.server')
+    const { usesCodeMode } = await import('../../lib/harness-patterns/pattern-capabilities')
+
+    const patterns = await codeModeAgent.createPatterns('test-session')
+    expect(usesCodeMode(patterns)).toBe(true)
+  })
 })

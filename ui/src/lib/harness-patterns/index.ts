@@ -105,6 +105,12 @@ export { router, routes, type Routes, type RoutePatterns, type RouterData } from
 export { DIRECT_RESPONSE_ROUTE } from './types'
 
 // ============================================================================
+// Pattern capabilities (static introspection)
+// ============================================================================
+
+export { usesCodeMode, isCodeModeLoopConfig } from './pattern-capabilities'
+
+// ============================================================================
 // Harness
 // ============================================================================
 

@@ -201,7 +201,8 @@ export function chain<T extends Record<string, unknown>>(
     },
     config: resolved,
     estimateTurns: (s) =>
-      patterns.reduce((sum, p) => sum + (p.estimateTurns?.(s) ?? 1), 0)
+      patterns.reduce((sum, p) => sum + (p.estimateTurns?.(s) ?? 1), 0),
+    children: patterns
   }
 }
 

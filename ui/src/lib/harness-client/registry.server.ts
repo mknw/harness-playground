@@ -10,6 +10,7 @@
 "use server";
 
 import type { ConfiguredPattern } from "../harness-patterns";
+import { usesCodeMode } from "../harness-patterns";
 import type { SessionData } from "./session.server";
 
 // ============================================================================
@@ -75,6 +76,48 @@ export function getAgentMetadata(): Array<{
     icon,
     servers,
   }));
+}
+
+// ============================================================================
+// Capability introspection
+// ============================================================================
+
+/** Memoized by agentId — a harness's pattern *structure* is
+ *  session-independent (sessionId only parameterizes the closures), so the
+ *  answer is stable for the process lifetime. Cleared implicitly on restart. */
+const codeModeCapabilityCache = new Map<string, boolean>();
+
+/**
+ * Whether an agent composes a **code-mode pattern** anywhere in its (possibly
+ * nested) pattern graph — i.e. whether the per-conversation
+ * `codeModeAllowedTools` allowlist has any runtime consumer for this agent.
+ * The Tools panel uses this to stay active vs. grey out (config.server.ts).
+ *
+ * Detection is structural (see `usesCodeMode` / `isCodeModeLoopConfig`), so a
+ * future multi-route agent with a single code-mode route is covered without a
+ * per-agent flag. Builds the patterns once via `createPatterns` and memoizes
+ * the result. On a `createPatterns` failure (e.g. transient gateway outage
+ * during pattern construction) we fall back to `id === 'code-mode'` and do NOT
+ * cache, so the next call re-attempts a real detection.
+ */
+export async function agentUsesCodeMode(
+  agentId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const cached = codeModeCapabilityCache.get(agentId);
+  if (cached !== undefined) return cached;
+
+  const agent = getAgent(agentId);
+  if (!agent) return false;
+
+  try {
+    const patterns = await agent.createPatterns(sessionId);
+    const result = usesCodeMode(patterns);
+    codeModeCapabilityCache.set(agentId, result);
+    return result;
+  } catch {
+    return agentId === "code-mode";
+  }
 }
 
 // ============================================================================

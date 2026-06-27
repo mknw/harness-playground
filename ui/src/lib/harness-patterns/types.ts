@@ -361,6 +361,13 @@ export interface ConfiguredPattern<T> {
    *  Wrapper patterns delegate to their child(ren). Returning `undefined` is
    *  equivalent to a contribution of 1. */
   estimateTurns?: (settings: TurnEstimateSettings) => number
+  /** Wrapped sub-patterns, for combinators that compose others
+   *  (`chain`, `routes`, `parallel`, `guardrail`, `hook`, `withApproval`,
+   *  `withReferences`). Leaf patterns omit it. Purely for static
+   *  introspection of the pattern graph — execution runs through `fn`, never
+   *  this — so it's safe and additive. See `pattern-capabilities.ts`
+   *  (`usesCodeMode`) for the canonical walk. */
+  children?: ConfiguredPattern<T>[]
 }
 
 // ============================================================================

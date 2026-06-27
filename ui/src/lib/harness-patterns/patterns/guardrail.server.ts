@@ -193,7 +193,8 @@ export function guardrail<T extends Record<string, unknown>>(
       }
     },
     config: resolved,
-    estimateTurns: (s) => pattern.estimateTurns?.(s) ?? 1
+    estimateTurns: (s) => pattern.estimateTurns?.(s) ?? 1,
+    children: [pattern]
   }
 }
 
