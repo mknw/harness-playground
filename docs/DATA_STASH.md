@@ -18,7 +18,8 @@ query ─────────────────────── embe
 | `document-store.server.ts` (#6) | RedisJSON storage: CRUD, TTL, per-session index, hide/archive flags, `toPriorResult` adapter |
 | `chunking.server.ts` (#9) | Pure text chunking — `fixed` / `sentence` / `paragraph` + MIME-aware `chunkDocument` |
 | `embeddings.server.ts` (#8) | Provider-pluggable embedding with a one-model-per-corpus guard |
-| `document-ingest.server.ts` | Orchestrator: chunk → embed → Redis HNSW index, and `searchDocuments` (KNN) |
+| `vector-store.server.ts` | Shared RediSearch wrapper: `createVectorStore` → `ensureIndex` / `upsert` / `search`; owns the index/key/payload plumbing + naming (`spaceTag`) |
+| `document-ingest.server.ts` | Orchestrator: chunk → embed → vector store, and `searchDocuments` (KNN) |
 | `stash/upload-service.server.ts`, `stash/http.server.ts` | Upload request parsing (multipart + JSON), auth/response helpers |
 
 ## API routes (`ui/src/routes/api/stash/`)
@@ -64,6 +65,14 @@ Start the local embedder (separate from `pnpm dev:llama`, which serves a *chat* 
 ```bash
 llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --ctx-size 8192
 ```
+
+## Shared vector store
+
+`vector-store.server.ts` is the single home for the embed-target Redis plumbing —
+`createVectorStore({ indexName, prefix, dim })` → `ensureIndex()` / `upsert(id, vector, payload, ttl)` / `search(queryVector, k)`. It owns index creation (tolerating "already exists"), the 2-writes-per-record format (vector + base64 `meta` payload), KNN result parsing, and the `spaceTag(space)` naming that keeps one index to one model. Both consumers use it:
+
+- **`document-ingest.server.ts`** — document chunks (index/prefix per `(session, space)`).
+- **Semantic Cache agent** (`harness-client/examples/semantic-cache.server.ts`) — caches query→result vectors in a global per-model index (`qcache_idx_{spaceTag}`). It embeds the query on read and write: L1 is an exact-hash `json_get`; L2 is a distance-thresholded KNN over the query embeddings (`SEMANTIC_HIT_MAX_DISTANCE`), best-effort so it degrades to exact-match + retrieval when the embedder/RediSearch is unavailable.
 
 ## Requirements & gotchas
 

@@ -4,37 +4,31 @@
  * The capstone of the store → chunk → embed pipeline. Takes a stored
  * {@link StashDocument} and makes it *searchable*:
  *
- *   chunkDocument(content)  →  embed(chunks)  →  Redis vector hashes + HNSW index
+ *   chunkDocument(content)  →  embed(chunks)  →  vector store (RediSearch HNSW)
  *
  * and answers queries:
  *
- *   embedOne(query)  →  vector_search_hash  →  top-k chunks (with provenance)
+ *   embedOne(query)  →  vector store KNN  →  top-k chunks (with provenance)
+ *
+ * The Redis vector plumbing (index, upsert, KNN, payload encoding) lives in the
+ * shared `vector-store.server.ts` — this module owns the document-specific
+ * policy: chunking, embedding, and the one-model-per-corpus guard.
  *
  * ── One embedding space per session corpus ────────────────────────────────
- * Vectors are only comparable within one model (see `embeddings.server.ts`).
- * This module makes that structural, not advisory:
- *   - The Redis key prefix AND index name both encode the embedding space
- *     (`provider_model_dim`), so a hash embedded with model A can never land in
- *     model B's index — different prefix, different index, different `dim`.
- *   - The session's space is recorded at `stash:space:{sessionId}`. Re-ingesting
- *     with a *different* model throws (unless `allowSpaceChange`), and queries
- *     are always embedded with the recorded model — so a search can never
- *     compare across spaces.
+ * Vectors are only comparable within one model. The vector store's index name
+ * AND key prefix both encode the embedding space (`provider_model_dim`), so a
+ * chunk embedded with model A can never land in model B's index. The session's
+ * space is recorded at `stash:space:{sessionId}`; re-ingesting with a different
+ * model throws (unless `allowSpaceChange`), and queries are always embedded with
+ * the recorded model — so a search can never compare across spaces.
  *
- * Redis is reached via the injectable MCP `callTool` (defaults to the real
- * client) and embedding via an injectable embed fn, so the whole orchestrator
- * is unit-testable without a live gateway or model server — mirroring
- * `document-store.server.ts`.
+ * Redis + embedding are injectable so the orchestrator is unit-testable without
+ * a live gateway or model server.
  */
 
 import { assertServerOnImport } from './harness-patterns/assert.server'
 import { callTool as defaultCallTool } from './harness-patterns/mcp-client.server'
-import {
-  DEFAULT_TTL_SECONDS,
-  redisWriteError,
-  type CallTool,
-  type StashDocument,
-} from './document-store.server'
+import { DEFAULT_TTL_SECONDS, type CallTool, type StashDocument } from './document-store.server'
 import { chunkDocument, type Chunk, type ChunkConfig } from './chunking.server'
 import {
   embed as defaultEmbed,
@@ -45,6 +39,7 @@ import {
   type EmbeddingSpace,
   type SingleEmbeddingResult,
 } from './embeddings.server'
+import { createVectorStore, sanitize, spaceTag } from './vector-store.server'
 
 assertServerOnImport()
 
@@ -53,27 +48,20 @@ assertServerOnImport()
 // ============================================================================
 
 export interface IngestOptions {
-  /** Chunking config override (strategy / maxChars / overlap). */
   chunk?: Partial<ChunkConfig>
-  /** Embedding provider/model override. */
   embedding?: EmbeddingConfig
-  /** TTL for the chunk hashes; defaults to the document TTL window. */
   ttlSeconds?: number
-  /** Allow re-ingesting a session under a different embedding space (splits
-   *  the corpus — off by default to preserve comparability). */
+  /** Allow re-ingesting a session under a different embedding space (splits the
+   *  corpus — off by default to preserve comparability). */
   allowSpaceChange?: boolean
-  /** Injected Redis MCP caller (tests). */
   callTool?: CallTool
-  /** Injected embed fn (tests). */
   embedFn?: (texts: string[], config?: EmbeddingConfig) => Promise<EmbeddingResult>
 }
 
 export interface IngestResult {
   docId: string
   sessionId: string
-  /** Number of chunks embedded + indexed. */
   chunks: number
-  /** The embedding space this corpus is bound to. */
   space: EmbeddingSpace
   indexName: string
   prefix: string
@@ -99,19 +87,10 @@ export interface SearchOptions {
 }
 
 // ============================================================================
-// Key / index naming — the space is baked into both
+// Naming (the space is baked into both the index name and the key prefix)
 // ============================================================================
 
 const SPACE_KEY_PREFIX = 'stash:space'
-
-function sanitize(s: string): string {
-  return s.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')
-}
-
-/** `provider_model_dim` — equal tags ⇒ comparable vectors. */
-function spaceTag(space: EmbeddingSpace): string {
-  return `${space.provider}_${sanitize(space.model)}_${space.dimensions}`
-}
 
 export function indexNameFor(sessionId: string, space: EmbeddingSpace): string {
   return `stash_idx_${sanitize(sessionId)}_${spaceTag(space)}`
@@ -121,41 +100,8 @@ export function prefixFor(sessionId: string, space: EmbeddingSpace): string {
   return `stashvec:${sessionId}:${spaceTag(space)}:`
 }
 
-function chunkKey(prefix: string, docId: string, chunkIndex: number): string {
-  return `${prefix}${docId}:${chunkIndex}`
-}
-
 function spaceKey(sessionId: string): string {
   return `${SPACE_KEY_PREFIX}:${sessionId}`
-}
-
-/**
- * Encode a chunk's content+provenance as an opaque, non-JSON string. The MCP
- * gateway auto-parses JSON-looking string arguments into objects (so a JSON
- * `hset` value is rejected as a dict, and a chunk that is itself valid JSON
- * would be mangled). `b64:`-prefixed base64 sidesteps both.
- */
-function encodeMeta(obj: Record<string, unknown>): string {
-  return 'b64:' + Buffer.from(JSON.stringify(obj), 'utf8').toString('base64')
-}
-
-/** Inverse of {@link encodeMeta}; tolerant of an already-object or plain-JSON value. */
-export function decodeMeta(raw: unknown): Record<string, unknown> {
-  if (raw && typeof raw === 'object') return raw as Record<string, unknown>
-  if (typeof raw !== 'string') return {}
-  let s = raw
-  if (s.startsWith('b64:')) {
-    try {
-      s = Buffer.from(s.slice(4), 'base64').toString('utf8')
-    } catch {
-      return {}
-    }
-  }
-  try {
-    return JSON.parse(s) as Record<string, unknown>
-  } catch {
-    return {}
-  }
 }
 
 // ============================================================================
@@ -203,7 +149,7 @@ async function recordSpace(
 // ============================================================================
 
 /**
- * Chunk → embed → index a stored document into Redis for similarity search.
+ * Chunk → embed → index a stored document into the vector store for search.
  *
  * @throws if the session already has a different embedding space (and
  *         `allowSpaceChange` is not set), or if Redis writes fail.
@@ -230,41 +176,30 @@ export async function ingestDocument(
 
   const indexName = indexNameFor(doc.sessionId, space)
   const prefix = prefixFor(doc.sessionId, space)
-  await ensureVectorIndex(callTool, indexName, prefix, space.dimensions)
+  const store = createVectorStore({ indexName, prefix, dim: space.dimensions, callTool })
+  await store.ensureIndex()
 
-  // Write each chunk in just TWO round-trips: the vector (must be a packed
-  // float blob, so set_vector_in_hash) plus a single JSON `meta` field holding
-  // the content AND provenance. The gateway runs the redis MCP over one serial
-  // stdio pipe, so call count is the ingest cost and concurrent writes only
-  // queue up and time out — keep it minimal and sequential. TTL is set on the
-  // meta write (per-key; it covers the whole hash).
-  for (let idx = 0; idx < chunks.length; idx++) {
-    const c = chunks[idx]
-    const key = chunkKey(prefix, doc.id, c.index)
-
-    const setVec = await callTool('set_vector_in_hash', { name: key, vector: vectors[idx] })
-    const vecErr = redisWriteError(setVec)
-    if (vecErr) throw new Error(`Failed to store vector for chunk ${c.index}: ${vecErr}`)
-
-    // base64 the JSON blob: the gateway auto-parses JSON-looking string args
-    // into objects (hset then rejects the dict), and a raw chunk could itself
-    // be valid JSON — so encode to an opaque string. The `b64:` prefix makes it
-    // unambiguously non-JSON. Decoded in parseSearchHits.
-    const meta = encodeMeta({
-      content: c.content,
-      doc_id: doc.id,
-      session_id: doc.sessionId,
-      source: doc.filename,
-      chunk_index: c.index,
-      start_offset: c.startOffset,
-      end_offset: c.endOffset,
-      model: space.model,
-      provider: space.provider,
-      dim: space.dimensions,
-    })
-    const metaRes = await callTool('hset', { name: key, key: 'meta', value: meta, expire_seconds: ttl })
-    const metaErr = redisWriteError(metaRes)
-    if (metaErr) throw new Error(`Failed to store chunk ${c.index} meta: ${metaErr}`)
+  // Sequential: the gateway runs the redis MCP over one serial stdio pipe, so
+  // concurrent writes only queue and time out. Each chunk is 2 Redis calls.
+  for (let i = 0; i < chunks.length; i++) {
+    const c = chunks[i]
+    await store.upsert(
+      `${doc.id}:${c.index}`,
+      vectors[i],
+      {
+        content: c.content,
+        doc_id: doc.id,
+        session_id: doc.sessionId,
+        source: doc.filename,
+        chunk_index: c.index,
+        start_offset: c.startOffset,
+        end_offset: c.endOffset,
+        model: space.model,
+        provider: space.provider,
+        dim: space.dimensions,
+      },
+      ttl,
+    )
   }
 
   await recordSpace(callTool, doc.sessionId, space, ttl)
@@ -279,39 +214,15 @@ export async function ingestDocument(
   }
 }
 
-/** Create the HNSW index for a (session, space), tolerating "already exists". */
-async function ensureVectorIndex(
-  callTool: CallTool,
-  indexName: string,
-  prefix: string,
-  dim: number,
-): Promise<void> {
-  const res = await callTool('create_vector_index_hash', {
-    index_name: indexName,
-    prefix,
-    dim,
-    distance_metric: 'COSINE',
-  })
-  // The Redis MCP returns a string; an existing index surfaces as an error-ish
-  // message rather than a thrown exception. Only a hard failure that is NOT an
-  // "already exists" should propagate.
-  const err = redisWriteError(res)
-  if (err && !/exist/i.test(err)) {
-    throw new Error(`Failed to create vector index ${indexName}: ${err}`)
-  }
-}
-
 // ============================================================================
 // Search
 // ============================================================================
 
 /**
  * Embed `query` with the session's recorded model and KNN-search its index.
- * Returns [] when the session has no ingested corpus yet.
- *
- * The query is always embedded with the *recorded* provider/model, and
- * {@link assertSameSpace} re-checks dimensionality — a search can never compare
- * vectors across embedding spaces.
+ * Returns [] when the session has no ingested corpus yet. The query is always
+ * embedded with the *recorded* provider/model, and {@link assertSameSpace}
+ * re-checks dimensionality — a search can never compare across embedding spaces.
  */
 export async function searchDocuments(
   sessionId: string,
@@ -332,58 +243,29 @@ export async function searchDocuments(
   })
   assertSameSpace(recorded, { provider: q.provider, model: q.model, dimensions: q.dimensions })
 
-  const res = await callTool('vector_search_hash', {
-    index_name: indexNameFor(sessionId, recorded),
-    query_vector: q.vector,
-    k: opts.k ?? 5,
-    // Content + provenance travel in a single JSON `meta` field (see ingest);
-    // ask for flat names too in case a backend version flattens them.
-    return_fields: ['meta', 'content', 'doc_id', 'source', 'chunk_index'],
+  const store = createVectorStore({
+    indexName: indexNameFor(sessionId, recorded),
+    prefix: prefixFor(sessionId, recorded),
+    dim: recorded.dimensions,
+    callTool,
   })
-  if (!res.success || res.data == null) return []
-  return parseSearchHits(res.data)
-}
+  const hits = await store.search(q.vector, opts.k ?? 5)
 
-/**
- * Tolerant parser for `vector_search_hash` output. The Redis MCP returns "a
- * list of matched documents"; field names vary slightly by version, so this
- * accepts a few shapes and skips anything it can't read rather than throwing.
- */
-function parseSearchHits(data: unknown): SearchHit[] {
-  let rows: unknown = data
-  if (typeof rows === 'string') {
-    try {
-      rows = JSON.parse(rows)
-    } catch {
-      return []
-    }
-  }
-  // Some versions wrap results under a key; unwrap common shapes.
-  if (rows && typeof rows === 'object' && !Array.isArray(rows)) {
-    const obj = rows as Record<string, unknown>
-    rows = obj.results ?? obj.documents ?? obj.matches ?? []
-  }
-  if (!Array.isArray(rows)) return []
-
-  const hits: SearchHit[] = []
-  for (const row of rows) {
-    if (!row || typeof row !== 'object') continue
-    const r = row as Record<string, unknown>
-    // Content + provenance live in the base64 `meta` field; fall back to flat.
-    const meta = decodeMeta(r.meta)
-    const content = str(meta.content) ?? str(r.content)
+  const out: SearchHit[] = []
+  for (const h of hits) {
+    const content = str(h.payload.content)
     if (content == null) continue
-    hits.push({
-      docId: str(meta.doc_id) ?? str(r.doc_id) ?? '',
-      source: str(meta.source) ?? str(r.source) ?? '',
-      chunkIndex: num(meta.chunk_index) ?? num(r.chunk_index) ?? 0,
+    out.push({
+      docId: str(h.payload.doc_id) ?? '',
+      source: str(h.payload.source) ?? '',
+      chunkIndex: num(h.payload.chunk_index) ?? 0,
       content,
-      startOffset: num(meta.start_offset) ?? num(r.start_offset),
-      endOffset: num(meta.end_offset) ?? num(r.end_offset),
-      score: num(r.score ?? r.distance ?? r.__vector_score),
+      startOffset: num(h.payload.start_offset),
+      endOffset: num(h.payload.end_offset),
+      score: h.score,
     })
   }
-  return hits
+  return out
 }
 
 function str(v: unknown): string | undefined {
