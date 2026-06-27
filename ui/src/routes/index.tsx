@@ -33,6 +33,9 @@ export default function Home() {
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
   const [contextEvents, setContextEvents] = createSignal<ContextEvent[]>([])
   const [unifiedContext, setUnifiedContext] = createSignal<UnifiedContext | undefined>(undefined)
+  // The conversation's selected agent, reported up from ChatInterface, so the
+  // Tools panel's code-mode gate tracks the live selection (default until set).
+  const [currentAgentId, setCurrentAgentId] = createSignal<string>('default')
 
   // Sidebar threads — refetched after each turn completes (see onContextUpdate).
   // `mutate` is exposed so the `title_updated` SSE event can patch a single
@@ -264,6 +267,7 @@ export default function Home() {
                 onContextUpdate={handleContextUpdate}
                 onResetForNewSession={resetForNewSession}
                 onAgentChangeRequestsNewSession={handleNewChat}
+                onSelectedAgentChange={setCurrentAgentId}
                 graphEntityNames={graphEntityNames()}
                 onHighlightEntities={setHighlightedIds}
                 getProgress={getProgress}
@@ -299,6 +303,7 @@ export default function Home() {
             onClearEvents={clearEvents}
             onCypherWrite={handleCypherWrite}
             sessionId={selectedSessionId()}
+            agentId={currentAgentId()}
             onStashAction={handleStashAction}
           />
         </Splitter.Panel>

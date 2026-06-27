@@ -39,20 +39,27 @@ interface ToolsPanelProps {
   /** Active conversation id. Required for the per-conversation allowlist;
    *  when undefined the panel renders an empty state. */
   sessionId?: string;
+  /** The conversation's currently-selected agent. Drives the code-mode gate
+   *  (grey-out for agents that don't run a code-mode pattern) off the live
+   *  selection, so a fresh chat re-evaluates the moment the agent changes
+   *  rather than waiting for the session to persist. */
+  agentId?: string;
 }
 
 export const ToolsPanel = (props: ToolsPanelProps) => {
   const [isSaving, setIsSaving] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
 
-  // Single round-trip: returns allowed + available + meta-tool defaults.
-  // Re-fetches when sessionId changes (selecting a different chat).
+  // Single round-trip: returns allowed + available + meta-tool defaults + the
+  // code-mode gate. Re-fetches when EITHER the session (different chat) or the
+  // selected agent changes — the latter is what makes the grey-out track agent
+  // switches on a not-yet-persisted conversation.
   const [state, { mutate }] = createResource(
-    () => props.sessionId,
-    async (sid) => {
+    () => [props.sessionId, props.agentId] as const,
+    async ([sid, agentId]) => {
       if (!sid) return null;
       try {
-        return await getCodeModeAllowedTools(sid);
+        return await getCodeModeAllowedTools(sid, agentId);
       } catch (err) {
         console.error('[ToolsPanel] load failed:', err);
         return null;

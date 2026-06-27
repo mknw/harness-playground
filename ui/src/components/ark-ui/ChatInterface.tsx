@@ -63,6 +63,9 @@ export interface ChatInterfaceProps {
   /** Called when the user changes agent — parent should mint a fresh sessionId so
    *  the new agent gets its own conversation row rather than overwriting an existing one. */
   onAgentChangeRequestsNewSession?: () => void
+  /** Reports the conversation's selected agent (initial, on load, and on change)
+   *  so the parent can drive agent-aware UI (e.g. the Tools panel's code-mode gate). */
+  onSelectedAgentChange?: (agentId: string) => void
   /** Map of entity/relation names → graph element IDs for interactive highlighting */
   graphEntityNames?: Map<string, string[]>
   /** Callback to highlight specific graph element IDs */
@@ -96,6 +99,9 @@ const WELCOME_MESSAGE: Message = {
 export const ChatInterface = (props: ChatInterfaceProps) => {
   const [messages, setMessages] = createSignal<Message[]>([])
   const [selectedAgent, setSelectedAgent] = createSignal('default')
+  // Report the selected agent up to the parent (initial 'default', then on load
+  // and on every change) so agent-aware UI like the Tools panel can react.
+  createEffect(() => props.onSelectedAgentChange?.(selectedAgent()))
   // Cursor into ctx.events — tracks how many events were sent last turn so we
   // emit only the delta (new events) rather than the full accumulated history
   let prevEventCount = 0
