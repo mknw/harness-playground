@@ -34,7 +34,7 @@ src/
 │   │   ├── registry.server.ts       # Registers all agents
 │   │   ├── graph-extractor.ts       # ContextEvent → GraphElement[] (MCP + driver + enriched payload)
 │   │   ├── neo4j-enricher.server.ts # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
-│   │   └── examples/                # 10 pre-built agent configurations
+│   │   └── examples/                # 6 pre-built agent configurations
 │   ├── db/
 │   │   ├── client.server.ts         # Lazy pg.Pool singleton + idempotent schema bootstrap
 │   │   └── conversations.server.ts  # Conversations repo (load/save/list/delete + deriveTitle)
@@ -116,7 +116,7 @@ See [examples/README.md](src/lib/harness-client/examples/README.md) for detailed
 |------|----------|
 | [GitHub Project](https://github.com/users/mknw/projects/5) | Planning board / roadmap (replaced docs/ROADMAP.md) |
 | [src/lib/harness-patterns/README.md](src/lib/harness-patterns/README.md) | Harness patterns full API reference |
-| [src/lib/harness-client/examples/README.md](src/lib/harness-client/examples/README.md) | Example agent implementations (10 agents) |
+| [src/lib/harness-client/examples/README.md](src/lib/harness-client/examples/README.md) | Example agent implementations (6 agents) |
 | [../docs/UI_ARCHITECTURE.md](../docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
 | [../docs/DATA_STASH.md](../docs/DATA_STASH.md) | Data Stash upload → chunk → embed → search pipeline (#6/#9/#8) |
 | [../docs/INDEX.md](../docs/INDEX.md) | Full project documentation index |

@@ -848,11 +848,11 @@ ui/
 │       └── harness-client/        # Pre-built agent server actions
 │           ├── actions.server.ts  # processMessage(), processMessageStreaming(), listConversations(), loadConversation()
 │           ├── session.server.ts  # In-process pattern cache + Postgres-backed serialized context (per-user)
-│           ├── registry.server.ts # Agent registry (10 examples)
+│           ├── registry.server.ts # Agent registry (6 examples)
 │           ├── graph-extractor.ts # ContextEvent → GraphElement[]
 │           ├── neo4j-enricher.server.ts # onToolResult recipe (1-hop neighborhood + touched tags)
 │           ├── types.ts           # GraphElement, HarnessData, etc.
-│           └── examples/          # 10 pre-built agent configurations
+│           └── examples/          # 6 pre-built agent configurations
 ```
 
 ---

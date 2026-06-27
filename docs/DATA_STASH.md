@@ -69,10 +69,9 @@ llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --
 ## Shared vector store
 
 `vector-store.server.ts` is the single home for the embed-target Redis plumbing —
-`createVectorStore({ indexName, prefix, dim })` → `ensureIndex()` / `upsert(id, vector, payload, ttl)` / `search(queryVector, k)`. It owns index creation (tolerating "already exists"), the 2-writes-per-record format (vector + base64 `meta` payload), KNN result parsing, and the `spaceTag(space)` naming that keeps one index to one model. Both consumers use it:
+`createVectorStore({ indexName, prefix, dim })` → `ensureIndex()` / `upsert(id, vector, payload, ttl)` / `search(queryVector, k)`. It owns index creation (tolerating "already exists"), the 2-writes-per-record format (vector + base64 `meta` payload), KNN result parsing, and the `spaceTag(space)` naming that keeps one index to one model. Its consumer is the Data Stash search:
 
 - **`document-ingest.server.ts`** — document chunks (index/prefix per `(session, space)`).
-- **Semantic Cache agent** (`harness-client/examples/semantic-cache.server.ts`) — caches query→result vectors in a global per-model index (`qcache_idx_{spaceTag}`). It embeds the query on read and write: L1 is an exact-hash `json_get`; L2 is a distance-thresholded KNN over the query embeddings (`SEMANTIC_HIT_MAX_DISTANCE`), best-effort so it degrades to exact-match + retrieval when the embedder/RediSearch is unavailable.
 
 ## Requirements & gotchas
 

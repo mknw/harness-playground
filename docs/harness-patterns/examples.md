@@ -1,6 +1,6 @@
 # Harness Pattern Examples
 
-Catalog of 10 pre-built agents demonstrating pattern compositions.
+Catalog of 6 pre-built agents demonstrating pattern compositions.
 
 > **Full Code:** See [`ui/src/lib/harness-client/examples/`](../../ui/src/lib/harness-client/examples/) for complete implementations.
 
@@ -13,15 +13,11 @@ All agents are registered in `registry.server.ts` and available via `getAgentLis
 | ID | Name | Patterns | Servers |
 |----|------|----------|---------|
 | `default` | Default Agent | router → synthesizer | neo4j, web_search, fetch |
-| `doc-assistant` | Documentation Assistant | simpleLoop → simpleLoop → synthesizer | context7, memory |
+| `code-mode` | Code Mode Agent | router → actorCritic → synthesizer | all (via code-mode factory) |
 | `multi-source-research` | Multi-Source Research | parallel → judge → synthesizer | web_search, github, context7 |
-| `llm-judge` | LLM-as-Judge | parallel → judge → synthesizer | web_search, github, context7 |
-| `guardrailed-agent` | Guardrailed File Editor | guardrail(actorCritic + withApproval) → synthesizer | filesystem |
 | `conversational-memory` | Conversational Memory | sessionTracker → router → memoryWriter → synthesizer | memory, neo4j, web_search, redis |
-| `issue-triage` | Issue Triage | router(parallel \| simpleLoop) → synthesizer | github, web_search, neo4j |
 | `kg-builder` | Knowledge Graph Builder | simpleLoop → simpleLoop → withApproval(simpleLoop) → synthesizer | web_search, memory, neo4j |
-| `ontology-builder` | Ontology Builder | 8-phase pipeline | all servers |
-| `semantic-cache` | Semantic Cache | cache → parallel → cacheWriter → synthesizer | redis, web_search, neo4j |
+| `sandbox-session` | Sandbox · Session | compactIntent → withSandbox(actorCritic) → synthesizer | none (in-VM sandbox tools) |
 
 ---
 
@@ -44,25 +40,11 @@ router({ neo4j: '...', web_search: '...' })
 - Web search via DuckDuckGo (`search`, `fetch`, `fetch_content`)
 - Cross-turn data flow: `withReferences` selector attaches relevant prior refs at each route's ingress; the controller can use `expandPreviousResult` or pass `ref:<id>` in tool args to inline-expand the full data
 
-For JS-orchestration workflows that span multiple servers, see [Agent 11 — Code Mode](#11-code-mode-agent).
+For JS-orchestration workflows that span multiple servers, see [Agent 5 — Code Mode](#5-code-mode-agent).
 
 ---
 
-## 2. Documentation Assistant
-
-**File:** `doc-assistant.server.ts`
-
-Look up library docs, persist findings.
-
-```
-simpleLoop(Context7Controller) → resolve-library-id, get-library-docs
-simpleLoop(MemoryController)   → create_entities, add_observations
-synthesizer({ mode: 'thread' })
-```
-
----
-
-## 3. Multi-Source Research
+## 2. Multi-Source Research
 
 **File:** `multi-source-research.server.ts`
 
@@ -76,46 +58,7 @@ synthesizer({ mode: 'response' })
 
 ---
 
-## 4. LLM-as-Judge
-
-**File:** `llm-judge.server.ts`
-
-Multi-criteria evaluation with weighted scoring.
-
-```typescript
-// 4 criteria: content length, relevance, source authority, structure
-const score = contentScore + relevanceScore + authorityBonus + structureBonus
-```
-
----
-
-## 5. Guardrailed File Editor
-
-**File:** `guardrailed-agent.server.ts`
-
-5-layer validation for file operations.
-
-```
-guardrail(
-  withApproval(actorCritic(FileEditController, FileEditCritic)),
-  {
-    rails: [topicalRail, piiScanRail, pathAllowlistRail, toolScopeRail, driftDetectorRail],
-    circuitBreaker: { maxFailures: 3, windowMs: 60_000 }
-  }
-)
-→ synthesizer
-```
-
-**Rails:**
-- `topicalRail` - Block off-topic destructive requests
-- `piiScanRail` - Redact secrets/tokens from input
-- `pathAllowlistRail` - Block paths outside workspace
-- `toolScopeRail` - Only allow filesystem tools
-- `driftDetectorRail` - Warn if >60% of file changed
-
----
-
-## 6. Conversational Memory
+## 3. Conversational Memory
 
 **File:** `conversational-memory.server.ts`
 
@@ -133,22 +76,7 @@ synthesizer
 
 ---
 
-## 7. Issue Triage
-
-**File:** `issue-triage.server.ts`
-
-GitHub issue analysis and labeling.
-
-```
-router:
-  issue_context → get_issue, get_pull_request_files, list_commits
-  research → parallel(webSearch, neo4jQuery)
-synthesizer
-```
-
----
-
-## 8. Knowledge Graph Builder
+## 4. Knowledge Graph Builder
 
 **File:** `kg-builder.server.ts`
 
@@ -163,51 +91,7 @@ synthesizer
 
 ---
 
-## 9. Ontology Builder
-
-**File:** `ontology-builder.server.ts`
-
-8-phase schema evolution workflow.
-
-| Phase | Pattern | Purpose |
-|-------|---------|---------|
-| 1. Scoping | simpleLoop | Clarify domain boundaries |
-| 2. Research | parallel | Gather from web, docs, github, KB |
-| 2b. Dedup | custom | Vector similarity deduplication |
-| 3-4. Proposal | judge loop + guardrail | Generate, evaluate, validate |
-| 5. Commit | withApproval(simpleLoop) | Persist to neo4j |
-| 6. Documentation | actorCritic | Generate markdown docs |
-| 7. Suggestions | synthesizer | Summarize and suggest next steps |
-| 8. Analysis | withApproval(actorCritic) | Optional statistics |
-
----
-
-## 10. Semantic Cache
-
-**File:** `semantic-cache.server.ts`
-
-Redis vector caching for queries.
-
-```
-semanticCache:
-  1. Compute query embedding
-  2. vector_search_hash → check for similar past queries
-  3. If similarity > 0.92 → return cached (json_get)
-  4. If miss → proceed to retrieval
-
-parallel(webSearch, neo4jQuery)
-
-cacheWriter:
-  → json_set result
-  → set_vector_in_hash embedding
-  → expire with TTL
-
-synthesizer
-```
-
----
-
-## 11. Code Mode Agent
+## 5. Code Mode Agent
 
 **File:** `code-mode.server.ts`
 

@@ -68,18 +68,6 @@ vi.mock('../../../../lib/harness-patterns/mcp-client.server', () => ({
   listTools: mockListTools(mockToolSets.all)
 }))
 
-// Mock embeddings — the Semantic Cache embeds queries on read + write; keep it
-// deterministic and offline. The vector-store the cache uses still routes its
-// Redis calls through callToolMock above.
-vi.mock('../../../../lib/embeddings.server', () => ({
-  embedOne: vi.fn(async () => ({
-    provider: 'local',
-    model: 'test-embed',
-    dimensions: 4,
-    vector: [0.1, 0.2, 0.3, 0.4],
-  })),
-}))
-
 // Mock BAML client
 vi.mock('../../../../../baml_client', () => ({
   b: {
@@ -332,70 +320,6 @@ describe('Agent Harnesses', () => {
     })
   })
 
-  describe('docAssistantAgent', () => {
-    it('should have valid config', async () => {
-      const { docAssistantAgent } = await import('../../../../lib/harness-client/examples/doc-assistant.server')
-      validateAgentConfig(docAssistantAgent)
-      expect(docAssistantAgent.id).toBe('doc-assistant')
-      expect(docAssistantAgent.servers).toContain('context7')
-    })
-
-    it('should create valid patterns', async () => {
-      const { docAssistantAgent } = await import('../../../../lib/harness-client/examples/doc-assistant.server')
-      const patterns = await validatePatterns(docAssistantAgent)
-
-      // Should have doc lookup, memory store, synthesizer
-      expect(patterns.length).toBe(3)
-    })
-
-    it('should start with doc lookup pattern', async () => {
-      const { docAssistantAgent } = await import('../../../../lib/harness-client/examples/doc-assistant.server')
-      const patterns = await docAssistantAgent.createPatterns('test-session') as Pattern[]
-      expect(patterns[0].config.patternId).toBe('doc-lookup')
-    })
-  })
-
-  describe('guardrailedAgent', () => {
-    it('should have valid config', async () => {
-      const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-      validateAgentConfig(guardrailedAgent)
-      expect(guardrailedAgent.id).toBe('guardrailed-agent')
-    })
-
-    it('should create valid patterns', async () => {
-      const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-      const patterns = await validatePatterns(guardrailedAgent)
-
-      // Should have guardrailed editor and synthesizer
-      expect(patterns.length).toBe(2)
-    })
-
-    it('should include guardrail pattern', async () => {
-      const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-      const patterns = await guardrailedAgent.createPatterns('test-session') as Pattern[]
-      // guardrail pattern name includes wrapped pattern: 'guardrail(withApproval)'
-      const hasGuardrail = patterns.some(p => p.name.startsWith('guardrail('))
-      expect(hasGuardrail).toBe(true)
-    })
-  })
-
-  describe('issueTriageAgent', () => {
-    it('should have valid config', async () => {
-      const { issueTriageAgent } = await import('../../../../lib/harness-client/examples/issue-triage.server')
-      validateAgentConfig(issueTriageAgent)
-      expect(issueTriageAgent.id).toBe('issue-triage')
-      expect(issueTriageAgent.servers).toContain('github')
-    })
-
-    it('should create valid patterns', async () => {
-      const { issueTriageAgent } = await import('../../../../lib/harness-client/examples/issue-triage.server')
-      const patterns = await validatePatterns(issueTriageAgent)
-
-      // Should have router, routes, and synthesizer
-      expect(patterns.length).toBe(3)
-    })
-  })
-
   describe('kgBuilderAgent', () => {
     it('should have valid config', async () => {
       const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
@@ -419,32 +343,6 @@ describe('Agent Harnesses', () => {
     })
   })
 
-  describe('llmJudgeAgent', () => {
-    it('should have valid config', async () => {
-      const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-      validateAgentConfig(llmJudgeAgent)
-      expect(llmJudgeAgent.id).toBe('llm-judge')
-    })
-
-    it('should create valid patterns', async () => {
-      const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-      const patterns = await validatePatterns(llmJudgeAgent)
-
-      // Should have parallel sources, judge, synthesizer
-      expect(patterns.length).toBe(3)
-    })
-
-    it('should include parallel and judge patterns', async () => {
-      const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-      const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
-      const names = patterns.map(p => p.name)
-      expect(names).toContain('parallel')
-      // judge pattern uses patternId as name
-      const hasJudge = patterns.some(p => p.config.patternId?.includes('judge'))
-      expect(hasJudge).toBe(true)
-    })
-  })
-
   describe('multiSourceResearchAgent', () => {
     it('should have valid config', async () => {
       const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
@@ -461,53 +359,6 @@ describe('Agent Harnesses', () => {
     })
   })
 
-  describe('ontologyBuilderAgent', () => {
-    it('should have valid config', async () => {
-      const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-      validateAgentConfig(ontologyBuilderAgent)
-      expect(ontologyBuilderAgent.id).toBe('ontology-builder')
-    })
-
-    it('should create valid patterns', async () => {
-      const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-      const patterns = await validatePatterns(ontologyBuilderAgent)
-
-      // Complex agent with many phases
-      expect(patterns.length).toBeGreaterThanOrEqual(5)
-    })
-
-    it('should include multiple pattern types', async () => {
-      const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-      const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
-      const names = new Set(patterns.map(p => p.name))
-
-      // Should use variety of patterns
-      expect(names.size).toBeGreaterThanOrEqual(3)
-    })
-  })
-
-  describe('semanticCacheAgent', () => {
-    it('should have valid config', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      validateAgentConfig(semanticCacheAgent)
-      expect(semanticCacheAgent.id).toBe('semantic-cache')
-      expect(semanticCacheAgent.servers).toContain('redis')
-    })
-
-    it('should create valid patterns', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      const patterns = await validatePatterns(semanticCacheAgent)
-
-      // Should have cache check, conditional retrieval, cache writer, synthesizer
-      expect(patterns.length).toBe(4)
-    })
-
-    it('should start with cache check pattern', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      const patterns = await semanticCacheAgent.createPatterns('test-session') as Pattern[]
-      expect(patterns[0].config.patternId).toBe('semantic-cache')
-    })
-  })
 })
 
 // ============================================================================
@@ -521,31 +372,6 @@ describe('Judge Evaluators', () => {
 
   afterEach(async () => {
     vi.resetModules()
-  })
-
-  describe('llmJudgeAgent qualityJudgeEvaluator', () => {
-    it('should score candidates based on content length', async () => {
-      // Import the agent to get access to the evaluator via patterns
-      const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-      const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
-
-      // Find the judge pattern
-      const judgePattern = patterns.find(p => p.config.patternId === 'quality-judge')
-      expect(judgePattern).toBeDefined()
-
-      // The judge pattern uses patternId as name when created with configurePattern
-      expect(judgePattern!.name).toBe('quality-judge')
-    })
-
-    it('should create source patterns for web, docs, and github', async () => {
-      const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
-      const patterns = await llmJudgeAgent.createPatterns('test-session') as Pattern[]
-
-      // Find the parallel pattern containing sources
-      const parallelPattern = patterns.find(p => p.config.patternId === 'parallel-sources')
-      expect(parallelPattern).toBeDefined()
-      expect(parallelPattern!.name).toBe('parallel')
-    })
   })
 
   describe('multiSourceResearchAgent judgeEvaluator', () => {
@@ -568,244 +394,6 @@ describe('Judge Evaluators', () => {
 })
 
 // ============================================================================
-// Semantic Cache Pattern Tests
-// ============================================================================
-
-describe('Semantic Cache Patterns', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  afterEach(async () => {
-    vi.resetModules()
-  })
-
-  describe('semanticCache pattern', () => {
-    it('should return cache hit when cached data exists', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      const patterns = await semanticCacheAgent.createPatterns('test-session') as Pattern[]
-      const cachePattern = patterns.find(p => p.config.patternId === 'semantic-cache')
-
-      expect(cachePattern).toBeDefined()
-
-      // Mock successful cache hit
-      callToolMock.mockResolvedValueOnce({ success: true, data: { cached: 'result' } })
-
-      const scope = createMockScope({ input: 'test query' })
-      const view = createMockView()
-
-      const result = await cachePattern!.fn(scope, view)
-      expect((result as typeof scope).data.cacheHit).toBe(true)
-    })
-
-    it('should return cache miss when no cached data', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      const patterns = await semanticCacheAgent.createPatterns('test-session') as Pattern[]
-      const cachePattern = patterns.find(p => p.config.patternId === 'semantic-cache')
-
-      // Mock cache miss - need to mock both json_get failure and empty vector_search_hash
-      callToolMock
-        .mockResolvedValueOnce({ success: false, data: null }) // json_get
-        .mockResolvedValueOnce({ success: true, data: [] }) // vector_search_hash returns empty
-
-      const scope = createMockScope({ input: 'test query' })
-      const view = createMockView()
-
-      const result = await cachePattern!.fn(scope, view)
-      expect((result as typeof scope).data.cacheHit).toBe(false)
-    })
-
-    it('should handle vector search errors gracefully', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      const patterns = await semanticCacheAgent.createPatterns('test-session') as Pattern[]
-      const cachePattern = patterns.find(p => p.config.patternId === 'semantic-cache')
-
-      // Mock cache miss followed by vector search error
-      callToolMock
-        .mockResolvedValueOnce({ success: false, data: null }) // json_get fails
-        .mockRejectedValueOnce(new Error('Vector search failed')) // vector_search_hash fails
-
-      const scope = createMockScope({ input: 'test query' })
-      const view = createMockView()
-
-      // Should not throw
-      const result = await cachePattern!.fn(scope, view)
-      expect((result as typeof scope).data.cacheHit).toBe(false)
-    })
-
-    it('should return cache hit from vector similarity search', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      const patterns = await semanticCacheAgent.createPatterns('test-session') as Pattern[]
-      const cachePattern = patterns.find(p => p.config.patternId === 'semantic-cache')
-
-      // L1 (json_get) misses; L2 KNN returns a near neighbour within the distance
-      // threshold whose payload carries the cached result (no second lookup).
-      callToolMock
-        .mockResolvedValueOnce({ success: false, data: null }) // json_get (L1) miss
-        .mockResolvedValueOnce({
-          success: true,
-          data: [{ meta: JSON.stringify({ result: 'similar result' }), score: 0.05 }],
-        }) // vector_search_hash (L2) — distance 0.05 < threshold
-
-      const scope = createMockScope({ input: 'test query' })
-      const view = createMockView()
-
-      const result = await cachePattern!.fn(scope, view)
-      const out = (result as typeof scope).data as Record<string, unknown>
-      expect(out.cacheHit).toBe(true)
-      expect(out.cacheKind).toBe('semantic')
-    })
-  })
-
-  describe('conditionalRetrieval pattern', () => {
-    it('should skip retrieval on cache hit', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      const patterns = await semanticCacheAgent.createPatterns('test-session') as Pattern[]
-      const conditionalPattern = patterns.find(p => p.config.patternId === 'conditional-retrieval')
-
-      expect(conditionalPattern).toBeDefined()
-
-      const scope = createMockScope({ cacheHit: true })
-      const view = createMockView()
-
-      const result = await conditionalPattern!.fn(scope, view)
-      // Should return scope unchanged
-      expect(result).toBe(scope)
-    })
-  })
-
-  describe('cacheWriter pattern', () => {
-    it('should skip writing on cache hit', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      const patterns = await semanticCacheAgent.createPatterns('test-session') as Pattern[]
-      const writerPattern = patterns.find(p => p.config.patternId === 'cache-writer')
-
-      expect(writerPattern).toBeDefined()
-
-      const scope = createMockScope({ cacheHit: true })
-      const view = createMockView()
-
-      const result = await writerPattern!.fn(scope, view)
-      // Should return scope unchanged
-      expect(result).toBe(scope)
-    })
-
-    it('should write to cache on cache miss', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      const patterns = await semanticCacheAgent.createPatterns('test-session') as Pattern[]
-      const writerPattern = patterns.find(p => p.config.patternId === 'cache-writer')
-
-      const scope = createMockScope({ cacheHit: false, input: 'test query' })
-      const view = createMockView()
-
-      await writerPattern!.fn(scope, view)
-
-      // Should have attempted to write to cache
-      expect(callToolMock).toHaveBeenCalled()
-    })
-
-    it('should handle cache write errors gracefully', async () => {
-      const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
-      const patterns = await semanticCacheAgent.createPatterns('test-session') as Pattern[]
-      const writerPattern = patterns.find(p => p.config.patternId === 'cache-writer')
-
-      // Mock the cache write to fail
-      callToolMock.mockRejectedValueOnce(new Error('Redis write failed'))
-
-      const scope = createMockScope({ cacheHit: false, input: 'test query' })
-      const view = createMockView()
-
-      // Should not throw
-      const result = await writerPattern!.fn(scope, view)
-      expect(result).toBeDefined()
-    })
-  })
-})
-
-// ============================================================================
-// Ontology Builder Pattern Tests
-// ============================================================================
-
-describe('Ontology Builder Patterns', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  afterEach(async () => {
-    vi.resetModules()
-  })
-
-  describe('ontology patterns', () => {
-    it('should create scoping pattern', async () => {
-      const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-      const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
-
-      const scopingPattern = patterns.find(p => p.config.patternId === 'ontology-scope')
-      expect(scopingPattern).toBeDefined()
-    })
-
-    it('should create research parallel pattern', async () => {
-      const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-      const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
-
-      const researchPattern = patterns.find(p => p.config.patternId === 'onto-research')
-      expect(researchPattern).toBeDefined()
-      expect(researchPattern!.name).toBe('parallel')
-    })
-
-    it('should create guardrailed proposal pattern', async () => {
-      const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-      const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
-
-      const validatedPattern = patterns.find(p => p.config.patternId === 'ontology-validated')
-      expect(validatedPattern).toBeDefined()
-      expect(validatedPattern!.name).toContain('guardrail')
-    })
-
-    it('should create judge pattern for ontology evaluation', async () => {
-      const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-      const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
-
-      const judgePattern = patterns.find(p => p.config.patternId === 'ontology-judge')
-      expect(judgePattern).toBeDefined()
-    })
-
-    it('should create commit pattern with approval', async () => {
-      const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-      const patterns = await ontologyBuilderAgent.createPatterns('test-session') as Pattern[]
-
-      const hasApproval = patterns.some(p => p.name === 'withApproval')
-      expect(hasApproval).toBe(true)
-    })
-  })
-})
-
-// ============================================================================
-// Guardrailed Agent Rail Tests
-// ============================================================================
-
-describe('Guardrailed Agent Rails', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  afterEach(async () => {
-    vi.resetModules()
-  })
-
-  describe('topicalRail', () => {
-    it('should have safe file edit pattern with guardrails', async () => {
-      const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-      const patterns = await guardrailedAgent.createPatterns('test-session') as Pattern[]
-
-      const safePattern = patterns.find(p => p.config.patternId === 'safe-file-edit')
-      expect(safePattern).toBeDefined()
-      expect(safePattern!.name).toContain('guardrail')
-    })
-  })
-})
-
-// ============================================================================
 // Cross-Agent Tests
 // ============================================================================
 
@@ -815,27 +403,15 @@ describe('Agent Consistency', () => {
     const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
     const { codeModeAgent } = await import('../../../../lib/harness-client/examples/code-mode.server')
     const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-    const { docAssistantAgent } = await import('../../../../lib/harness-client/examples/doc-assistant.server')
-    const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-    const { issueTriageAgent } = await import('../../../../lib/harness-client/examples/issue-triage.server')
     const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
-    const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
 
     const ids = [
       defaultAgent.id,
       codeModeAgent.id,
       conversationalMemoryAgent.id,
-      docAssistantAgent.id,
-      guardrailedAgent.id,
-      issueTriageAgent.id,
       kgBuilderAgent.id,
-      llmJudgeAgent.id,
-      multiSourceResearchAgent.id,
-      ontologyBuilderAgent.id,
-      semanticCacheAgent.id
+      multiSourceResearchAgent.id
     ]
 
     const uniqueIds = new Set(ids)
@@ -845,26 +421,14 @@ describe('Agent Consistency', () => {
   it('all agents should contain synthesizer pattern', async () => {
     const { defaultAgent } = await import('../../../../lib/harness-client/examples/default.server')
     const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')
-    const { docAssistantAgent } = await import('../../../../lib/harness-client/examples/doc-assistant.server')
-    const { guardrailedAgent } = await import('../../../../lib/harness-client/examples/guardrailed-agent.server')
-    const { issueTriageAgent } = await import('../../../../lib/harness-client/examples/issue-triage.server')
     const { kgBuilderAgent } = await import('../../../../lib/harness-client/examples/kg-builder.server')
-    const { llmJudgeAgent } = await import('../../../../lib/harness-client/examples/llm-judge.server')
     const { multiSourceResearchAgent } = await import('../../../../lib/harness-client/examples/multi-source-research.server')
-    const { ontologyBuilderAgent } = await import('../../../../lib/harness-client/examples/ontology-builder.server')
-    const { semanticCacheAgent } = await import('../../../../lib/harness-client/examples/semantic-cache.server')
 
     const agents = [
       defaultAgent,
       conversationalMemoryAgent,
-      docAssistantAgent,
-      guardrailedAgent,
-      issueTriageAgent,
       kgBuilderAgent,
-      llmJudgeAgent,
-      multiSourceResearchAgent,
-      ontologyBuilderAgent,
-      semanticCacheAgent
+      multiSourceResearchAgent
     ]
 
     for (const config of agents) {
