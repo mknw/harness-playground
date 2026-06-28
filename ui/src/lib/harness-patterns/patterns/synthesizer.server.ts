@@ -15,6 +15,7 @@ import type {
   EventView,
   ConfiguredPattern,
   AssistantMessageEventData,
+  ToolResultEventData,
   LLMCallData
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
@@ -234,9 +235,31 @@ function buildSynthesisInputFromView(
               result: null,
               timestamp: event.ts
             })
-          } else if (event.type === 'tool_result' && iterations.length > 0) {
-            const resultData = event.data as { result: unknown }
-            iterations[iterations.length - 1].result = resultData.result
+          } else if (event.type === 'tool_result') {
+            const resultData = event.data as ToolResultEventData
+            const open = iterations.length > 0 ? iterations[iterations.length - 1] : undefined
+            if (open && open.result === null) {
+              // Pair with the controller_action that just preceded it (loop case).
+              open.result = resultData.result
+            } else {
+              // A tool_result with no preceding action — e.g. the `retriever`
+              // pattern, which does one search and emits a result without an LLM
+              // tool-call loop. Synthesize a minimal iteration so the result
+              // still reaches Synthesize (otherwise thread mode drops it and the
+              // synthesizer answers from nothing).
+              iterations.push({
+                turn: turn++,
+                action: {
+                  reasoning: '',
+                  tool_name: resultData.tool ?? 'tool',
+                  tool_args: '',
+                  status: resultData.success ? 'success' : 'error',
+                  is_final: true,
+                },
+                result: resultData.result,
+                timestamp: event.ts,
+              })
+            }
           }
         }
 

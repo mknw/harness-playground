@@ -11,7 +11,7 @@
  * Hovering shows the LLM summary (or a raw preview if no summary yet).
  */
 
-import { For, Show, createSignal, createMemo, createResource } from 'solid-js'
+import { For, Show, createSignal, createMemo, createResource, createEffect, onCleanup } from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
 import type { ContextEvent, ToolResultEventData } from '~/lib/harness-patterns'
@@ -390,6 +390,11 @@ const DocChip = (props: {
 }) => {
   const d = () => props.doc
   const grayed = () => !!(d().hidden || d().archived)
+  // Vector-ingestion status set by the harness-aware auto-ingest path. `pending`
+  // → the upload is being chunked/embedded into the local vector store; `failed`
+  // → ingest errored (e.g. embedder offline). Absent → not ingested (the agent
+  // has no redis retriever) — show nothing.
+  const status = () => d().ingestStatus
   const [loading, setLoading] = createSignal(false)
   const [menuOpen, setMenuOpen] = createSignal(false)
 
@@ -437,15 +442,48 @@ const DocChip = (props: {
         opacity={grayed() ? '35' : loading() ? '50' : '100'}
         onClick={() => setMenuOpen(!menuOpen())}
       >
-        <span
-          class={getDocIcon(d().mimeType, d().filename)}
-          style={{
-            width: '28px',
-            height: '28px',
-            color: grayed() ? '#52525b' : '#34d399',
-            transition: 'all 0.15s',
-          }}
-        />
+        {/* Icon + an ingestion indicator badge over its corner. */}
+        <div style={{ position: 'relative', display: 'inline-flex' }}>
+          <span
+            class={getDocIcon(d().mimeType, d().filename)}
+            style={{
+              width: '28px',
+              height: '28px',
+              color: grayed() ? '#52525b' : '#34d399',
+              opacity: status() === 'pending' ? '0.5' : '1',
+              transition: 'all 0.15s',
+            }}
+          />
+          <Show when={status() === 'pending'}>
+            <span
+              class="i-mdi-loading"
+              title="Embedding into the vector store…"
+              style={{
+                position: 'absolute',
+                top: '-5px',
+                right: '-7px',
+                width: '14px',
+                height: '14px',
+                color: '#f59e0b',
+                animation: 'spin 1s linear infinite',
+              }}
+            />
+          </Show>
+          <Show when={status() === 'failed'}>
+            <span
+              class="i-mdi-alert-circle"
+              title="Ingest failed — not searchable (is the embedder running?)"
+              style={{
+                position: 'absolute',
+                top: '-5px',
+                right: '-7px',
+                width: '13px',
+                height: '13px',
+                color: '#f87171',
+              }}
+            />
+          </Show>
+        </div>
         <span
           style={{
             'font-family': '"Fira Code", ui-monospace, monospace',
@@ -459,6 +497,17 @@ const DocChip = (props: {
         >
           {truncate(d().filename, 18)}
         </span>
+        {/* "embedding…" / "failed" line below the icon. */}
+        <Show when={status() === 'pending'}>
+          <span style={{ 'font-size': '8px', color: '#f59e0b', 'line-height': '1.1' }}>
+            embedding…
+          </span>
+        </Show>
+        <Show when={status() === 'failed'}>
+          <span style={{ 'font-size': '8px', color: '#f87171', 'line-height': '1.1' }}>
+            index failed
+          </span>
+        </Show>
       </div>
 
       <Show when={menuOpen()}>
@@ -608,6 +657,11 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   )
   const [uploading, setUploading] = createSignal(false)
   const [uploadError, setUploadError] = createSignal<string | null>(null)
+  // Post-upload watch window: ingest runs in the background server-side, so we
+  // poll briefly after an upload to catch the (absent → pending → indexed)
+  // status transitions even before the first `pending` lands.
+  const [watching, setWatching] = createSignal(false)
+  let watchTimer: ReturnType<typeof setTimeout> | undefined
 
   const uploadFiles = async (files: File[]) => {
     if (!props.sessionId) {
@@ -626,12 +680,20 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
           const body = (await res.json().catch(() => ({}))) as { error?: string }
           throw new Error(body.error ?? `Upload failed (${res.status})`)
         }
+        // Show each upload as soon as it's stored (the POST returns before
+        // ingest finishes), rather than waiting for the whole batch.
+        await refetch()
       }
-      await refetch()
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setUploading(false)
+      // Open a ~15s watch window so the "embedding…" indicator appears + clears
+      // without a manual refresh, then stops (covers the no-retriever case where
+      // no status ever lands).
+      setWatching(true)
+      if (watchTimer) clearTimeout(watchTimer)
+      watchTimer = setTimeout(() => setWatching(false), 15000)
     }
   }
 
@@ -673,6 +735,21 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   }
 
   const docs = createMemo(() => documents() ?? [])
+
+  // Poll for ingest-status changes while any upload is `pending` or we're inside
+  // the post-upload watch window. The effect re-runs whenever `docs()` or
+  // `watching()` changes; each run that still needs updates arms a single
+  // interval and tears it down on the next run (or on unmount).
+  createEffect(() => {
+    if (isServer) return
+    const active = watching() || docs().some((d) => d.ingestStatus === 'pending')
+    if (!active) return
+    const timer = setInterval(() => void refetch(), 2500)
+    onCleanup(() => clearInterval(timer))
+  })
+  onCleanup(() => {
+    if (watchTimer) clearTimeout(watchTimer)
+  })
 
   const partitioned = createMemo(() => {
     const toolResults: ToolResultItem[] = props.events

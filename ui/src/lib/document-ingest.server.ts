@@ -264,10 +264,14 @@ export async function ingestStashDocument(
 
 /**
  * Idempotently ingest every not-yet-indexed document in a session. The
- * retriever's safety net: an upload that happened before the agent was known
- * (so the upload-time gate couldn't fire) still becomes searchable on first
- * retrieval. Skips docs already `'indexed'` or `'failed'` (terminal) and binary
- * uploads, so a fully-indexed corpus costs just one `listDocuments`.
+ * retriever's safety net: an upload that happened before the agent was known (so
+ * the upload-time gate couldn't fire), or one whose ingest failed transiently
+ * (embedder offline at upload time), becomes searchable on first retrieval.
+ *
+ * Skips only `'indexed'` (already searchable) and `base64` binaries (never
+ * text-ingestable — a permanent skip). `'failed'` IS retried: such failures are
+ * usually transient (embedder down), so a re-attempt recovers them once the
+ * embedder is back. A fully-indexed corpus costs just one `listDocuments`.
  */
 export async function ensureSessionIngested(
   sessionId: string,
@@ -276,7 +280,7 @@ export async function ensureSessionIngested(
   const callTool = opts.callTool ?? defaultCallTool
   const metas = await listDocuments(sessionId, callTool)
   for (const m of metas) {
-    if (m.ingestStatus === 'indexed' || m.ingestStatus === 'failed') continue
+    if (m.ingestStatus === 'indexed') continue
     if (m.encoding === 'base64') continue
     await ingestStashDocument(sessionId, m.id, opts)
   }
