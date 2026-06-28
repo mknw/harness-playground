@@ -81,7 +81,26 @@ not a synthetic `tool_result`. See [`docs/DATA_STASH.md`](../DATA_STASH.md).
 ## Reap leftovers
 
 The harness calls `--rm` so a stop auto-removes, and on graceful shutdown the
-warm pool destroys everything. **Crashes or kill -9 can leave orphans.**
+warm pool destroys everything. **Crashes or kill -9 can leave orphans** — the
+in-memory `AttachmentTable` + `WarmPool` that would have torn the `--rm`
+containers down die with the process, so idle containers keep running and pile
+up against `globalCap`.
+
+**Automatic reap on startup ([#97](https://github.com/mknw/harness-playground/issues/97)
+Gap 1):** the next process clears the previous generation itself. The first
+time the default sandbox singletons are built (`getDefaultBackend` in
+[`with-sandbox.server.ts`](../../ui/src/lib/sandbox/with-sandbox.server.ts)),
+`DockerBackend.reapOrphans()` runs once — fire-and-forget, before any sandbox
+is allocated — and logs `[sandbox] reaped N orphaned container(s) …` when it
+removes anything. So a normal dev-server restart already cleans up after a
+prior crash; you rarely need the manual command below.
+
+> **Caveat:** the auto-reap removes **all** `kg-sandbox=1` containers, including
+> ones a *concurrent* harness process on the same Docker host might own. That's
+> correct for single-process dev (the v0 shape); a multi-process deployment
+> would need to gate it behind a setting / grace window (noted on #97).
+
+Manual reap (same scope, e.g. to clean up without restarting):
 
 ```sh
 # Nuke every sandbox container (running or stopped):

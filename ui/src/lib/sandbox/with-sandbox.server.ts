@@ -81,10 +81,41 @@ let defaultBackend: ComputeBackend | null = null
 let defaultPool: WarmPool | null = null
 let defaultScheduler: SandboxScheduler | null = null
 let defaultAttachments: AttachmentTable | null = null
+let orphansReaped = false
 
 function getDefaultBackend(): ComputeBackend {
-  if (!defaultBackend) defaultBackend = new DockerBackend()
+  if (!defaultBackend) {
+    defaultBackend = new DockerBackend()
+    // First default-singleton build == process start. Clear any sandbox
+    // containers a previous (crashed / kill -9'd) process orphaned before we
+    // start allocating against the cap. Only the default (production) backend
+    // is reaped; tests inject their own backend and never reach here.
+    reapOrphansOnce(defaultBackend)
+  }
   return defaultBackend
+}
+
+/**
+ * Fire the backend's orphan reaper exactly once per process, fire-and-forget
+ * so the first acquire isn't latency-bound by it (#97 Gap 1). The reaper is
+ * safe by construction (label-scoped); see `DockerBackend.reapOrphans` for the
+ * multi-process caveat. Logs the count when it removes anything.
+ */
+function reapOrphansOnce(backend: ComputeBackend): void {
+  if (orphansReaped) return
+  orphansReaped = true
+  void backend
+    .reapOrphans()
+    .then((n) => {
+      if (n > 0) {
+        console.warn(`[sandbox] reaped ${n} orphaned container(s) from a prior process`)
+      }
+    })
+    .catch((err) => {
+      console.warn(
+        `[sandbox] orphan reap failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    })
 }
 function getDefaultPool(): WarmPool {
   if (!defaultPool) {
@@ -111,6 +142,18 @@ export function getDefaultAttachments(): AttachmentTable {
     })
   }
   return defaultAttachments
+}
+
+/**
+ * Test seam: drop the lazy default singletons and re-arm the one-shot orphan
+ * reaper so a test can observe a fresh first-build. Production never calls this.
+ */
+export function __resetSandboxDefaultsForTests(): void {
+  defaultBackend = null
+  defaultPool = null
+  defaultScheduler = null
+  defaultAttachments = null
+  orphansReaped = false
 }
 
 /**

@@ -19,7 +19,14 @@
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
-import type { ComputeBackend, McpTransport, RootfsId, RuntimeConfig, VMHandle } from './types'
+import type {
+  ComputeBackend,
+  HealthStatus,
+  McpTransport,
+  RootfsId,
+  RuntimeConfig,
+  VMHandle,
+} from './types'
 import type { WarmPool } from './warm-pool.server'
 
 assertServerOnImport()
@@ -66,9 +73,22 @@ export class AttachmentTable {
 
     const existing = this.table.get(id)
     if (existing) {
-      existing.refCount += 1
-      existing.lastUsedAt = Date.now()
-      return existing
+      // Liveness check before reuse (#97 Gap 2). A container can die out from
+      // under us between turns — host crash, external `docker rm`, OOM-kill.
+      // Reusing its dead transport would fail every tool call and wedge the
+      // session until idle-evict. On a non-healthy verdict, tear the stale
+      // entry down and fall through to a fresh boot; the new attachment is
+      // `isFirstBoot=true`, so the `withSandbox` syncWorkspace path re-hydrates
+      // /work transparently (#89). Costs ~1 `docker inspect` per reuse.
+      const health = await this.backend
+        .health(existing.vm)
+        .catch((): HealthStatus => ({ state: 'gone' }))
+      if (health.state === 'healthy') {
+        existing.refCount += 1
+        existing.lastUsedAt = Date.now()
+        return existing
+      }
+      await this.evictStale(existing)
     }
     const pending = this.inFlight.get(id)
     if (pending) {
@@ -109,6 +129,19 @@ export class AttachmentTable {
   release(att: Attachment): void {
     att.refCount = Math.max(0, att.refCount - 1)
     att.lastUsedAt = Date.now()
+  }
+
+  /**
+   * Drop a dead attachment found by the reuse health-check (#97 Gap 2).
+   * Unlike `destroyById`/`release`, this does NOT route through the pool: the
+   * container is already gone/unhealthy, so there is nothing to recycle —
+   * `backend.destroy` (idempotent `docker rm -f`) clears any lingering record.
+   * Removing it from the table lets the caller fall through to a fresh boot.
+   */
+  private async evictStale(att: Attachment): Promise<void> {
+    this.table.delete(att.id)
+    await att.transport.close().catch(() => {})
+    await this.backend.destroy(att.vm).catch(() => {})
   }
 
   /**
