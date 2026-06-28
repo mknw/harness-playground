@@ -1,16 +1,15 @@
 /**
  * Sandbox Session Agent (persistent)
  *
- * Like the Sandbox Demo agent, but the sandbox is **session-persistent**:
- * `withSandbox({ id: sessionId })` keys the VM to the conversation via the
- * shared AttachmentTable, so every turn reuses the same container with its
- * /work files, installed packages, and env intact — and it's the *same*
- * container the interactive Shell terminal attaches to (the PTY manager keys
- * on sessionId too). Write a file with the agent, then `cat` it in the
- * Terminal tab's Shell; both see one workspace.
+ * The sandbox is **session-persistent**: `withSandbox({ id: sessionId })` keys
+ * the VM to the conversation via the shared AttachmentTable, so every turn
+ * reuses the same container with its /work files, installed packages, and env
+ * intact — and it's the *same* container the interactive Shell terminal
+ * attaches to (the PTY manager keys on sessionId too). Write a file with the
+ * agent, then `cat` it in the Terminal tab's Shell; both see one workspace.
  *
- * Contrast with `sandbox-demo` (ephemeral): there each turn gets a fresh,
- * reset VM. Pick this agent when follow-ups should build on prior state.
+ * Contrast with an *ephemeral* sandbox (a fresh, reset VM per turn): pick this
+ * agent when follow-ups should build on prior state.
  */
 "use server";
 

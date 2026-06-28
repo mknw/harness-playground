@@ -127,29 +127,15 @@ export async function agentUsesCodeMode(
 // Import and register all example agents
 import { defaultAgent } from "./examples/default.server";
 import { codeModeAgent } from "./examples/code-mode.server";
-import { docAssistantAgent } from "./examples/doc-assistant.server";
 import { multiSourceResearchAgent } from "./examples/multi-source-research.server";
-import { guardrailedAgent } from "./examples/guardrailed-agent.server";
-import { issueTriageAgent } from "./examples/issue-triage.server";
 import { kgBuilderAgent } from "./examples/kg-builder.server";
-import { llmJudgeAgent } from "./examples/llm-judge.server";
 import { conversationalMemoryAgent } from "./examples/conversational-memory.server";
-import { ontologyBuilderAgent } from "./examples/ontology-builder.server";
-import { semanticCacheAgent } from "./examples/semantic-cache.server";
-import { sandboxDemoAgent } from "./examples/sandbox-demo.server";
 import { sandboxSessionAgent } from "./examples/sandbox-session.server";
 
 // Register all agents
 registerAgent(defaultAgent);
 registerAgent(codeModeAgent);
-registerAgent(docAssistantAgent);
 registerAgent(multiSourceResearchAgent);
-registerAgent(guardrailedAgent);
-registerAgent(issueTriageAgent);
 registerAgent(kgBuilderAgent);
-registerAgent(llmJudgeAgent);
 registerAgent(conversationalMemoryAgent);
-registerAgent(ontologyBuilderAgent);
-registerAgent(semanticCacheAgent);
-registerAgent(sandboxDemoAgent);
 registerAgent(sandboxSessionAgent);

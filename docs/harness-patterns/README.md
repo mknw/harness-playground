@@ -9,7 +9,7 @@ A functional, composable framework for building agentic tool execution pipelines
 | Document | Purpose |
 |----------|---------|
 | [API Reference](./api.md) | Types, patterns, tools, configuration |
-| [Examples](./examples.md) | 10 agent implementations |
+| [Examples](./examples.md) | 6 agent implementations |
 | [Frontend Integration](./frontend.md) | SolidStart server actions, components |
 
 ---
@@ -89,18 +89,14 @@ view.fromLastPattern().tools().last(3).get()
 
 ## Available Agents
 
-10 pre-built agents in the registry:
+6 pre-built agents in the registry:
 
 1. **Default** - Router with Neo4j, Web, Code Mode
-2. **Doc Assistant** - Context7 + Memory
+2. **Code Mode** - JS orchestration across MCP tools
 3. **Multi-Source Research** - Parallel search + Judge
-4. **LLM-as-Judge** - Multi-criteria evaluation
-5. **Guardrailed Editor** - 5-layer file editing safety
-6. **Conversational Memory** - Scratchpad + KB distillation
-7. **Issue Triage** - GitHub issue analysis
-8. **KG Builder** - Research → Extract → Persist
-9. **Ontology Builder** - Schema evolution
-10. **Semantic Cache** - Redis vector caching
+4. **Conversational Memory** - Scratchpad + KB distillation
+5. **KG Builder** - Research → Extract → Persist
+6. **Sandbox · Session** - Persistent VM workspace + xterm
 
 See [examples.md](./examples.md) for details.
 
