@@ -60,3 +60,35 @@ function patternUsesCodeMode<T>(pattern: ConfiguredPattern<T>): boolean {
   if (isCodeModeLoopConfig(pattern.config)) return true
   return usesCodeMode(pattern.children)
 }
+
+/** True when a pattern's resolved config is a `retriever` (it stamps
+ *  `patternId: 'retriever'`). */
+export function isRetrieverConfig(config: PatternConfig): boolean {
+  return config.patternId === 'retriever'
+}
+
+/** True when a retriever config is wired to the redis/local-vector backend —
+ *  the `retriever` stamps `backendKinds: string[]` (backend names) onto its
+ *  resolved config; `'redis'` means the local Data Stash vector path. */
+function isRedisRetrieverConfig(config: PatternConfig): boolean {
+  if (!isRetrieverConfig(config)) return false
+  const kinds = (config as PatternConfig & { backendKinds?: string[] }).backendKinds
+  return Array.isArray(kinds) && kinds.includes('redis')
+}
+
+/** True when any pattern in the (nested) graph is a `retriever`. */
+export function harnessHasRetriever<T>(patterns: ConfiguredPattern<T>[] | undefined): boolean {
+  if (!patterns || patterns.length === 0) return false
+  return patterns.some((p) => isRetrieverConfig(p.config) || harnessHasRetriever(p.children))
+}
+
+/**
+ * True when the harness contains a `retriever` wired to the redis/local-vector
+ * backend — the gate for auto-ingesting uploaded docs into the local vector
+ * store (a Supabase-only retriever reads from Supabase, so it doesn't trigger
+ * local ingest).
+ */
+export function harnessHasRedisRetriever<T>(patterns: ConfiguredPattern<T>[] | undefined): boolean {
+  if (!patterns || patterns.length === 0) return false
+  return patterns.some((p) => isRedisRetrieverConfig(p.config) || harnessHasRedisRetriever(p.children))
+}

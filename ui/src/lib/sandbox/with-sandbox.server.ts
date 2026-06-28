@@ -199,6 +199,9 @@ export function withSandbox(config?: WithSandboxConfig) {
       ...pattern,
       name: `withSandbox(${pattern.name})`,
       fn,
+      // Expose the wrapped pattern so static introspection (pattern-capabilities)
+      // can see patterns nested inside a sandbox wrapper.
+      children: [pattern],
     }
   }
 }

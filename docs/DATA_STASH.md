@@ -19,7 +19,8 @@ query ─────────────────────── embe
 | `chunking.server.ts` (#9) | Pure text chunking — `fixed` / `sentence` / `paragraph` + MIME-aware `chunkDocument` |
 | `embeddings.server.ts` (#8) | Provider-pluggable embedding with a one-model-per-corpus guard |
 | `vector-store.server.ts` | Shared RediSearch wrapper: `createVectorStore` → `ensureIndex` / `upsert` / `search`; owns the index/key/payload plumbing + naming (`spaceTag`) |
-| `document-ingest.server.ts` | Orchestrator: chunk → embed → vector store, and `searchDocuments` (KNN) |
+| `document-ingest.server.ts` | Orchestrator: chunk → embed → vector store, `searchDocuments` (KNN), and the status-tracked `ingestStashDocument` / `ensureSessionIngested` (harness-aware ingest) |
+| `retriever/redis-backend.server.ts`, `retriever/supabase-backend.server.ts` | `RetrieverBackend` impls for the harness `retriever` pattern — local Data Stash (`redis`, live) + company pgvector via the Supabase MCP (`supabase`, deferred stub) |
 | `stash/upload-service.server.ts`, `stash/http.server.ts` | Upload request parsing (multipart + JSON), auth/response helpers |
 
 ## API routes (`ui/src/routes/api/stash/`)
@@ -35,11 +36,42 @@ query ─────────────────────── embe
 | `POST /api/stash/ingest` | Chunk → embed → index a stored doc (`{sessionId, docId, chunk?, embedding?}`) |
 | `GET /api/stash/search?sessionId=&q=&k=` | KNN similarity search over a session's chunks |
 
-Auth follows the existing posture (dev-bypass aware; see `lib/auth/dev-bypass.ts`). Ingest is **explicit**, not auto-run on upload — it needs an embedding backend and binds the corpus to one model.
+Auth follows the existing posture (dev-bypass aware; see `lib/auth/dev-bypass.ts`). Ingest runs two ways: **explicitly** via `POST /api/stash/ingest`, or **automatically on upload** when the session's agent composes a `retriever` wired to the redis backend (see [Harness-aware ingest](#harness-aware-ingest-the-retriever-pattern) below). Either way it needs an embedding backend and binds the corpus to one model.
+
+## Harness-aware ingest (the `retriever` pattern)
+
+The Data Stash adapts to the agent's harness composition:
+
+- **Sandbox present** (`withSandbox` + `syncWorkspace`) → uploads are hydrated into the VM's `/work/in` on first boot (`hydrateWorkspace`, #89). No vector ingest implied.
+- **A `retriever` wired to the `redis` backend present** → uploads are **auto-ingested** into the local vector store so they're semantically searchable. An agent without such a retriever never ingests — the upload is just stored.
+- Both can hold at once (independent, composable).
+
+**The gate.** `POST /api/stash/upload`, after storing, resolves the session's agent (`loadSession` → `getOrBuildPatterns`) and checks `harnessHasRedisRetriever(patterns)` — static introspection in `harness-patterns/pattern-capabilities.ts` that walks `ConfiguredPattern.children` (the combinators — `routes`, `chain`, `withReferences`, `withSandbox` — all expose them). On a match it marks the doc `ingestStatus: 'pending'` and ingests **in the background** (the response returns immediately — embedding a large doc takes seconds). Base64 binaries are skipped (`failed`). Best-effort: any failure leaves the `201` untouched.
+
+**Safety net.** Docs uploaded *before* the agent was known (session not yet persisted) miss the gate. The redis backend runs `ensureSessionIngested` on its first search per session (idempotent via `ingestStatus`), so they still become searchable on first retrieval.
+
+**The pattern** (`harness-patterns/patterns/retriever.server.ts`) is framework-pure: it forms ONE query (compacted `scope.data.intent` → last user message → optional last-N turns), fans it out to injected `RetrieverBackend`s concurrently (per-backend error isolation), merges hits closest-first capped at `k`, sets `scope.data.matches`, and emits a `tool_result` the synthesizer consumes. It's a low-latency alternative to a tool-calling `simpleLoop` — one embed + KNN instead of a >30s LLM loop. Typical wiring (see `harness-client/examples/retriever-agent.server.ts`):
+
+```ts
+router({ retriever, neo4j, web_search }),
+routes({
+  retriever: chain(compactIntent(), retriever({ backends: [createRedisBackend(sessionId)], k: 5 })),
+  neo4j: simpleLoop(neo4jController, tools.neo4j),
+  web_search: simpleLoop(webController, tools.web),
+}),
+synthesizer({ mode: 'thread' }),
+```
+
+**Backends** (`ui/src/lib/retriever/`) implement `RetrieverBackend { name, type, search() }`:
+
+- **`redis`** (`createRedisBackend`, `type: 'vector'`) — wraps `searchDocuments` (local Data Stash KNN), embedding the query locally with the corpus's recorded model. **Live.**
+- **`supabase`** (`createSupabaseBackend`, `type: 'vector'`) — the company pgvector corpus via the **Supabase MCP** server; **text-in** (Supabase embeds server-side via Automatic Embeddings / Edge Functions, so no client-side embedding and no OpenAI provider here). **Deferred stub** pending IT access: when `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` land, add the Supabase MCP to `configs/custom-catalog.yaml` and implement `search()` against its match RPC. Until then `search()` throws and the retriever's per-backend guard turns it into an empty result + error event — a misconfigured backend never sinks a run.
+
+The `type` field distinguishes vector backends from future non-vector ones (web keyword, neo4j graph, raw SQL) — only `vector` backends embed.
 
 ## Storage model (Redis)
 
-- **Document**: RedisJSON blob at `stash:doc:{sessionId}:{docId}`, TTL default 7 days. `content` is UTF-8 text by default; binary files (xlsx, pdf, images) are stored with `encoding: 'base64'` and `size` = the original (decoded) byte count (#89). Binary content is byte-faithful but **not** semantically searchable — `POST /api/stash/ingest` rejects base64 docs (chunking/embedding is text-only).
+- **Document**: RedisJSON blob at `stash:doc:{sessionId}:{docId}`, TTL default 7 days. `content` is UTF-8 text by default; binary files (xlsx, pdf, images) are stored with `encoding: 'base64'` and `size` = the original (decoded) byte count (#89). Binary content is byte-faithful but **not** semantically searchable — `POST /api/stash/ingest` rejects base64 docs (chunking/embedding is text-only). An `ingestStatus` (`pending` | `indexed` | `failed`) is stamped when the harness-aware path ingests the doc; absent means it was never ingested (no redis-retriever in the harness).
 - **Session index**: a Redis SET `stash:docs:{sessionId}` of doc ids (self-healing — stale entries pruned on list).
 - **Chunk**: a Redis HASH `stashvec:{sessionId}:{spaceTag}:{docId}:{chunkIndex}` with `vector` (float blob) + `meta` (base64 of a JSON `{content, doc_id, source, chunk_index, offsets, model, provider, dim}`). 2 writes/chunk.
 - **Vector index**: a RediSearch HNSW index per `(session, embedding-space)`; `dim` matches the embedding model.
