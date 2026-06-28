@@ -108,7 +108,13 @@ export { DIRECT_RESPONSE_ROUTE } from './types'
 // Pattern capabilities (static introspection)
 // ============================================================================
 
-export { usesCodeMode, isCodeModeLoopConfig } from './pattern-capabilities'
+export {
+  usesCodeMode,
+  isCodeModeLoopConfig,
+  isRetrieverConfig,
+  harnessHasRetriever,
+  harnessHasRedisRetriever,
+} from './pattern-capabilities'
 
 // ============================================================================
 // Harness
@@ -136,6 +142,7 @@ export {
   runChain,
   synthesizer,
   compactIntent,
+  retriever,
   configurePattern,
   parallel,
   judge,
@@ -148,6 +155,10 @@ export {
   type ActorCriticData,
   type CompactIntentConfig,
   type CompactIntentData,
+  type RetrieverBackend,
+  type RetrieverConfig,
+  type RetrieverData,
+  type RetrievalHit,
   type ApprovalPredicate,
   type WithApprovalData,
   type JudgeConfig,

@@ -11,7 +11,13 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { usesCodeMode, isCodeModeLoopConfig } from '../../../lib/harness-patterns/pattern-capabilities'
+import {
+  usesCodeMode,
+  isCodeModeLoopConfig,
+  isRetrieverConfig,
+  harnessHasRetriever,
+  harnessHasRedisRetriever,
+} from '../../../lib/harness-patterns/pattern-capabilities'
 import type { ConfiguredPattern, PatternConfig } from '../../../lib/harness-patterns/types'
 
 type AnyPattern = ConfiguredPattern<Record<string, unknown>>
@@ -87,5 +93,69 @@ describe('usesCodeMode', () => {
       ]),
     ]
     expect(usesCodeMode(tree)).toBe(true)
+  })
+})
+
+describe('isRetrieverConfig', () => {
+  it('flags the retriever patternId', () => {
+    expect(isRetrieverConfig({ patternId: 'retriever' } as PatternConfig)).toBe(true)
+  })
+  it('does NOT flag other patterns', () => {
+    expect(isRetrieverConfig({ patternId: 'neo4j-query' } as PatternConfig)).toBe(false)
+    expect(isRetrieverConfig({} as PatternConfig)).toBe(false)
+  })
+})
+
+describe('harnessHasRetriever', () => {
+  it('returns false for empty / undefined / retriever-free graphs', () => {
+    expect(harnessHasRetriever(undefined)).toBe(false)
+    expect(harnessHasRetriever([])).toBe(false)
+    expect(
+      harnessHasRetriever([pat('router', {}), pat('routes', {}, [pat('simpleLoop', { patternId: 'neo4j-query' })])]),
+    ).toBe(false)
+  })
+
+  it('detects a retriever nested router → routes → chain', () => {
+    const tree = [
+      pat('router', {}),
+      pat('routes(retriever|neo4j)', {}, [
+        pat('chain', {}, [
+          pat('compactIntent', { patternId: 'retriever-intent' }),
+          pat('retriever', { patternId: 'retriever', backendKinds: ['redis'] }),
+        ]),
+        pat('simpleLoop', { patternId: 'neo4j-query' }),
+      ]),
+    ]
+    expect(harnessHasRetriever(tree)).toBe(true)
+  })
+
+  it('detects a top-level retriever leaf', () => {
+    expect(harnessHasRetriever([pat('retriever', { patternId: 'retriever' })])).toBe(true)
+  })
+})
+
+describe('harnessHasRedisRetriever', () => {
+  const nest = (retrieverConfig: Record<string, unknown>) => [
+    pat('router', {}),
+    pat('routes', {}, [pat('chain', {}, [pat('retriever', retrieverConfig)])]),
+  ]
+
+  it('is true only when a retriever lists the redis backend', () => {
+    expect(harnessHasRedisRetriever(nest({ patternId: 'retriever', backendKinds: ['redis'] }))).toBe(true)
+    expect(
+      harnessHasRedisRetriever(nest({ patternId: 'retriever', backendKinds: ['supabase', 'redis'] })),
+    ).toBe(true)
+  })
+
+  it('is false for a non-redis (e.g. supabase-only) retriever', () => {
+    expect(harnessHasRedisRetriever(nest({ patternId: 'retriever', backendKinds: ['supabase'] }))).toBe(false)
+  })
+
+  it('is false when backendKinds is absent', () => {
+    expect(harnessHasRedisRetriever(nest({ patternId: 'retriever' }))).toBe(false)
+  })
+
+  it('is false for a graph with no retriever at all', () => {
+    expect(harnessHasRedisRetriever([pat('router', {}), pat('simpleLoop', { patternId: 'neo4j-query' })])).toBe(false)
   })
 })

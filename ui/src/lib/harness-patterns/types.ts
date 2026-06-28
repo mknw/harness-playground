@@ -687,7 +687,10 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   routes: false,
   chain: false,
   withApproval: true,
-  compactIntent: 'intent_compacted'
+  compactIntent: 'intent_compacted',
+  // The retriever's matches are surfaced as a tool_result (the channel the
+  // synthesizer reads via view.fromLastPattern()) — same as a simpleLoop tool.
+  retriever: ['tool_result']
 }
 
 /** Default commitStrategy by pattern type */
@@ -699,7 +702,8 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   routes: 'always',
   chain: 'always',
   withApproval: 'on-success',
-  compactIntent: 'always'
+  compactIntent: 'always',
+  retriever: 'always'
 }
 
 /** Default errorSeverity by pattern type.
@@ -716,4 +720,7 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   // compactIntent is best-effort: on failure it leaves intent unset and the
   // downstream actor falls back to the raw user message — never fatal.
   compactIntent: 'recoverable',
+  // retriever is best-effort: a backend failure yields empty matches and the
+  // synthesizer answers from whatever else is in context — never fatal.
+  retriever: 'recoverable',
 }

@@ -64,7 +64,16 @@ export interface StashDocumentMeta {
    * byte-faithful storage, which the text-only upload path could not provide.
    */
   encoding?: 'utf8' | 'base64'
+  /**
+   * Vector-ingestion status (chunk→embed→index into the local Data Stash vector
+   * store). Set by the harness-aware auto-ingest path: `'pending'` queued/in
+   * progress, `'indexed'` searchable, `'failed'` ingest errored (e.g. embedder
+   * offline). Absent → never ingested (no redis-retriever in the harness).
+   */
+  ingestStatus?: IngestStatus
 }
+
+export type IngestStatus = 'pending' | 'indexed' | 'failed'
 
 /** A stored document: metadata + its (already text-extracted) content. */
 export interface StashDocument extends StashDocumentMeta {
@@ -386,7 +395,7 @@ export async function listDocuments(
 export async function setDocumentFlags(
   sessionId: string,
   docId: string,
-  patch: { hidden?: boolean; archived?: boolean },
+  patch: { hidden?: boolean; archived?: boolean; ingestStatus?: IngestStatus },
   callTool: CallTool = defaultCallTool,
 ): Promise<StashDocument | null> {
   const doc = await getDocument(sessionId, docId, callTool)
@@ -394,6 +403,7 @@ export async function setDocumentFlags(
 
   if (patch.hidden !== undefined) doc.hidden = patch.hidden
   if (patch.archived !== undefined) doc.archived = patch.archived
+  if (patch.ingestStatus !== undefined) doc.ingestStatus = patch.ingestStatus
 
   // Rewriting via json_set at `$` would clear any existing expiry, so we
   // re-apply a TTL. There is no `ttl` tool on the Redis MCP surface to read the

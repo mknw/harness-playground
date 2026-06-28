@@ -1,0 +1,135 @@
+/**
+ * Retriever Agent
+ *
+ * Router-based agent that adds a fast, low-latency **retriever** route alongside
+ * the Neo4j and Web Search loops of the default agent. The retriever does ONE
+ * embedding + KNN over the session's ingested Data Stash uploads — seconds, not
+ * the 30s+ a Neo4j `simpleLoop` can take — and hands matches-with-references to
+ * the synthesizer.
+ *
+ * Harness-aware Data Stash: because this agent composes a `retriever` wired to
+ * the **redis** (local-vector) backend, uploads to its sessions auto-ingest into
+ * the local vector store (see `routes/api/stash/upload.ts` →
+ * `harnessHasRedisRetriever`). An agent WITHOUT a redis retriever never triggers
+ * ingest — the upload is just stored.
+ *
+ * Composition:
+ *   router({ retriever | neo4j | web_search })
+ *     → routes({
+ *         retriever:  chain(compactIntent(), retriever({ backends:[redis] })),
+ *         neo4j:      simpleLoop(neo4j),
+ *         web_search: simpleLoop(web),
+ *       })
+ *     → synthesizer('thread')
+ *
+ * `chain(compactIntent(), retriever())` rephrases the conversation into a clean
+ * search query (one cheap Haiku/Sonnet call) before the vector search — reusing
+ * the existing `compactIntent` pattern rather than a bespoke query step.
+ *
+ * The Supabase backend (company pgvector via the Supabase MCP) is a deferred
+ * stub; add `createSupabaseBackend()` to `backends` once IT provides access.
+ */
+"use server";
+
+import {
+  router,
+  routes,
+  chain,
+  simpleLoop,
+  compactIntent,
+  retriever,
+  synthesizer,
+  withReferences,
+  Tools,
+  callTool,
+  createNeo4jController,
+  createWebSearchController,
+  type ConfiguredPattern,
+} from "../../harness-patterns";
+import type { SessionData } from "../session.server";
+import type { AgentConfig } from "../registry.server";
+import { NEO4J_FEW_SHOTS_DEFAULT } from "./neo4j-fewshots.server";
+import { enrichNeo4jResult } from "../neo4j-enricher.server";
+import { createRedisBackend } from "../../retriever";
+
+async function getSchema(): Promise<string> {
+  const result = await callTool("get_neo4j_schema", {});
+  return result.success ? JSON.stringify(result.data) : "";
+}
+
+async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
+  const tools = await Tools();
+  const schema = await getSchema();
+
+  // ── retriever route: rephrase → vector search over this session's uploads ──
+  const redisBackend = createRedisBackend(sessionId);
+  const retrieverPattern = chain<SessionData>(
+    compactIntent<SessionData>({ patternId: "retriever-intent", liveEvents: true }),
+    retriever<SessionData>({
+      patternId: "retriever",
+      backends: [redisBackend],
+      k: 5,
+      liveEvents: true,
+    }),
+  );
+
+  // ── neo4j + web routes: identical to the default agent ──
+  const neo4jController = createNeo4jController(tools.neo4j ?? []);
+  const webTools = tools.web ?? [];
+  const webController = createWebSearchController(webTools);
+
+  const neo4jPattern = simpleLoop<SessionData>(neo4jController, tools.neo4j ?? [], {
+    patternId: "neo4j-query",
+    schema,
+    liveEvents: true,
+    rememberPriorTurns: false,
+    fewShots: NEO4J_FEW_SHOTS_DEFAULT,
+    onToolResult: enrichNeo4jResult,
+  });
+
+  const webPattern = simpleLoop<SessionData>(webController, webTools, {
+    patternId: "web-search",
+    liveEvents: true,
+    rememberPriorTurns: false,
+  });
+
+  const routerPattern = router<SessionData>(
+    {
+      retriever:
+        "Answer from the user's uploaded documents (the Data Stash) — fast semantic search over ingested files",
+      neo4j: "Database queries and graph operations",
+      web_search: "Web lookups and information retrieval",
+    },
+    { liveEvents: true },
+  );
+
+  const routesPattern = routes<SessionData>(
+    {
+      // The retriever does its own context-scoped search, so it isn't wrapped
+      // in `withReferences` (which injects prior tool_results) — unlike the
+      // neo4j / web loops, which benefit from cross-turn reference curation.
+      retriever: retrieverPattern,
+      neo4j: withReferences<SessionData>(neo4jPattern, { scope: "global", liveEvents: true }),
+      web_search: withReferences<SessionData>(webPattern, { scope: "global", liveEvents: true }),
+    },
+    { liveEvents: true },
+  );
+
+  const responseSynth = synthesizer<SessionData>({
+    mode: "thread",
+    patternId: "response-synth",
+    liveEvents: true,
+  });
+
+  return [routerPattern, routesPattern, responseSynth];
+}
+
+export const retrieverAgent: AgentConfig = {
+  id: "retriever",
+  name: "Retriever Agent",
+  description:
+    "Fast semantic retrieval over uploaded documents (Data Stash), with Neo4j and Web Search routes",
+  icon: "🔎",
+  servers: ["neo4j-cypher", "web_search", "fetch"],
+  createPatterns,
+};

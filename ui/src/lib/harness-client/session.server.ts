@@ -12,7 +12,7 @@
  */
 
 import { assertServerOnImport } from '../harness-patterns/assert.server'
-import type { ConfiguredPattern, WithApproval } from '../harness-patterns'
+import type { ConfiguredPattern, WithApproval, RetrieverData } from '../harness-patterns'
 import type { HarnessData } from '../harness-patterns/harness.server'
 import type { RouterData } from '../harness-patterns/patterns/router.server'
 import type { SimpleLoopData } from '../harness-patterns/patterns'
@@ -32,7 +32,12 @@ assertServerOnImport()
 // Types
 // ============================================================================
 
-export interface SessionData extends HarnessData, RouterData, SimpleLoopData, WithApproval {
+export interface SessionData
+  extends HarnessData,
+    RouterData,
+    SimpleLoopData,
+    RetrieverData,
+    WithApproval {
   response?: string
   /** User-curated allowlist for the code-mode actor's tool selection.
    *  Undefined → fall back to the agent's hardcoded CODE_MODE_TOOLS. Set

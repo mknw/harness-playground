@@ -28,7 +28,14 @@
 
 import { assertServerOnImport } from './harness-patterns/assert.server'
 import { callTool as defaultCallTool } from './harness-patterns/mcp-client.server'
-import { DEFAULT_TTL_SECONDS, type CallTool, type StashDocument } from './document-store.server'
+import {
+  DEFAULT_TTL_SECONDS,
+  getDocument,
+  listDocuments,
+  setDocumentFlags,
+  type CallTool,
+  type StashDocument,
+} from './document-store.server'
 import { chunkDocument, type Chunk, type ChunkConfig } from './chunking.server'
 import {
   embed as defaultEmbed,
@@ -211,6 +218,67 @@ export async function ingestDocument(
     space,
     indexName,
     prefix,
+  }
+}
+
+// ============================================================================
+// Status-tracked ingest (harness-aware Data Stash)
+// ============================================================================
+
+/**
+ * Fetch a stored document and ingest it, recording the outcome as the doc's
+ * {@link StashDocument.ingestStatus}. The status-aware wrapper around
+ * {@link ingestDocument} used by the auto-ingest-on-upload gate and the
+ * retriever's lazy safety net:
+ *
+ *  - missing doc            → `null` (nothing to do)
+ *  - `base64` binary        → status `'failed'` (the text pipeline can't chunk
+ *                             binary; mark it so we don't retry forever)
+ *  - ingest throws          → status `'failed'`, returns `null`
+ *  - ingest ok              → status `'indexed'`, returns the {@link IngestResult}
+ *
+ * Best-effort by contract: it never throws (failures live in the status field),
+ * so callers on the upload hot path don't need their own try/catch.
+ */
+export async function ingestStashDocument(
+  sessionId: string,
+  docId: string,
+  opts: IngestOptions = {},
+): Promise<IngestResult | null> {
+  const callTool = opts.callTool ?? defaultCallTool
+  const doc = await getDocument(sessionId, docId, callTool)
+  if (!doc) return null
+  if (doc.encoding === 'base64') {
+    await setDocumentFlags(sessionId, docId, { ingestStatus: 'failed' }, callTool)
+    return null
+  }
+  try {
+    const result = await ingestDocument(doc, opts)
+    await setDocumentFlags(sessionId, docId, { ingestStatus: 'indexed' }, callTool)
+    return result
+  } catch {
+    await setDocumentFlags(sessionId, docId, { ingestStatus: 'failed' }, callTool)
+    return null
+  }
+}
+
+/**
+ * Idempotently ingest every not-yet-indexed document in a session. The
+ * retriever's safety net: an upload that happened before the agent was known
+ * (so the upload-time gate couldn't fire) still becomes searchable on first
+ * retrieval. Skips docs already `'indexed'` or `'failed'` (terminal) and binary
+ * uploads, so a fully-indexed corpus costs just one `listDocuments`.
+ */
+export async function ensureSessionIngested(
+  sessionId: string,
+  opts: IngestOptions = {},
+): Promise<void> {
+  const callTool = opts.callTool ?? defaultCallTool
+  const metas = await listDocuments(sessionId, callTool)
+  for (const m of metas) {
+    if (m.ingestStatus === 'indexed' || m.ingestStatus === 'failed') continue
+    if (m.encoding === 'base64') continue
+    await ingestStashDocument(sessionId, m.id, opts)
   }
 }
 

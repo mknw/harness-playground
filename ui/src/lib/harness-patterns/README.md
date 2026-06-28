@@ -37,6 +37,7 @@ Functional, composable framework for agentic tool execution.
   - [withReferences()](#withreferencespattern-config)
   - [synthesizer()](#synthesizerconfig)
   - [compactIntent()](#compactintentconfig)
+  - [retriever()](#retrieverconfig)
   - [router()](#routerroutedescriptions-config)
   - [routes()](#routespatternmap-config)
   - [chain()](#chainctx-patterns)
@@ -537,6 +538,52 @@ type CompactIntentConfig = PatternConfig
 > Agents that already route don't need it — `router` fills `data.intent` itself.
 > Part E of [#83](https://github.com/mknw/harness-playground/issues/83) (the
 > `compact*` naming unification) is a deferred follow-up.
+
+### `retriever(config)`
+
+A low-latency alternative to a tool-calling `simpleLoop`: instead of an LLM loop
+deciding which DB tool to call (often >30s for a Neo4j loop), the retriever forms
+ONE query from context and fans it out to one or more injected **backends**,
+returning normalized matches-with-references for a downstream `synthesizer`.
+
+```typescript
+chain(
+  compactIntent(),                                   // rephrase → scope.data.intent
+  retriever({ backends: [redisBackend], k: 5 }),     // embed + KNN, no LLM loop
+)
+
+interface RetrieverConfig extends PatternConfig {
+  backends: RetrieverBackend[]   // injected DB sources (app-side)
+  k?: number                     // max hits, default 5
+  turnWindow?: number            // widen the query to the last N user turns
+}
+interface RetrieverBackend {
+  name: string
+  type: 'vector' | 'keyword' | 'graph' | 'web'   // only 'vector' backends embed
+  search(q: { text: string; intent?: string }, opts: { k: number }): Promise<RetrievalHit[]>
+}
+```
+
+**How it works:**
+1. **Query**: prefers the upstream compacted `scope.data.intent`; falls back to
+   the last `user_message`, or the last `turnWindow` user turns joined.
+2. **Fan-out**: `Promise.all` over the backends. A failing backend yields `[]`
+   plus an `error` event (per-backend isolation) — one bad source never sinks
+   the retrieval.
+3. **Merge**: flatten, sort closest-first (`score` ascending; un-scored last),
+   cap at `k`. Writes `scope.data.matches` and emits a `tool_result`
+   (`tool: 'retriever'`) — the same channel `synthesizer` reads via
+   `view.fromLastPattern()`.
+
+Framework-pure: concrete backends live app-side (`ui/src/lib/retriever/` —
+`createRedisBackend` is live; `createSupabaseBackend` is a deferred stub). The
+resolved config carries a `backendKinds: string[]` marker so
+`harnessHasRedisRetriever` (pattern-capabilities) can gate the Data Stash's
+auto-ingest-on-upload. **Best-effort / `recoverable`**: on total failure it
+leaves `matches` empty and the synthesizer answers from the rest of context.
+
+> See [`docs/DATA_STASH.md → Harness-aware ingest`](../../../../docs/DATA_STASH.md)
+> for the upload-side gate and the `redis` / `supabase` backends.
 
 ### `router(routeDescriptions, config?)`
 
