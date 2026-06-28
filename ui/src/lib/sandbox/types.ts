@@ -116,6 +116,16 @@ export interface ComputeBackend {
   /** Tunneled connection to the in-VM MCP servers. */
   connectMcp(vm: VMHandle): Promise<McpTransport>
   health(vm: VMHandle): Promise<HealthStatus>
+  /**
+   * Remove sandbox containers orphaned by a *previous* process. A dev-server
+   * crash / kill -9 loses the in-memory AttachmentTable + WarmPool that would
+   * have torn its `--rm` containers down, so they keep running idle and pile
+   * up against `globalCap`. Implementations identify their own containers by a
+   * stable label and force-remove them. Returns the count removed. Called once
+   * at process start, before any sandbox is acquired — see
+   * with-sandbox.server.ts → `reapOrphansOnce` and #97 Gap 1.
+   */
+  reapOrphans(): Promise<number>
 }
 
 // ============================================================================

@@ -42,6 +42,7 @@ function makeBackend(overrides: Partial<ComputeBackend> = {}): ComputeBackend {
       throw new Error('not used in warm-pool tests')
     }),
     health: vi.fn(async (_vm: VMHandle): Promise<HealthStatus> => ({ state: 'healthy' })),
+    reapOrphans: vi.fn(async () => 0),
     ...overrides,
   }
   return backend
