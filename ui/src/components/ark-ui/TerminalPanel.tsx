@@ -49,6 +49,9 @@ export interface TerminalPanelProps {
   events: ContextEvent[]
   /** Active session id — required to open an interactive shell. */
   sessionId?: string
+  /** Active agent id — lets the Shell hydrate /work for durable-workspace
+   *  agents when it boots the container first (#97 Gap 3). */
+  agentId?: string
 }
 
 function isSandboxTool(name: unknown): name is string {
@@ -279,7 +282,7 @@ export const TerminalPanel = (props: TerminalPanelProps) => {
       >
         {/* Interactive shell — mounts the xterm bound to this session's PTY */}
         <div flex="1" overflow="hidden">
-          <InteractiveTerminal sessionId={props.sessionId!} />
+          <InteractiveTerminal sessionId={props.sessionId!} agentId={props.agentId} />
         </div>
       </Show>
     </div>

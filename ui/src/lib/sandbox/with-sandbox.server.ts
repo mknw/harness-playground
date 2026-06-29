@@ -28,6 +28,7 @@ import { hydrateWorkspace, snapshotOutputs, promoteOutputs } from './work-artifa
 import type { ComputeBackend, RootfsId, RuntimeConfig } from './types'
 import type {
   ConfiguredPattern,
+  PatternConfig,
   PatternScope,
   EventView,
 } from '../harness-patterns/types'
@@ -200,6 +201,10 @@ export function withSandbox(config?: WithSandboxConfig) {
     const id = config?.id
     const fresh = config?.fresh === true
     const syncWorkspace = config?.syncWorkspace === true
+    // Durable-workspace sync only runs on the id-addressable path (hydrate on
+    // first boot, promote on exit — see runWithIdAttachment). The capability
+    // marker below reflects that reality: syncWorkspace without an id is a no-op.
+    const willSyncWorkspace = syncWorkspace && id !== undefined
 
     const fn = async (
       scope: PatternScope<T>,
@@ -245,6 +250,15 @@ export function withSandbox(config?: WithSandboxConfig) {
       // Expose the wrapped pattern so static introspection (pattern-capabilities)
       // can see patterns nested inside a sandbox wrapper.
       children: [pattern],
+      // When durable workspaces are active, stamp a marker the registry's
+      // `agentUsesSyncWorkspace` reads so the interactive Shell knows to hydrate
+      // /work on a first boot it triggers (#97 Gap 3). Stamped only when it will
+      // sync, so the wrapper stays config-transparent otherwise; the spread
+      // suppresses the excess-property check (mirrors the retriever's
+      // `backendKinds`).
+      ...(willSyncWorkspace
+        ? { config: { ...pattern.config, sandboxSyncWorkspace: true } as PatternConfig }
+        : {}),
     }
   }
 }
