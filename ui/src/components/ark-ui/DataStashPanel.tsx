@@ -387,6 +387,8 @@ const IconGallery = (props: { items: ToolResultItem[]; onAction: (id: string, ac
 const DocChip = (props: {
   doc: StashDocumentMeta
   onAction: (id: string, action: DocAction) => Promise<void>
+  onView: () => void
+  active?: boolean
 }) => {
   const d = () => props.doc
   const grayed = () => !!(d().hidden || d().archived)
@@ -425,6 +427,36 @@ const DocChip = (props: {
 
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
+      {/* "Eye" — open the inline file viewer. Text docs only (binary has no
+          text view). Stops propagation so it doesn't also open the chip menu. */}
+      <Show when={d().encoding !== 'base64'}>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            props.onView()
+          }}
+          title="View file"
+          style={{
+            position: 'absolute',
+            top: '0px',
+            right: '0px',
+            'z-index': '6',
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            padding: '2px',
+            'line-height': '0',
+            opacity: props.active ? '1' : '0.55',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = props.active ? '1' : '0.55')}
+        >
+          <span
+            class={props.active ? 'i-mdi-eye' : 'i-mdi-eye-outline'}
+            style={{ width: '13px', height: '13px', color: '#22d3ee', display: 'block' }}
+          />
+        </button>
+      </Show>
       {/* Native title tooltip — keeps the chip simple; Ark's Tooltip is used by
           the tool-result chips above. */}
       <div
@@ -436,8 +468,8 @@ const DocChip = (props: {
         w="16"
         cursor="pointer"
         rounded="lg"
-        bg={menuOpen() ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-secondary'}
-        border={menuOpen() ? '1 dark-border-secondary' : '1 transparent hover:dark-border-primary'}
+        bg={props.active ? 'dark-bg-tertiary' : menuOpen() ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-secondary'}
+        border={props.active || menuOpen() ? '1 dark-border-secondary' : '1 transparent hover:dark-border-primary'}
         transition="all"
         opacity={grayed() ? '35' : loading() ? '50' : '100'}
         onClick={() => setMenuOpen(!menuOpen())}
@@ -563,6 +595,143 @@ const DocChip = (props: {
 }
 
 // ============================================================================
+// Inline File Viewer — raw text + line numbers, scrollable, reference-highlighted
+// ============================================================================
+
+/** A char range to highlight in the viewer (from a retrieval reference). Line
+ *  numbers are derived here, after the file content is fetched. */
+export interface ViewerHighlight {
+  startOffset: number
+  endOffset: number
+}
+
+const FileViewer = (props: {
+  sessionId: string
+  doc: StashDocumentMeta
+  highlight?: ViewerHighlight
+  onClose: () => void
+}) => {
+  const [content, setContent] = createSignal<string | null>(null)
+  const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(true)
+
+  // Fetch the full document text on open / when the target doc changes.
+  createEffect(() => {
+    const id = props.doc.id
+    const sid = props.sessionId
+    setLoading(true)
+    setError(null)
+    setContent(null)
+    fetch(`/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d: { content?: string; encoding?: string }) => {
+        if (d.encoding === 'base64') setError('Binary file — no text preview')
+        else setContent(d.content ?? '')
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load file'))
+      .finally(() => setLoading(false))
+  })
+
+  const lines = createMemo(() => (content() ?? '').split('\n'))
+
+  // Char offsets → 1-based inclusive line range (the chunker's offsets satisfy
+  // content === docText.slice(start, end)).
+  const hlRange = createMemo(() => {
+    const c = content()
+    const h = props.highlight
+    if (!c || !h) return null
+    const start = Math.max(0, Math.min(h.startOffset, c.length))
+    const end = Math.max(start, Math.min(h.endOffset, c.length))
+    return {
+      startLine: c.slice(0, start).split('\n').length,
+      endLine: c.slice(0, end).split('\n').length,
+    }
+  })
+
+  // Scroll the first highlighted line into view once content + ref are ready.
+  let firstHot: HTMLDivElement | undefined
+  createEffect(() => {
+    if (content() && hlRange() && firstHot) firstHot.scrollIntoView({ block: 'center' })
+  })
+
+  return (
+    <div border="t dark-border-primary" bg="dark-bg-secondary" flex="~ col" style={{ 'max-height': '340px' }}>
+      <div flex="~" items="center" gap="2" p="x-3 y-2" bg="dark-bg-tertiary" border="b dark-border-primary">
+        <span
+          class={getDocIcon(props.doc.mimeType, props.doc.filename)}
+          style={{ width: '14px', height: '14px', color: '#34d399', 'flex-shrink': '0' }}
+        />
+        <span text="xs dark-text-secondary" font="mono" style={{ flex: '1', 'word-break': 'break-all' }}>
+          {props.doc.filename}
+        </span>
+        <Show when={hlRange()}>
+          {(r) => (
+            <span text="xs" style={{ color: '#f59e0b', 'font-family': 'monospace' }}>
+              L{r().startLine}{r().endLine !== r().startLine ? `–${r().endLine}` : ''}
+            </span>
+          )}
+        </Show>
+        <button
+          onClick={() => props.onClose()}
+          title="Close viewer"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#71717a', 'font-size': '13px', 'line-height': '1', padding: '2px 4px' }}
+        >
+          ✕
+        </button>
+      </div>
+      <div
+        style={{ overflow: 'auto', 'font-family': '"Fira Code", ui-monospace, monospace', 'font-size': '11px', 'line-height': '1.55' }}
+      >
+        <Show when={loading()}>
+          <div p="3" flex="~" items="center" gap="2" text="xs dark-text-tertiary">
+            <span class="i-mdi-loading" style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />
+            <span>Loading file…</span>
+          </div>
+        </Show>
+        <Show when={error()}>
+          <div p="3" text="xs red-400">{error()}</div>
+        </Show>
+        <Show when={content() !== null}>
+          <For each={lines()}>
+            {(line, i) => {
+              const n = i() + 1
+              const r = hlRange()
+              const hot = !!r && n >= r.startLine && n <= r.endLine
+              return (
+                <div
+                  ref={(el) => {
+                    if (r && n === r.startLine) firstHot = el
+                  }}
+                  flex="~"
+                  style={{ background: hot ? 'rgba(245,158,11,0.13)' : 'transparent' }}
+                >
+                  <span
+                    style={{
+                      width: '42px',
+                      'flex-shrink': '0',
+                      'text-align': 'right',
+                      padding: '0 8px',
+                      color: '#52525b',
+                      'user-select': 'none',
+                      'border-right': hot ? '2px solid #f59e0b' : '2px solid transparent',
+                    }}
+                  >
+                    {n}
+                  </span>
+                  <span style={{ 'white-space': 'pre-wrap', 'word-break': 'break-word', padding: '0 10px', color: '#d4d4d8', flex: '1' }}>
+                    {line || ' '}
+                  </span>
+                </div>
+              )
+            }}
+          </For>
+        </Show>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================================
 // Upload Zone — file picker + drag-and-drop (Issue #6)
 // ============================================================================
 
@@ -671,11 +840,19 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   const [watching, setWatching] = createSignal(false)
   let watchTimer: ReturnType<typeof setTimeout> | undefined
   let inFlight = false
+  // Inline file viewer: which doc is open + an optional char range to highlight.
+  const [viewer, setViewer] = createSignal<{ doc: StashDocumentMeta; highlight?: ViewerHighlight } | null>(null)
 
   const applyDocs = (sid: string, list: StashDocumentMeta[]) => {
     docCache.set(sid, list)
     if (sid === props.sessionId) setDocs(list)
   }
+
+  // Close the viewer if its doc disappears (deleted) or the session changes.
+  createEffect(() => {
+    const v = viewer()
+    if (v && !docs().some((d) => d.id === v.doc.id)) setViewer(null)
+  })
 
   // Single-flight background refresh. Shows a spinner only on the cold load
   // (nothing cached yet); otherwise updates silently behind the cached view.
@@ -851,9 +1028,27 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         <Show when={docs().length > 0}>
           <div flex="~ wrap" gap="2" p="x-3 y-2">
             <For each={docs()}>
-              {(doc) => <DocChip doc={doc} onAction={handleDocAction} />}
+              {(doc) => (
+                <DocChip
+                  doc={doc}
+                  onAction={handleDocAction}
+                  onView={() => setViewer((v) => (v?.doc.id === doc.id ? null : { doc }))}
+                  active={viewer()?.doc.id === doc.id}
+                />
+              )}
             </For>
           </div>
+        </Show>
+        {/* Inline viewer for the open file — full width, below the gallery. */}
+        <Show when={viewer()}>
+          {(v) => (
+            <FileViewer
+              sessionId={props.sessionId}
+              doc={v().doc}
+              highlight={v().highlight}
+              onClose={() => setViewer(null)}
+            />
+          )}
         </Show>
         {/* Cold-load only — never blocks the drop zone (background refresh). */}
         <Show when={loading() && docs().length === 0}>
