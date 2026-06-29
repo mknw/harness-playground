@@ -317,6 +317,7 @@ export async function storeDocument(
     throw new Error(`Failed to index document: ${idxErr}`)
   }
 
+  invalidateDocumentList(doc.sessionId)
   return doc
 }
 
@@ -352,15 +353,39 @@ export async function getDocumentMeta(
   return stripContent(doc)
 }
 
+// ── listDocuments cache ──────────────────────────────────────────────────
+// listDocuments is `smembers` + one `json_get` per doc, all serial on the MCP
+// gateway (~1.6s/call) → 12-21s for a handful of docs. The panel refetches it
+// (mount, status polls), so without a cache every refresh re-pays that. Cache
+// the result per session in-process; invalidate on any write. Only cache reads
+// that use the real gateway client — tests inject a fake `callTool` and must not
+// share state across cases.
+interface ListCacheEntry {
+  docs: StashDocumentMeta[]
+  at: number
+}
+const listCache = new Map<string, ListCacheEntry>()
+const LIST_CACHE_TTL_MS = 30_000
+
+/** Drop a session's cached document list (call after any write). */
+export function invalidateDocumentList(sessionId: string): void {
+  listCache.delete(sessionId)
+}
+
 /**
  * List metadata for every (non-expired) document in a session. Documents whose
  * keys have expired but linger in the index are pruned from the index as a
- * side-effect, so the index self-heals.
+ * side-effect, so the index self-heals. Cached per session (see above).
  */
 export async function listDocuments(
   sessionId: string,
   callTool: CallTool = defaultCallTool,
 ): Promise<StashDocumentMeta[]> {
+  const cacheable = callTool === defaultCallTool
+  if (cacheable) {
+    const hit = listCache.get(sessionId)
+    if (hit && Date.now() - hit.at < LIST_CACHE_TTL_MS) return hit.docs
+  }
   const members = await callTool('smembers', { name: indexKey(sessionId) })
   if (!members.success) return []
 
@@ -379,6 +404,7 @@ export async function listDocuments(
 
   // Newest first, matching the conversations list ordering.
   out.sort((a, b) => b.uploadedAt - a.uploadedAt)
+  if (cacheable) listCache.set(sessionId, { docs: out, at: Date.now() })
   return out
 }
 
@@ -420,6 +446,7 @@ export async function setDocumentFlags(
   if (setErr) {
     throw new Error(`Failed to update document: ${setErr}`)
   }
+  invalidateDocumentList(sessionId)
   return doc
 }
 
@@ -436,6 +463,7 @@ export async function deleteDocument(
   // `delete` uses `key` (not `name`) — see CLAUDE.md Redis quirks.
   await callTool('delete', { key: docKey(sessionId, docId) })
   await callTool('srem', { name: indexKey(sessionId), value: docId })
+  invalidateDocumentList(sessionId)
 }
 
 // ============================================================================

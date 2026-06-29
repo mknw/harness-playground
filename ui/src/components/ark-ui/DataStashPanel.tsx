@@ -11,7 +11,7 @@
  * Hovering shows the LLM summary (or a raw preview if no summary yet).
  */
 
-import { For, Show, createSignal, createMemo, createResource, createEffect, onCleanup } from 'solid-js'
+import { For, Show, createSignal, createMemo, createEffect, onCleanup } from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
 import type { ContextEvent, ToolResultEventData } from '~/lib/harness-patterns'
@@ -640,6 +640,14 @@ const UploadZone = (props: {
 // Main Component
 // ============================================================================
 
+// Client-side cache of a session's uploaded-doc list. Ark's Tabs unmounts the
+// inactive tab, so this panel re-mounts every time it's selected — without the
+// cache, each re-mount re-ran a ~12s `listDocuments` and the Suspense boundary
+// flashed "Loading data…". We seed the signal from the cache (instant) and
+// refresh in the background, so re-selecting the tab is immediate and never
+// blanks the panel. (No suspending resource → the Suspense fallback never fires.)
+const docCache = new Map<string, StashDocumentMeta[]>()
+
 async function fetchDocuments(sessionId: string): Promise<StashDocumentMeta[]> {
   const res = await fetch(`/api/stash/upload?sessionId=${encodeURIComponent(sessionId)}`)
   if (!res.ok) return []
@@ -649,12 +657,12 @@ async function fetchDocuments(sessionId: string): Promise<StashDocumentMeta[]> {
 
 export const DataStashPanel = (props: DataStashPanelProps) => {
   // Uploaded documents live in Redis (Issue #6), separate from the tool_result
-  // events in `props.events`. Fetched on mount and refetched after mutations.
-  // Guarded against SSR — relative-URL fetch has no origin on the server.
-  const [documents, { refetch }] = createResource(
-    () => (isServer ? undefined : props.sessionId || undefined),
-    fetchDocuments,
+  // events in `props.events`. Seeded from the module cache, refreshed in the
+  // background — see `docCache` above.
+  const [docs, setDocs] = createSignal<StashDocumentMeta[]>(
+    props.sessionId ? (docCache.get(props.sessionId) ?? []) : [],
   )
+  const [loading, setLoading] = createSignal(false)
   const [uploading, setUploading] = createSignal(false)
   const [uploadError, setUploadError] = createSignal<string | null>(null)
   // Post-upload watch window: ingest runs in the background server-side, so we
@@ -662,9 +670,38 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   // status transitions even before the first `pending` lands.
   const [watching, setWatching] = createSignal(false)
   let watchTimer: ReturnType<typeof setTimeout> | undefined
+  let inFlight = false
+
+  const applyDocs = (sid: string, list: StashDocumentMeta[]) => {
+    docCache.set(sid, list)
+    if (sid === props.sessionId) setDocs(list)
+  }
+
+  // Single-flight background refresh. Shows a spinner only on the cold load
+  // (nothing cached yet); otherwise updates silently behind the cached view.
+  const refresh = async () => {
+    const sid = props.sessionId
+    if (!sid || isServer || inFlight) return
+    inFlight = true
+    if (!docCache.has(sid)) setLoading(true)
+    try {
+      applyDocs(sid, await fetchDocuments(sid))
+    } finally {
+      inFlight = false
+      setLoading(false)
+    }
+  }
+
+  // (Re)seed from cache + refresh whenever the session changes.
+  createEffect(() => {
+    const sid = props.sessionId
+    setDocs(sid ? (docCache.get(sid) ?? []) : [])
+    if (sid) void refresh()
+  })
 
   const uploadFiles = async (files: File[]) => {
-    if (!props.sessionId) {
+    const sid = props.sessionId
+    if (!sid) {
       setUploadError('Start a conversation before uploading')
       return
     }
@@ -673,37 +710,43 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
     try {
       for (const file of files) {
         const form = new FormData()
-        form.set('sessionId', props.sessionId)
+        form.set('sessionId', sid)
         form.set('file', file)
         const res = await fetch('/api/stash/upload', { method: 'POST', body: form })
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: string }
-          throw new Error(body.error ?? `Upload failed (${res.status})`)
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string
+          document?: StashDocumentMeta
         }
-        // Show each upload as soon as it's stored (the POST returns before
-        // ingest finishes), rather than waiting for the whole batch.
-        await refetch()
+        if (!res.ok) throw new Error(body.error ?? `Upload failed (${res.status})`)
+        // Show each upload the instant it's stored — the POST returns before
+        // ingest finishes, so there's no blocking refetch here.
+        if (body.document) {
+          const doc = body.document
+          applyDocs(sid, [doc, ...docs().filter((d) => d.id !== doc.id)])
+        }
       }
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setUploading(false)
-      // Open a ~15s watch window so the "embedding…" indicator appears + clears
+      // Open a ~20s watch window so the "embedding…" indicator appears + clears
       // without a manual refresh, then stops (covers the no-retriever case where
-      // no status ever lands).
+      // no status ever lands). One reconcile refresh picks up server-side fields.
       setWatching(true)
       if (watchTimer) clearTimeout(watchTimer)
-      watchTimer = setTimeout(() => setWatching(false), 15000)
+      watchTimer = setTimeout(() => setWatching(false), 20000)
+      void refresh()
     }
   }
 
   const handleDocAction = async (id: string, action: DocAction) => {
-    if (!props.sessionId) return
+    const sid = props.sessionId
+    if (!sid) return
     if (action === 'download') {
       // Stream the raw file via the ?download route (binary is base64-decoded
       // server-side). Anchor-click so the Content-Disposition filename is used.
       const a = document.createElement('a')
-      a.href = `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(props.sessionId)}&download`
+      a.href = `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}&download`
       a.download = ''
       a.rel = 'noopener'
       document.body.appendChild(a)
@@ -712,8 +755,9 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       return
     }
     if (action === 'delete') {
+      applyDocs(sid, docs().filter((d) => d.id !== id)) // optimistic remove
       await fetch(
-        `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(props.sessionId)}`,
+        `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}`,
         { method: 'DELETE' },
       )
     } else {
@@ -728,23 +772,20 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       await fetch(`/api/stash/document/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: props.sessionId, ...patch }),
+        body: JSON.stringify({ sessionId: sid, ...patch }),
       })
     }
-    await refetch()
+    void refresh()
   }
 
-  const docs = createMemo(() => documents() ?? [])
-
-  // Poll for ingest-status changes while any upload is `pending` or we're inside
-  // the post-upload watch window. The effect re-runs whenever `docs()` or
-  // `watching()` changes; each run that still needs updates arms a single
-  // interval and tears it down on the next run (or on unmount).
+  // Gentle, single-flight status poll while an upload is `pending` or within the
+  // post-upload watch window. The `inFlight` guard in `refresh` prevents overlap
+  // (no 12s list-storm), and the server-side list cache keeps each poll cheap.
   createEffect(() => {
     if (isServer) return
     const active = watching() || docs().some((d) => d.ingestStatus === 'pending')
     if (!active) return
-    const timer = setInterval(() => void refetch(), 2500)
+    const timer = setInterval(() => void refresh(), 4000)
     onCleanup(() => clearInterval(timer))
   })
   onCleanup(() => {
@@ -812,6 +853,13 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
             <For each={docs()}>
               {(doc) => <DocChip doc={doc} onAction={handleDocAction} />}
             </For>
+          </div>
+        </Show>
+        {/* Cold-load only — never blocks the drop zone (background refresh). */}
+        <Show when={loading() && docs().length === 0}>
+          <div flex="~" items="center" gap="2" p="x-3 y-2" text="xs dark-text-tertiary">
+            <span class="i-mdi-loading" style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />
+            <span>Loading uploads…</span>
           </div>
         </Show>
       </CollapsibleSection>
