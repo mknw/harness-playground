@@ -23,6 +23,7 @@
 import { assertServerOnImport } from '../harness-patterns/assert.server'
 import { DEFAULT_SETTINGS } from '../settings'
 import { getDefaultAttachments } from './with-sandbox.server'
+import { hydrateWorkspace } from './work-artifacts.server'
 import type { Attachment } from './attachment-table.server'
 import type { RuntimeConfig } from './types'
 import * as pty from 'node-pty'
@@ -47,19 +48,30 @@ interface PtySession {
   closeTimer?: ReturnType<typeof setTimeout>
 }
 
-class PtyManager {
+/** Options for `ensure` — carried from the PTY stream route. */
+export interface PtyEnsureOptions {
+  /**
+   * Whether this session's agent uses durable workspaces (#89). When true and
+   * this Shell is the first to boot the container, hydrate `/work/in` from the
+   * Data Stash so a Shell opened before the agent's first turn still sees prior
+   * files (#97 Gap 3). Resolved by the route via `agentUsesSyncWorkspace`.
+   */
+  syncWorkspace?: boolean
+}
+
+export class PtyManager {
   private readonly sessions = new Map<string, PtySession>()
   private readonly starting = new Map<string, Promise<PtySession>>()
 
   /** Ensure a live PTY exists for the session (boot + spawn on first call). */
-  async ensure(sessionId: string): Promise<void> {
+  async ensure(sessionId: string, opts: PtyEnsureOptions = {}): Promise<void> {
     if (this.sessions.has(sessionId)) return
     const pending = this.starting.get(sessionId)
     if (pending) {
       await pending
       return
     }
-    const p = this.start(sessionId)
+    const p = this.start(sessionId, opts)
     this.starting.set(sessionId, p)
     try {
       await p
@@ -68,7 +80,7 @@ class PtyManager {
     }
   }
 
-  private async start(sessionId: string): Promise<PtySession> {
+  private async start(sessionId: string, opts: PtyEnsureOptions): Promise<PtySession> {
     const runtime: RuntimeConfig = {
       memoryMB: DEFAULT_SETTINGS.sandbox.defaultMemoryMB,
       timeoutSec: DEFAULT_SETTINGS.sandbox.defaultTimeoutSec,
@@ -76,6 +88,18 @@ class PtyManager {
     }
     const attachments = getDefaultAttachments()
     const attachment = await attachments.acquire(sessionId, 'base', runtime)
+
+    // #97 Gap 3: if the Shell is the first to boot the session container (the
+    // agent hasn't run a turn yet) and the session uses durable workspaces,
+    // hydrate /work/in from the Data Stash so the user sees prior files. The
+    // shared `isFirstBoot` flag coordinates with withSandbox's agent-side
+    // hydrate — whoever boots first hydrates; the other skips. Best-effort: a
+    // hydrate failure (e.g. gateway down) must never block opening the shell.
+    if (opts.syncWorkspace && attachment.isFirstBoot) {
+      await hydrateWorkspace(attachment.transport, sessionId).catch(() => {})
+      attachment.isFirstBoot = false
+    }
+
     const containerId = (attachment.vm.native as { containerId: string }).containerId
 
     const cols = 80

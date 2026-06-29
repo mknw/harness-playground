@@ -17,6 +17,8 @@ import {
   isRetrieverConfig,
   harnessHasRetriever,
   harnessHasRedisRetriever,
+  isSyncWorkspaceConfig,
+  harnessUsesSyncWorkspace,
 } from '../../../lib/harness-patterns/pattern-capabilities'
 import type { ConfiguredPattern, PatternConfig } from '../../../lib/harness-patterns/types'
 
@@ -157,5 +159,48 @@ describe('harnessHasRedisRetriever', () => {
 
   it('is false for a graph with no retriever at all', () => {
     expect(harnessHasRedisRetriever([pat('router', {}), pat('simpleLoop', { patternId: 'neo4j-query' })])).toBe(false)
+  })
+})
+
+describe('isSyncWorkspaceConfig', () => {
+  it('flags the sandbox durable-workspace marker', () => {
+    expect(isSyncWorkspaceConfig({ patternId: 'loop', sandboxSyncWorkspace: true } as PatternConfig)).toBe(true)
+  })
+
+  it('does NOT flag configs without the marker (or set false)', () => {
+    expect(isSyncWorkspaceConfig({ patternId: 'loop' } as PatternConfig)).toBe(false)
+    expect(isSyncWorkspaceConfig({ sandboxSyncWorkspace: false } as unknown as PatternConfig)).toBe(false)
+    expect(isSyncWorkspaceConfig({} as PatternConfig)).toBe(false)
+  })
+})
+
+describe('harnessUsesSyncWorkspace', () => {
+  it('returns false for empty / undefined', () => {
+    expect(harnessUsesSyncWorkspace(undefined)).toBe(false)
+    expect(harnessUsesSyncWorkspace([])).toBe(false)
+  })
+
+  it('detects a top-level sync-sandbox wrapper', () => {
+    expect(
+      harnessUsesSyncWorkspace([pat('withSandbox(loop)', { patternId: 'loop', sandboxSyncWorkspace: true })]),
+    ).toBe(true)
+  })
+
+  it('detects a sync-sandbox wrapper nested via children (the Sandbox·Session shape)', () => {
+    const tree = [
+      pat('compactIntent', { patternId: 'sandbox-session-intent' }),
+      pat('withSandbox(actorCritic)', { patternId: 'sandbox-session-loop', sandboxSyncWorkspace: true }, [
+        pat('actorCritic', { patternId: 'sandbox-session-loop' }),
+      ]),
+      pat('synthesizer', { patternId: 'sandbox-session-synth' }),
+    ]
+    expect(harnessUsesSyncWorkspace(tree)).toBe(true)
+  })
+
+  it('is false for a sandbox wrapper without the marker (no syncWorkspace)', () => {
+    const tree = [
+      pat('withSandbox(actorCritic)', { patternId: 'sandbox-loop' }, [pat('actorCritic', { patternId: 'sandbox-loop' })]),
+    ]
+    expect(harnessUsesSyncWorkspace(tree)).toBe(false)
   })
 })
