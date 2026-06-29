@@ -266,11 +266,41 @@ describe('retriever', () => {
     expect(trs).toHaveLength(1)
     expect(trs[0].tool).toBe('retriever')
     expect(trs[0].success).toBe(true)
-    const payload = trs[0].result as { matches: RetrievalHit[]; backends: string[]; query: string }
+    const payload = trs[0].result as {
+      matches: RetrievalHit[]
+      backends: string[]
+      query: string
+      references: unknown[]
+    }
     expect(payload.matches).toHaveLength(1)
     expect(payload.backends).toEqual(['redis'])
     expect(payload.query).toBe('the query')
+    expect(Array.isArray(payload.references)).toBe(true) // no locator on plain hits
     expect(trs[0].summary).toContain('1 match')
+  })
+
+  it('builds typed references from hits that carry a source locator', async () => {
+    const located: RetrievalHit = {
+      backend: 'redis',
+      id: 'doc1:2',
+      content: 'the matched chunk',
+      source: 'notes.md',
+      score: 0.2,
+      docId: 'doc1',
+      chunkIndex: 2,
+      startOffset: 10,
+      endOffset: 42,
+    }
+    // A web-style hit with no locator must NOT produce a reference.
+    const unlocated: RetrievalHit = { backend: 'web', id: 'u1', content: 'x', score: 0.1 }
+    const backend = mockBackend('redis', [located, unlocated])
+    const { result } = await run({}, [userMsg('q')], { backends: [backend], k: 5 })
+    const refs = (result.events.find((e) => e.type === 'tool_result')!.data as {
+      result: { references: RetrievalHit[] }
+    }).result.references
+    expect(refs).toEqual([
+      { source: 'notes.md', docId: 'doc1', chunkIndex: 2, startOffset: 10, endOffset: 42, score: 0.2 },
+    ])
   })
 
   it('reports "no matches" (empty) without erroring when backends find nothing', async () => {

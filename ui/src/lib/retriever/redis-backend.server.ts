@@ -55,12 +55,11 @@ export function createRedisBackend(
         content: h.content,
         source: h.source,
         score: h.score,
-        metadata: {
-          docId: h.docId,
-          chunkIndex: h.chunkIndex,
-          startOffset: h.startOffset,
-          endOffset: h.endOffset,
-        },
+        // First-class locator → enables typed RetrievalReference + the viewer.
+        docId: h.docId,
+        chunkIndex: h.chunkIndex,
+        startOffset: h.startOffset,
+        endOffset: h.endOffset,
       }))
     },
   }

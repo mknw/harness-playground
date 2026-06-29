@@ -47,7 +47,7 @@ describe('createRedisBackend', () => {
     expect(searchFn).toHaveBeenCalledWith('sess-42', 'how do refunds work?', { k: 7 })
   })
 
-  it('normalizes SearchHit → RetrievalHit (id, provenance metadata)', async () => {
+  it('normalizes SearchHit → RetrievalHit with first-class locator fields', async () => {
     const b = createRedisBackend('s1', {
       searchFn: vi.fn(async () => SAMPLE),
       ensureIngested: false,
@@ -60,7 +60,10 @@ describe('createRedisBackend', () => {
         content: 'the matched chunk',
         source: 'notes.txt',
         score: 0.13,
-        metadata: { docId: 'doc1', chunkIndex: 2, startOffset: 10, endOffset: 27 },
+        docId: 'doc1',
+        chunkIndex: 2,
+        startOffset: 10,
+        endOffset: 27,
       },
     ])
   })

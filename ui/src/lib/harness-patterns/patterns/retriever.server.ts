@@ -68,7 +68,50 @@ export interface RetrievalHit {
   source?: string
   /** Distance (lower = closer) when available. */
   score?: number
+  /**
+   * Locator into the source document, when the backend can provide one — char
+   * offsets into the doc's stored text (`content === docText.slice(start,end)`).
+   * Promotes what was backend-specific `metadata` to a typed, first-class shape
+   * so the retriever can build {@link RetrievalReference}s generically and the UI
+   * can open an inline file viewer at the right place. Absent for backends with
+   * no locatable source (e.g. web).
+   */
+  docId?: string
+  chunkIndex?: number
+  startOffset?: number
+  endOffset?: number
+  /** Anything else a backend wants to attach (non-standard, untyped). */
   metadata?: Record<string, unknown>
+}
+
+/**
+ * A locatable pointer into a source document — the UI-facing projection of a
+ * {@link RetrievalHit} that carries a locator. Char offsets are into the doc's
+ * stored text; line numbers are derived on open (the viewer fetches the doc).
+ */
+export interface RetrievalReference {
+  /** Human-facing source label (filename). */
+  source: string
+  /** Stash document id — fetch its text to render the viewer. */
+  docId: string
+  chunkIndex: number
+  startOffset: number
+  endOffset: number
+  /** Distance (lower = closer) when available. */
+  score?: number
+}
+
+/**
+ * The `result` payload of the retriever's `tool_result` event — the typed
+ * envelope consumers narrow to (synthesizer prompt, reference chips, viewer).
+ * `matches` carry the full text (for the synthesizer); `references` are the
+ * locatable subset for the UI.
+ */
+export interface RetrieverResult {
+  query: string
+  backends: string[]
+  matches: RetrievalHit[]
+  references: RetrievalReference[]
 }
 
 /**
@@ -227,10 +270,31 @@ export function retriever<T extends RetrieverData>(
   return { name: 'retriever', fn, config: resolved, estimateTurns: () => 0 }
 }
 
+/** Project a hit to a locatable reference, or null when it has no source
+ *  locator (e.g. a web hit) — those can't drive the inline file viewer. */
+function toReference(h: RetrievalHit): RetrievalReference | null {
+  if (
+    !h.source ||
+    h.docId === undefined ||
+    h.startOffset === undefined ||
+    h.endOffset === undefined
+  ) {
+    return null
+  }
+  return {
+    source: h.source,
+    docId: h.docId,
+    chunkIndex: h.chunkIndex ?? 0,
+    startOffset: h.startOffset,
+    endOffset: h.endOffset,
+    score: h.score,
+  }
+}
+
 /** Emit the retrieval as a `tool_result` so the synthesizer reads it via
  *  `view.fromLastPattern()` (same channel a simpleLoop tool call uses). The
- *  optional `llmCall` carries `RetrieveQuery` observability when the query was
- *  rewritten. */
+ *  result is a typed {@link RetrieverResult}. The optional `llmCall` carries
+ *  `RetrieveQuery` observability when the query was rewritten. */
 function emitMatches<T>(
   scope: PatternScope<T>,
   matches: RetrievalHit[],
@@ -239,12 +303,16 @@ function emitMatches<T>(
   trackHistory: Parameters<typeof trackEvent>[3],
   llmCall?: LLMCallData,
 ): void {
+  const references = matches
+    .map(toReference)
+    .filter((r): r is RetrievalReference => r !== null)
+  const result: RetrieverResult = { query, backends: backendKinds, matches, references }
   trackEvent(
     scope,
     'tool_result',
     {
       tool: 'retriever',
-      result: { matches, backends: backendKinds, query },
+      result,
       success: true,
       summary: matches.length
         ? `${matches.length} match(es) from ${backendKinds.join(', ') || 'no backends'}`
