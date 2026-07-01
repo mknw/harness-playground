@@ -624,8 +624,11 @@ const FileViewer = (props: {
     setContent(null)
     fetch(`/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((d: { content?: string; encoding?: string }) => {
-        if (d.encoding === 'base64') setError('Binary file — no text preview')
+      // The route wraps the doc: `{ document: { content, encoding, … } }`.
+      .then((body: { document?: { content?: string; encoding?: string } }) => {
+        const d = body.document
+        if (!d) setError('Document not found')
+        else if (d.encoding === 'base64') setError('Binary file — no text preview')
         else setContent(d.content ?? '')
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load file'))

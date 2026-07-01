@@ -268,10 +268,14 @@ export async function ingestStashDocument(
  * the upload-time gate couldn't fire), or one whose ingest failed transiently
  * (embedder offline at upload time), becomes searchable on first retrieval.
  *
- * Skips only `'indexed'` (already searchable) and `base64` binaries (never
- * text-ingestable — a permanent skip). `'failed'` IS retried: such failures are
- * usually transient (embedder down), so a re-attempt recovers them once the
- * embedder is back. A fully-indexed corpus costs just one `listDocuments`.
+ * Ingests only what the upload-time gate can't or didn't handle:
+ *  - `'failed'` — retried (usually a transient embedder-down at upload time);
+ *  - absent (no status) — the gate never fired (e.g. uploaded before the
+ *    session was persisted).
+ * Skips `'indexed'` (searchable), `'pending'` (the gate is actively ingesting
+ * it — re-ingesting would double the work and contend on the serial gateway),
+ * and `base64` binaries (never text-ingestable). A fully-indexed corpus costs
+ * just one `listDocuments`.
  */
 export async function ensureSessionIngested(
   sessionId: string,
@@ -280,7 +284,7 @@ export async function ensureSessionIngested(
   const callTool = opts.callTool ?? defaultCallTool
   const metas = await listDocuments(sessionId, callTool)
   for (const m of metas) {
-    if (m.ingestStatus === 'indexed') continue
+    if (m.ingestStatus === 'indexed' || m.ingestStatus === 'pending') continue
     if (m.encoding === 'base64') continue
     await ingestStashDocument(sessionId, m.id, opts)
   }
