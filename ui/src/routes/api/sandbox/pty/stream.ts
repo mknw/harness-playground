@@ -13,6 +13,7 @@
  */
 import type { APIEvent } from '@solidjs/start/server'
 import { ptyManager } from '../../../../lib/sandbox/pty-manager.server'
+import { agentUsesSyncWorkspace } from '../../../../lib/harness-client/registry.server'
 import { getAuthenticatedUser } from '../../../../lib/auth/server'
 import { isBypassEnabled } from '../../../../lib/auth/dev-bypass'
 
@@ -24,6 +25,7 @@ async function requireAuth(): Promise<void> {
 export async function GET(event: APIEvent) {
   const url = new URL(event.request.url)
   const sessionId = url.searchParams.get('sessionId')
+  const agentId = url.searchParams.get('agentId')
   if (!sessionId) {
     return new Response('sessionId is required', { status: 400 })
   }
@@ -35,7 +37,13 @@ export async function GET(event: APIEvent) {
   }
 
   try {
-    await ptyManager.ensure(sessionId)
+    // If the session's agent uses durable workspaces, the PtyManager hydrates
+    // /work/in when this Shell is the first to boot the container (#97 Gap 3).
+    // Best-effort: a capability-resolution hiccup must not block the terminal.
+    const syncWorkspace = agentId
+      ? await agentUsesSyncWorkspace(agentId, sessionId).catch(() => false)
+      : false
+    await ptyManager.ensure(sessionId, { syncWorkspace })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return new Response(`failed to start sandbox terminal: ${msg}`, { status: 500 })
