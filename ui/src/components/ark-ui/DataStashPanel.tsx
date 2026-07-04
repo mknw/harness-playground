@@ -14,8 +14,9 @@
 import { For, Show, createSignal, createMemo, createEffect, onCleanup } from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
-import type { ContextEvent, ToolResultEventData } from '~/lib/harness-patterns'
+import type { ContextEvent, ToolResultEventData, RetrievalReference } from '~/lib/harness-patterns'
 import type { StashDocumentMeta } from '~/lib/document-store.server'
+import { referencesForDoc } from '~/lib/harness-client/reference-extractor'
 
 // ============================================================================
 // Types
@@ -605,15 +606,35 @@ export interface ViewerHighlight {
   endOffset: number
 }
 
+/** 1-based inclusive line range for a char offset span in `content`. */
+function offsetsToLines(content: string, h: ViewerHighlight): { startLine: number; endLine: number } {
+  const start = Math.max(0, Math.min(h.startOffset, content.length))
+  const end = Math.max(start, Math.min(h.endOffset, content.length))
+  return {
+    startLine: content.slice(0, start).split('\n').length,
+    endLine: content.slice(0, end).split('\n').length,
+  }
+}
+
 const FileViewer = (props: {
   sessionId: string
   doc: StashDocumentMeta
-  highlight?: ViewerHighlight
+  highlights: ViewerHighlight[]
+  initialIndex?: number
   onClose: () => void
 }) => {
   const [content, setContent] = createSignal<string | null>(null)
   const [error, setError] = createSignal<string | null>(null)
   const [loading, setLoading] = createSignal(true)
+  // Which highlight the navigator is focused on (scrolled to + emphasized).
+  const [current, setCurrent] = createSignal(props.initialIndex ?? 0)
+
+  // Reset the focused highlight when the target doc or the incoming index
+  // changes (the viewer instance is reused across re-opens).
+  createEffect(() => {
+    props.doc.id
+    setCurrent(props.initialIndex ?? 0)
+  })
 
   // Fetch the full document text on open / when the target doc changes.
   createEffect(() => {
@@ -637,24 +658,26 @@ const FileViewer = (props: {
 
   const lines = createMemo(() => (content() ?? '').split('\n'))
 
-  // Char offsets → 1-based inclusive line range (the chunker's offsets satisfy
-  // content === docText.slice(start, end)).
-  const hlRange = createMemo(() => {
+  // All highlight ranges (aligned with props.highlights), once content is in.
+  const ranges = createMemo(() => {
     const c = content()
-    const h = props.highlight
-    if (!c || !h) return null
-    const start = Math.max(0, Math.min(h.startOffset, c.length))
-    const end = Math.max(start, Math.min(h.endOffset, c.length))
-    return {
-      startLine: c.slice(0, start).split('\n').length,
-      endLine: c.slice(0, end).split('\n').length,
-    }
+    if (!c) return [] as { startLine: number; endLine: number }[]
+    return props.highlights.map((h) => offsetsToLines(c, h))
   })
+  const activeRange = createMemo(() => ranges()[current()] ?? null)
+  // Every line covered by any highlight (light tint).
+  const hotLines = createMemo(() => {
+    const s = new Set<number>()
+    for (const r of ranges()) for (let n = r.startLine; n <= r.endLine; n++) s.add(n)
+    return s
+  })
+  const total = () => props.highlights.length
 
-  // Scroll the first highlighted line into view once content + ref are ready.
-  let firstHot: HTMLDivElement | undefined
+  // Scroll the focused range's first line into view when content / current change.
+  const lineEls = new Map<number, HTMLDivElement>()
   createEffect(() => {
-    if (content() && hlRange() && firstHot) firstHot.scrollIntoView({ block: 'center' })
+    const r = activeRange()
+    if (content() && r) lineEls.get(r.startLine)?.scrollIntoView({ block: 'center' })
   })
 
   return (
@@ -667,12 +690,34 @@ const FileViewer = (props: {
         <span text="xs dark-text-secondary" font="mono" style={{ flex: '1', 'word-break': 'break-all' }}>
           {props.doc.filename}
         </span>
-        <Show when={hlRange()}>
+        <Show when={activeRange()}>
           {(r) => (
             <span text="xs" style={{ color: '#f59e0b', 'font-family': 'monospace' }}>
               L{r().startLine}{r().endLine !== r().startLine ? `–${r().endLine}` : ''}
             </span>
           )}
+        </Show>
+        {/* Prev/next navigator across this doc's referenced chunks. */}
+        <Show when={total() > 1}>
+          <div flex="~" items="center" gap="1">
+            <button
+              onClick={() => setCurrent((c) => Math.max(0, c - 1))}
+              disabled={current() === 0}
+              title="Previous reference"
+              style={{ background: 'transparent', border: 'none', cursor: current() === 0 ? 'default' : 'pointer', color: current() === 0 ? '#3f3f46' : '#a1a1aa', 'font-size': '13px', 'line-height': '1', padding: '0 2px' }}
+            >
+              ‹
+            </button>
+            <span text="xs dark-text-tertiary" font="mono">{current() + 1}/{total()}</span>
+            <button
+              onClick={() => setCurrent((c) => Math.min(total() - 1, c + 1))}
+              disabled={current() === total() - 1}
+              title="Next reference"
+              style={{ background: 'transparent', border: 'none', cursor: current() === total() - 1 ? 'default' : 'pointer', color: current() === total() - 1 ? '#3f3f46' : '#a1a1aa', 'font-size': '13px', 'line-height': '1', padding: '0 2px' }}
+            >
+              ›
+            </button>
+          </div>
         </Show>
         <button
           onClick={() => props.onClose()}
@@ -698,15 +743,14 @@ const FileViewer = (props: {
           <For each={lines()}>
             {(line, i) => {
               const n = i() + 1
-              const r = hlRange()
-              const hot = !!r && n >= r.startLine && n <= r.endLine
+              const hot = () => hotLines().has(n)
+              const r = () => activeRange()
+              const active = () => !!r() && n >= r()!.startLine && n <= r()!.endLine
               return (
                 <div
-                  ref={(el) => {
-                    if (r && n === r.startLine) firstHot = el
-                  }}
+                  ref={(el) => lineEls.set(n, el)}
                   flex="~"
-                  style={{ background: hot ? 'rgba(245,158,11,0.13)' : 'transparent' }}
+                  style={{ background: active() ? 'rgba(245,158,11,0.16)' : hot() ? 'rgba(245,158,11,0.07)' : 'transparent' }}
                 >
                   <span
                     style={{
@@ -716,7 +760,7 @@ const FileViewer = (props: {
                       padding: '0 8px',
                       color: '#52525b',
                       'user-select': 'none',
-                      'border-right': hot ? '2px solid #f59e0b' : '2px solid transparent',
+                      'border-right': active() ? '2px solid #f59e0b' : hot() ? '2px solid rgba(245,158,11,0.4)' : '2px solid transparent',
                     }}
                   >
                     {n}
@@ -844,7 +888,21 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   let watchTimer: ReturnType<typeof setTimeout> | undefined
   let inFlight = false
   // Inline file viewer: which doc is open + an optional char range to highlight.
-  const [viewer, setViewer] = createSignal<{ doc: StashDocumentMeta; highlight?: ViewerHighlight } | null>(null)
+  const [viewer, setViewer] = createSignal<{
+    doc: StashDocumentMeta
+    highlights: ViewerHighlight[]
+    index: number
+  } | null>(null)
+
+  /** Open the viewer for a doc, highlighting its retrieved chunks (from the
+   *  latest retriever result in props.events), focused on `index`. */
+  const openViewer = (doc: StashDocumentMeta, index = 0) => {
+    const highlights = referencesForDoc(props.events, doc.id).map((r) => ({
+      startOffset: r.startOffset,
+      endOffset: r.endOffset,
+    }))
+    setViewer({ doc, highlights, index: Math.max(0, Math.min(index, Math.max(0, highlights.length - 1))) })
+  }
 
   const applyDocs = (sid: string, list: StashDocumentMeta[]) => {
     docCache.set(sid, list)
@@ -1035,7 +1093,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
                 <DocChip
                   doc={doc}
                   onAction={handleDocAction}
-                  onView={() => setViewer((v) => (v?.doc.id === doc.id ? null : { doc }))}
+                  onView={() => (viewer()?.doc.id === doc.id ? setViewer(null) : openViewer(doc))}
                   active={viewer()?.doc.id === doc.id}
                 />
               )}
@@ -1048,7 +1106,8 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
             <FileViewer
               sessionId={props.sessionId}
               doc={v().doc}
-              highlight={v().highlight}
+              highlights={v().highlights}
+              initialIndex={v().index}
               onClose={() => setViewer(null)}
             />
           )}
