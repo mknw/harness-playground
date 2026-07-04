@@ -6,7 +6,7 @@ import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPane
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
 import { mergeGraphElements } from '~/lib/graph-merge'
-import { listConversations } from '~/lib/harness-client'
+import { listConversations, type OpenReferenceTarget } from '~/lib/harness-client'
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
@@ -31,6 +31,9 @@ export default function Home() {
 
   const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
+  // A citation clicked in an assistant message → SupportPanel switches to the
+  // Data Stash tab and opens the inline viewer at that reference.
+  const [pendingReference, setPendingReference] = createSignal<OpenReferenceTarget | null>(null)
   const [contextEvents, setContextEvents] = createSignal<ContextEvent[]>([])
   const [unifiedContext, setUnifiedContext] = createSignal<UnifiedContext | undefined>(undefined)
   // The conversation's selected agent, reported up from ChatInterface, so the
@@ -270,6 +273,7 @@ export default function Home() {
                 onSelectedAgentChange={setCurrentAgentId}
                 graphEntityNames={graphEntityNames()}
                 onHighlightEntities={setHighlightedIds}
+                onOpenReference={setPendingReference}
                 getProgress={getProgress}
                 getRunState={getRunState}
                 updateRunState={updateRunState}
@@ -305,6 +309,7 @@ export default function Home() {
             sessionId={selectedSessionId()}
             agentId={currentAgentId()}
             onStashAction={handleStashAction}
+            pendingReference={pendingReference()}
           />
         </Splitter.Panel>
       </Splitter.Root>

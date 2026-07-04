@@ -6,6 +6,8 @@ import type { ElementDefinition } from 'cytoscape'
 import type { ToolCallInfo } from './types'
 import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked } from 'marked'
+import type { RetrievalReference } from '~/lib/harness-patterns'
+import type { OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
 
 // Configure marked for safe HTML output
 marked.setOptions({
@@ -26,6 +28,8 @@ export interface Message {
   patternId?: string
   /** Turn/iteration context string, e.g. "(turn 3, attempt 2)" */
   turnInfo?: string
+  /** Retriever citations for this turn (inline superscripts + sources footer). */
+  references?: RetrievalReference[]
 }
 
 interface ChatMessagesProps {
@@ -36,6 +40,8 @@ interface ChatMessagesProps {
   graphEntityNames?: Map<string, string[]>
   /** Callback to highlight graph element IDs (hover/click) */
   onHighlightEntities?: (ids: string[]) => void
+  /** Open the inline file viewer for a cited reference (click on a citation). */
+  onOpenReference?: (target: OpenReferenceTarget) => void
   /** Optional slot rendered after the last message, inside the scroll area —
    *  used by ChatInterface to inline the live progress bar where the next
    *  assistant bubble would appear. */
@@ -99,6 +105,46 @@ function annotateEntities(
   return segments.join('')
 }
 
+/**
+ * Wrap retriever-cited filename mentions in the rendered markdown with a
+ * clickable `.doc-ref` span + a "↗" superscript (mirrors {@link annotateEntities}).
+ * Skips HTML tags and code blocks. The click opens the inline file viewer.
+ */
+function annotateReferences(html: string, references: RetrievalReference[]): string {
+  if (!references || references.length === 0) return html
+  // filename → docId (first reference for that file)
+  const byName = new Map<string, string>()
+  for (const r of references) if (r.source && !byName.has(r.source)) byName.set(r.source, r.docId)
+  const names = [...byName.keys()].filter(n => n.length >= 3).sort((a, b) => b.length - a.length)
+  if (names.length === 0) return html
+
+  const escaped = names.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const pattern = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi')
+
+  const segments = html.split(/(<[^>]+>)/g)
+  let inCode = false
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+    if (seg.startsWith('<code') || seg.startsWith('<pre')) inCode = true
+    if (seg === '</code>' || seg === '</pre>') { inCode = false; continue }
+    if (seg.startsWith('<') || inCode) continue
+
+    segments[i] = seg.replace(pattern, (match) => {
+      const key = [...byName.keys()].find(k => k.toLowerCase() === match.toLowerCase())
+      if (!key) return match
+      const docId = byName.get(key)!
+      return `<span class="doc-ref" data-doc-id="${docId}" title="Open ${key} in viewer">${match}<sup class="doc-ref-mark">↗</sup></span>`
+    })
+  }
+
+  return segments.join('')
+}
+
+/** Unique references by document (one footer chip per cited file). */
+function dedupeReferencesByDoc(references: RetrievalReference[]): RetrievalReference[] {
+  return [...new Map(references.map(r => [r.docId, r])).values()]
+}
+
 // ============================================================================
 // Think Block Extraction
 // ============================================================================
@@ -151,6 +197,14 @@ export const ChatMessages = (props: ChatMessagesProps) => {
   }
 
   const handleClick = (e: MouseEvent) => {
+    // Reference citation (inline superscript) → open the inline file viewer.
+    const refTarget = (e.target as HTMLElement).closest('.doc-ref') as HTMLElement | null
+    if (refTarget) {
+      const docId = refTarget.dataset.docId
+      if (docId) props.onOpenReference?.({ docId })
+      return
+    }
+
     const target = (e.target as HTMLElement).closest('.graph-entity') as HTMLElement | null
     if (!target) return
     const name = target.dataset.entityName
@@ -183,10 +237,10 @@ export const ChatMessages = (props: ChatMessagesProps) => {
     return 'AI'
   }
 
-  /** Render assistant message with entity annotation */
-  const renderAssistantContent = (content: string) => {
+  /** Render assistant message with entity + reference annotation */
+  const renderAssistantContent = (content: string, references: RetrievalReference[]) => {
     const html = marked.parse(content ?? '') as string
-    return annotateEntities(html, props.graphEntityNames ?? new Map())
+    return annotateReferences(annotateEntities(html, props.graphEntityNames ?? new Map()), references)
   }
 
   return (
@@ -278,8 +332,30 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                                 text="sm"
                                 class="prose-chat"
                                 // eslint-disable-next-line solid/no-innerhtml
-                                innerHTML={renderAssistantContent(body)}
+                                innerHTML={renderAssistantContent(body, message.references ?? [])}
                               />
+                              {/* Sources footer — one chip per cited file; opens
+                                  the inline file viewer (navigator pages chunks). */}
+                              <Show when={message.references && message.references.length > 0}>
+                                <div class="doc-ref-footer">
+                                  <span text="xs dark-text-tertiary">Sources:</span>
+                                  <For each={dedupeReferencesByDoc(message.references!)}>
+                                    {(r) => (
+                                      <button
+                                        class="doc-ref-chip"
+                                        title={`Open ${r.source} in viewer`}
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          props.onOpenReference?.({ docId: r.docId })
+                                        }}
+                                      >
+                                        <span class="i-mdi-file-document-outline" style={{ width: '11px', height: '11px' }} />
+                                        {r.source}
+                                      </button>
+                                    )}
+                                  </For>
+                                </div>
+                              </Show>
                             </>
                           )
                         })()}

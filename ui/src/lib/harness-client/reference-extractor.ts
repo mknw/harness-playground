@@ -17,6 +17,17 @@ import type {
 } from '~/lib/harness-patterns'
 
 /**
+ * The payload a chat citation passes across panes to open the inline viewer.
+ * `docId` is required; the optional offsets focus a specific chunk (footer chips
+ * pass them; an inline filename superscript omits them → opens at chunk 0).
+ */
+export interface OpenReferenceTarget {
+  docId: string
+  startOffset?: number
+  endOffset?: number
+}
+
+/**
  * References from the **most recent** retriever `tool_result` in the stream
  * (one retriever call per turn). Returns `[]` when there's no retriever result.
  */

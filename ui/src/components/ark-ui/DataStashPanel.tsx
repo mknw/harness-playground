@@ -11,12 +11,12 @@
  * Hovering shows the LLM summary (or a raw preview if no summary yet).
  */
 
-import { For, Show, createSignal, createMemo, createEffect, onCleanup } from 'solid-js'
+import { For, Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
 import type { ContextEvent, ToolResultEventData, RetrievalReference } from '~/lib/harness-patterns'
 import type { StashDocumentMeta } from '~/lib/document-store.server'
-import { referencesForDoc } from '~/lib/harness-client/reference-extractor'
+import { referencesForDoc, type OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
 
 // ============================================================================
 // Types
@@ -31,6 +31,8 @@ export interface DataStashPanelProps {
   events: ContextEvent[]
   sessionId: string
   onStashAction: (eventId: string, action: StashAction) => Promise<void>
+  /** A citation clicked in the chat — open the inline viewer at this reference. */
+  pendingReference?: OpenReferenceTarget | null
 }
 
 interface ToolResultItem {
@@ -914,6 +916,28 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
     const v = viewer()
     if (v && !docs().some((d) => d.id === v.doc.id)) setViewer(null)
   })
+
+  // A citation was clicked in the chat → open the viewer at that reference.
+  // Scoped to `pendingReference` only (via `on`), so a background doc-list
+  // refresh doesn't re-open/reset the viewer while the user navigates chunks.
+  createEffect(
+    on(
+      () => props.pendingReference,
+      (ref) => {
+        if (!ref) return
+        const doc = docs().find((d) => d.id === ref.docId)
+        if (!doc) return // not one of this session's uploads
+        const refs = referencesForDoc(props.events, ref.docId)
+        const idx =
+          ref.startOffset != null
+            ? refs.findIndex(
+                (r) => r.startOffset === ref.startOffset && r.endOffset === ref.endOffset,
+              )
+            : 0
+        openViewer(doc, Math.max(0, idx))
+      },
+    ),
+  )
 
   // Single-flight background refresh. Shows a spinner only on the cold load
   // (nothing cached yet); otherwise updates silently behind the cached view.
