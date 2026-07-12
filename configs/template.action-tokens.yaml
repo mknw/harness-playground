@@ -1,0 +1,18 @@
+# Action API tokens — reference template.
+#
+# Copy to `configs/action-tokens.yaml` (git-ignored) and fill in real secrets.
+# Each entry maps a Bearer secret presented to `POST /api/agents/:id` to the
+# userId that owns the resulting action rows. One entry per device/user.
+#
+#   curl -X POST https://host/api/agents/default \
+#     -H "Authorization: Bearer <secret>" \
+#     -F transcribed_command="add a node for Project Apollo" \
+#     -F short_description="Apollo node" \
+#     -F original_recording=@memo.m4a
+#
+# `label` is for your own bookkeeping (which device a secret belongs to); it is
+# never used at runtime. Rotate by replacing the `secret` value.
+tokens:
+  - label: "example iOS Shortcut"
+    secret: "<REPLACE_WITH_A_LONG_RANDOM_SECRET>"
+    userId: "<STACK_AUTH_USER_ID>"

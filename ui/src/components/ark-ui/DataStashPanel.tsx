@@ -83,16 +83,33 @@ function getRefLabel(tool: string, eventId: string): string {
   return `${key}:${shortId}`
 }
 
+/** Audio extensions we render with a player (matches upload-service MIME map). */
+const AUDIO_EXT_RE = /\.(m4a|mp3|wav|aac|ogg|oga|opus|flac|caf)$/i
+
+/** Whether a document is playable audio (a voice recording from the agent
+ *  trigger endpoint, or any uploaded audio file). */
+function isAudioDoc(doc: StashDocumentMeta): boolean {
+  return doc.mimeType.toLowerCase().startsWith('audio/') || AUDIO_EXT_RE.test(doc.filename)
+}
+
 /** Icon for an uploaded document, chosen from its MIME type / extension. */
 function getDocIcon(mimeType: string, filename: string): string {
   const m = mimeType.toLowerCase()
   const f = filename.toLowerCase()
+  if (m.startsWith('audio/') || AUDIO_EXT_RE.test(f)) return 'i-mdi-microphone'
   if (m.includes('json') || f.endsWith('.json')) return 'i-mdi-code-json'
   if (m.includes('csv') || m.includes('tab-separated') || f.endsWith('.csv')) return 'i-mdi-table-large'
   if (m.includes('markdown') || f.endsWith('.md')) return 'i-mdi-language-markdown-outline'
   if (m.includes('pdf') || f.endsWith('.pdf')) return 'i-mdi-file-pdf-box'
   if (m.includes('html') || m.includes('xml')) return 'i-mdi-file-code-outline'
   return 'i-mdi-file-document-outline'
+}
+
+/** URL that streams a document's raw bytes (base64-decoded for binary). Used as
+ *  the `<audio>` src — the `?download` Content-Disposition is ignored by media
+ *  elements, so the same route serves both download and playback. */
+function docDownloadUrl(id: string, sessionId: string): string {
+  return `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sessionId)}&download`
 }
 
 /** Format a byte count compactly (e.g. 2.4 KB). */
@@ -386,12 +403,16 @@ const IconGallery = (props: { items: ToolResultItem[]; onAction: (id: string, ac
 
 const DocChip = (props: {
   doc: StashDocumentMeta
+  sessionId: string
   onAction: (id: string, action: DocAction) => Promise<void>
 }) => {
   const d = () => props.doc
   const grayed = () => !!(d().hidden || d().archived)
   const [loading, setLoading] = createSignal(false)
   const [menuOpen, setMenuOpen] = createSignal(false)
+  // Inline audio player toggle (recordings from the agent trigger endpoint).
+  const [playing, setPlaying] = createSignal(false)
+  const isAudio = () => isAudioDoc(d())
 
   const handle = async (action: DocAction) => {
     setMenuOpen(false)
@@ -477,6 +498,31 @@ const DocChip = (props: {
             'box-shadow': '0 4px 16px rgba(0,0,0,0.4)',
           }}
         >
+          {/* Play toggle — local (audio only), not a server action. */}
+          <Show when={isAudio()}>
+            <button
+              onClick={() => {
+                setPlaying((p) => !p)
+                setMenuOpen(false)
+              }}
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '5px 10px',
+                'text-align': 'left',
+                background: 'transparent',
+                border: 'none',
+                'border-radius': '4px',
+                'font-size': '11px',
+                color: '#22d3ee',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#22222f')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              {playing() ? 'Hide player' : 'Play'}
+            </button>
+          </Show>
           <For each={menuActions()}>
             {(btn) => (
               <button
@@ -508,6 +554,19 @@ const DocChip = (props: {
           style={{ position: 'fixed', inset: '0', 'z-index': '99' }}
           onClick={() => setMenuOpen(false)}
         />
+      </Show>
+
+      {/* Inline audio player — toggled from the Play menu item. Sits below the
+          chip; the ?download route streams the recording's bytes. */}
+      <Show when={isAudio() && playing()}>
+        <div style={{ position: 'absolute', top: '100%', left: '0', 'z-index': '101', 'margin-top': '2px' }}>
+          <audio
+            controls
+            autoplay
+            src={docDownloadUrl(d().id, props.sessionId)}
+            style={{ width: '180px', height: '32px' }}
+          />
+        </div>
       </Show>
     </div>
   )
@@ -733,7 +792,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         <Show when={docs().length > 0}>
           <div flex="~ wrap" gap="2" p="x-3 y-2">
             <For each={docs()}>
-              {(doc) => <DocChip doc={doc} onAction={handleDocAction} />}
+              {(doc) => <DocChip doc={doc} sessionId={props.sessionId} onAction={handleDocAction} />}
             </For>
           </div>
         </Show>

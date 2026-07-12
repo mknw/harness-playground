@@ -21,6 +21,8 @@ import {
   listConversations,
   deleteConversation,
   deriveTitle,
+  promoteConversation,
+  setConversationStatus,
 } from '../../../lib/db/conversations.server'
 import { closePool, query } from '../../../lib/db/client.server'
 
@@ -178,5 +180,130 @@ describe('conversations CRUD', () => {
 
     await deleteConversation(id, TEST_USER)
     expect(await loadConversation(id, TEST_USER)).toBeNull()
+  })
+})
+
+describe('action kind/source/status (agent trigger endpoint)', () => {
+  it('defaults to conversation/chat for the normal save path', async () => {
+    if (!dbAvailable) return
+    const id = `conv-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'default',
+      title: 't',
+      serializedContext: '{}',
+    })
+    const loaded = await loadConversation(id, TEST_USER)
+    expect(loaded!.kind).toBe('conversation')
+    expect(loaded!.source).toBe('chat')
+  })
+
+  it('inserts an action with source=post and refreshes status, keeping kind/source immutable on update', async () => {
+    if (!dbAvailable) return
+    const id = `act-${Math.random().toString(36).slice(2, 10)}`
+    // Route's seed insert.
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'default',
+      title: 'Voice action',
+      serializedContext: JSON.stringify({ events: [], status: 'running' }),
+      kind: 'action',
+      source: 'post',
+      status: 'running',
+    })
+    let loaded = await loadConversation(id, TEST_USER)
+    expect(loaded!.kind).toBe('action')
+    expect(loaded!.source).toBe('post')
+    expect(loaded!.status).toBe('running')
+
+    // Background run's completion save — passes default kind/source but the
+    // UPDATE must preserve the action's provenance while refreshing status.
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'default',
+      title: 'derived-from-command', // sticky → ignored
+      serializedContext: JSON.stringify({ events: [{ id: 'a' }], status: 'done' }),
+      status: 'done',
+    })
+    loaded = await loadConversation(id, TEST_USER)
+    expect(loaded!.kind).toBe('action') // NOT demoted
+    expect(loaded!.source).toBe('post')
+    expect(loaded!.status).toBe('done') // refreshed
+    expect(loaded!.title).toBe('Voice action') // sticky
+  })
+
+  it('promoteConversation flips action → conversation, scoped to user + idempotent', async () => {
+    if (!dbAvailable) return
+    const id = `act-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'default',
+      title: 't',
+      serializedContext: '{}',
+      kind: 'action',
+      source: 'post',
+      status: 'done',
+    })
+
+    // Wrong user → no-op.
+    await promoteConversation(id, 'someone-else')
+    expect((await loadConversation(id, TEST_USER))!.kind).toBe('action')
+
+    // Correct user → promoted.
+    await promoteConversation(id, TEST_USER)
+    expect((await loadConversation(id, TEST_USER))!.kind).toBe('conversation')
+
+    // Idempotent re-promote stays a conversation.
+    await promoteConversation(id, TEST_USER)
+    expect((await loadConversation(id, TEST_USER))!.kind).toBe('conversation')
+  })
+
+  it('setConversationStatus updates status without touching context (scoped to user)', async () => {
+    if (!dbAvailable) return
+    const id = `act-${Math.random().toString(36).slice(2, 10)}`
+    const ctx = JSON.stringify({ events: [], status: 'running' })
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'default',
+      title: 't',
+      serializedContext: ctx,
+      kind: 'action',
+      source: 'post',
+      status: 'running',
+    })
+
+    await setConversationStatus(id, 'wrong-user', 'error')
+    expect((await loadConversation(id, TEST_USER))!.status).toBe('running')
+
+    await setConversationStatus(id, TEST_USER, 'error')
+    const loaded = await loadConversation(id, TEST_USER)
+    expect(loaded!.status).toBe('error')
+    // Context blob untouched.
+    expect(loaded!.serializedContext).toBe(ctx)
+  })
+
+  it('listConversations surfaces kind/source/status', async () => {
+    if (!dbAvailable) return
+    const id = `act-${Math.random().toString(36).slice(2, 10)}`
+    await saveConversation({
+      id,
+      userId: TEST_USER,
+      agentId: 'default',
+      title: 't',
+      serializedContext: '{}',
+      kind: 'action',
+      source: 'post',
+      status: 'running',
+    })
+    const row = (await listConversations(TEST_USER)).find((r) => r.id === id)
+    expect(row).toBeDefined()
+    expect(row!.kind).toBe('action')
+    expect(row!.source).toBe('post')
+    expect(row!.status).toBe('running')
   })
 })

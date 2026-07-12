@@ -26,7 +26,13 @@ import {
   type SessionData,
 } from "./session.server";
 import { getAgent, getAgentMetadata } from "./registry.server";
-import { listConversations as dbListConversations } from "../db/conversations.server";
+import {
+  listConversations as dbListConversations,
+  promoteConversation as dbPromoteConversation,
+  type ConversationKind,
+  type ConversationSource,
+  type ConversationStatus,
+} from "../db/conversations.server";
 import type { HarnessSettings } from "../settings";
 import { runWithSettings } from "../settings-context.server";
 import { getAuthenticatedUser } from "../auth/server";
@@ -130,6 +136,16 @@ async function runTurn(
 }
 
 /**
+ * Promote an action to a regular conversation (flip `kind`). Bound to the
+ * sidebar's confirm-on-send gate. Scoped to the current user. Self-
+ * authenticating — safe to expose as a server action.
+ */
+export async function promoteAction(sessionId: string): Promise<void> {
+  const user = await requireUser();
+  await dbPromoteConversation(sessionId, user.id);
+}
+
+/**
  * Approve a pending action.
  */
 export async function approveAction(
@@ -201,6 +217,12 @@ export interface ConversationSummary {
   id: string;
   agentId: string;
   title: string | null;
+  /** 'conversation' | 'action' — drives the sidebar's segmented filter. */
+  kind: ConversationKind;
+  /** 'chat' | 'post' — immutable provenance. */
+  source: ConversationSource;
+  /** Lifted status — drives the in-flight spinner/badge. */
+  status: ConversationStatus;
   /** ISO 8601 — Date doesn't survive server-action serialization unscathed. */
   updatedAt: string;
 }
@@ -225,6 +247,9 @@ export async function listConversations(): Promise<ConversationSummary[]> {
     id: r.id,
     agentId: r.agentId,
     title: r.title,
+    kind: r.kind,
+    source: r.source,
+    status: r.status,
     updatedAt: r.updatedAt.toISOString(),
   }));
 }
@@ -238,6 +263,10 @@ export interface LoadedConversation {
   id: string;
   agentId: string;
   messages: ReplayedMessage[];
+  /** Row kind — the chat view reads this to gate the promotion confirm on
+   *  send (only actions prompt). Authoritative (from the DB), unlike the
+   *  possibly-stale sidebar threads cache. */
+  kind: ConversationKind;
   /** Serialized UnifiedContext. The events array can be replayed by the UI
    *  to repopulate the graph and observability panel. */
   serialized: string;
@@ -261,6 +290,7 @@ export async function loadConversation(
     id: sessionId,
     agentId: loaded.agentId,
     messages,
+    kind: loaded.kind,
     serialized: loaded.serializedContext,
   };
 }

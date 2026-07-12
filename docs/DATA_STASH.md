@@ -3,7 +3,10 @@
 The Data Stash lets users upload documents that the agent can reference and
 search. This doc covers the **store → chunk → embed → search** pipeline
 (issues #6, #9, #8). For the tool-result side of the stash (hide/archive of
-agent-produced results) see [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md).
+agent-produced results) see [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md). Voice
+recordings from the [agent trigger endpoint](AGENT_TRIGGER.md) are also stored
+here (base64 audio, keyed by `run_id`) for provenance + inline playback — stored
+only, not ingested.
 
 ```
 upload ─▶ store (RedisJSON) ─▶ chunk ─▶ embed (local/OpenRouter) ─▶ HNSW index

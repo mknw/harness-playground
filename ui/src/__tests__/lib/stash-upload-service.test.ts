@@ -30,6 +30,39 @@ describe('upload-service (Issue #6)', () => {
       expect(guessMimeType('archive.weird')).toBe('text/plain')
       expect(guessMimeType('trailing.')).toBe('text/plain')
     })
+    it('maps audio extensions (agent trigger recordings)', () => {
+      expect(guessMimeType('memo.m4a')).toBe('audio/mp4')
+      expect(guessMimeType('memo.mp3')).toBe('audio/mpeg')
+      expect(guessMimeType('memo.wav')).toBe('audio/wav')
+      expect(guessMimeType('memo.caf')).toBe('audio/x-caf')
+    })
+  })
+
+  describe('audio is treated as binary (base64)', () => {
+    it('classifies audio mimetypes as non-text', () => {
+      expect(isTextMime('audio/mp4')).toBe(false)
+      expect(isTextMime('audio/mpeg')).toBe(false)
+      expect(isTextMime('audio/wav')).toBe(false)
+    })
+    it('base64-encodes an audio recording (multipart, with content-type)', async () => {
+      const BOUNDARY = '----audioboundary'
+      const body =
+        `--${BOUNDARY}\r\n` +
+        `Content-Disposition: form-data; name="sessionId"\r\n\r\nrun-1\r\n` +
+        `--${BOUNDARY}\r\n` +
+        `Content-Disposition: form-data; name="file"; filename="voice.m4a"\r\n` +
+        `Content-Type: audio/mp4\r\n\r\n` +
+        `\x00\x01\x02binaryish\r\n` +
+        `--${BOUNDARY}--\r\n`
+      const req = new Request('http://x/api/stash/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': `multipart/form-data; boundary=${BOUNDARY}` },
+        body,
+      })
+      const input = await parseUploadRequest(req)
+      expect(input.mimeType).toBe('audio/mp4')
+      expect(input.encoding).toBe('base64')
+    })
   })
 
   describe('parseUploadRequest — JSON', () => {
