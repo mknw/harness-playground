@@ -36,6 +36,8 @@ export interface DataStashPanelProps {
   onStashAction: (eventId: string, action: StashAction) => Promise<void>
   /** A citation clicked in the chat — open the inline viewer at this reference. */
   pendingReference?: OpenReferenceTarget | null
+  /** Fired after a successful upload (so the route can watch embedding status). */
+  onUploaded?: () => void
 }
 
 interface ToolResultItem {
@@ -995,13 +997,16 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       setUploadError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setUploading(false)
-      // Open a ~20s watch window so the "embedding…" indicator appears + clears
-      // without a manual refresh, then stops (covers the no-retriever case where
-      // no status ever lands). One reconcile refresh picks up server-side fields.
+      // The upload response already carries `ingestStatus` (the optimistic add
+      // shows "embedding…" instantly), so we DON'T refresh immediately — an
+      // early fetch would race the background ingest and clobber the optimistic
+      // `pending` back to none. Open a ~25s watch window instead; the poll
+      // reconciles pending → indexed once redis catches up.
       setWatching(true)
       if (watchTimer) clearTimeout(watchTimer)
-      watchTimer = setTimeout(() => setWatching(false), 20000)
-      void refresh()
+      watchTimer = setTimeout(() => setWatching(false), 25000)
+      // Let the route track embedding status (to block the chat composer).
+      props.onUploaded?.()
     }
   }
 

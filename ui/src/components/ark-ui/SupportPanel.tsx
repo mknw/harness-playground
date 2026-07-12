@@ -70,6 +70,8 @@ export interface SupportPanelProps {
   /** A citation clicked in the chat — switch to the Data Stash tab and open the
    *  inline viewer at this reference. */
   pendingReference?: OpenReferenceTarget | null;
+  /** Fired after a successful upload so the route can watch embedding status. */
+  onUploaded?: () => void;
 }
 
 // ============================================================================
@@ -314,6 +316,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
                 agentId={props.agentId}
                 onStashAction={props.onStashAction ?? (async () => {})}
                 pendingReference={props.pendingReference}
+                onUploaded={props.onUploaded}
               />
             </Suspense>
           </Tabs.Content>

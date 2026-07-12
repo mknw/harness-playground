@@ -74,6 +74,9 @@ export interface ChatInterfaceProps {
   onHighlightEntities?: (ids: string[]) => void
   /** Open the inline file viewer for a citation clicked in an assistant message. */
   onOpenReference?: (target: OpenReferenceTarget) => void
+  /** True while uploaded sources are still embedding — blocks the composer so the
+   *  user can't query the retriever before its documents are searchable. */
+  embeddingSources?: boolean
   // ---- Per-session progress + run state (lives in the route, see #47) ----
   getProgress: (sessionId: string) => ChainProgressController
   getRunState: (sessionId: string) => SessionRunState
@@ -526,8 +529,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">
         <ChatInput
           onSend={handleSendMessage}
-          disabled={isProcessing()}
-          blockedMessage={blockedMessage()}
+          disabled={isProcessing() || !!props.embeddingSources}
+          blockedMessage={
+            props.embeddingSources
+              ? 'Embedding sources… you can ask once indexing finishes.'
+              : blockedMessage()
+          }
           focusToken={props.focusInputToken}
         />
       </div>
