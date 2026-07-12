@@ -311,6 +311,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
               <DataStashPanel
                 events={props.contextEvents ?? []}
                 sessionId={props.sessionId ?? ''}
+                agentId={props.agentId}
                 onStashAction={props.onStashAction ?? (async () => {})}
                 pendingReference={props.pendingReference}
               />

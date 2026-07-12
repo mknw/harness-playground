@@ -30,6 +30,9 @@ export type DocAction = StashAction | 'delete' | 'download'
 export interface DataStashPanelProps {
   events: ContextEvent[]
   sessionId: string
+  /** The conversation's selected agent — sent with uploads so the auto-ingest
+   *  gate can resolve the harness even before the session is persisted. */
+  agentId?: string
   onStashAction: (eventId: string, action: StashAction) => Promise<void>
   /** A citation clicked in the chat — open the inline viewer at this reference. */
   pendingReference?: OpenReferenceTarget | null
@@ -973,6 +976,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       for (const file of files) {
         const form = new FormData()
         form.set('sessionId', sid)
+        if (props.agentId) form.set('agentId', props.agentId)
         form.set('file', file)
         const res = await fetch('/api/stash/upload', { method: 'POST', body: form })
         const body = (await res.json().catch(() => ({}))) as {
