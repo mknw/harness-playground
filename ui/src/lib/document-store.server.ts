@@ -28,7 +28,7 @@
  */
 
 import { assertServerOnImport } from './harness-patterns/assert.server'
-import { callTool as defaultCallTool } from './harness-patterns/mcp-client.server'
+import { stashCallTool, directCallTool, gatewayCallTool } from './redis-direct.server'
 import type { ToolCallResult } from './harness-patterns/types'
 import type { PriorResult } from '../../baml_client/types'
 
@@ -275,7 +275,7 @@ export function redisWriteError(result: ToolCallResult): string | null {
  */
 export async function storeDocument(
   input: StoreDocumentInput,
-  callTool: CallTool = defaultCallTool,
+  callTool: CallTool = stashCallTool(),
 ): Promise<StashDocument> {
   const encoding = input.encoding ?? 'utf8'
   // `size` is the ORIGINAL byte count: for base64 that's the decoded length
@@ -340,7 +340,7 @@ export async function storeDocument(
 export async function getDocument(
   sessionId: string,
   docId: string,
-  callTool: CallTool = defaultCallTool,
+  callTool: CallTool = stashCallTool(),
 ): Promise<StashDocument | null> {
   const res = await callTool('json_get', {
     name: docKey(sessionId, docId),
@@ -357,7 +357,7 @@ export async function getDocument(
 export async function getDocumentMeta(
   sessionId: string,
   docId: string,
-  callTool: CallTool = defaultCallTool,
+  callTool: CallTool = stashCallTool(),
 ): Promise<StashDocumentMeta | null> {
   const doc = await getDocument(sessionId, docId, callTool)
   if (!doc) return null
@@ -390,9 +390,9 @@ export function invalidateDocumentList(sessionId: string): void {
  */
 export async function listDocuments(
   sessionId: string,
-  callTool: CallTool = defaultCallTool,
+  callTool: CallTool = stashCallTool(),
 ): Promise<StashDocumentMeta[]> {
-  const cacheable = callTool === defaultCallTool
+  const cacheable = callTool === gatewayCallTool || callTool === directCallTool
   if (cacheable) {
     const hit = listCache.get(sessionId)
     if (hit && Date.now() - hit.at < LIST_CACHE_TTL_MS) return hit.docs
@@ -433,7 +433,7 @@ export async function setDocumentFlags(
   sessionId: string,
   docId: string,
   patch: { hidden?: boolean; archived?: boolean; ingestStatus?: IngestStatus },
-  callTool: CallTool = defaultCallTool,
+  callTool: CallTool = stashCallTool(),
 ): Promise<StashDocument | null> {
   const doc = await getDocument(sessionId, docId, callTool)
   if (!doc) return null
@@ -469,7 +469,7 @@ export async function setDocumentFlags(
 export async function deleteDocument(
   sessionId: string,
   docId: string,
-  callTool: CallTool = defaultCallTool,
+  callTool: CallTool = stashCallTool(),
 ): Promise<void> {
   // `delete` uses `key` (not `name`) — see CLAUDE.md Redis quirks.
   await callTool('delete', { key: docKey(sessionId, docId) })

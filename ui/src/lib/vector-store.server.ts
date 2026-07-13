@@ -23,7 +23,7 @@
  */
 
 import { assertServerOnImport } from './harness-patterns/assert.server'
-import { callTool as defaultCallTool } from './harness-patterns/mcp-client.server'
+import { stashCallTool } from './redis-direct.server'
 import { redisWriteError, type CallTool } from './document-store.server'
 import type { EmbeddingSpace } from './embeddings.server'
 
@@ -75,7 +75,7 @@ const VID_KEY = '_vid'
 // ============================================================================
 
 export function createVectorStore(opts: VectorStoreOptions): VectorStore {
-  const callTool = opts.callTool ?? defaultCallTool
+  const callTool = opts.callTool ?? stashCallTool()
   const metric = opts.distanceMetric ?? 'COSINE'
 
   async function ensureIndex(): Promise<void> {
