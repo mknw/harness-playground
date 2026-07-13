@@ -100,6 +100,14 @@ export interface StoreDocumentInput {
    * base64-encoded binary (the size limit then applies to the decoded bytes).
    */
   encoding?: 'utf8' | 'base64'
+  /**
+   * Initial vector-ingestion status, persisted in the SAME first write. The
+   * upload route sets `'pending'` here when it will auto-ingest, so Redis
+   * reflects "embedding…" from t=0 — otherwise a status poll landing before the
+   * background ingest's own `setDocumentFlags('pending')` reads no status and
+   * the UI flickers (chip blanks, composer un-blocks). Absent → not ingested.
+   */
+  ingestStatus?: IngestStatus
 }
 
 // ============================================================================
@@ -290,6 +298,9 @@ export async function storeDocument(
     content: input.content,
     // Omit when utf8 so existing docs/tests stay byte-identical.
     ...(encoding === 'base64' ? { encoding } : {}),
+    // Persist the initial ingest status in this first write (no separate
+    // setDocumentFlags round-trip), so a poll can never read a status gap.
+    ...(input.ingestStatus ? { ingestStatus: input.ingestStatus } : {}),
   }
 
   const ttl = input.ttlSeconds ?? DEFAULT_TTL_SECONDS

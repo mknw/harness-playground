@@ -123,6 +123,23 @@ describe('document-store (Issue #6)', () => {
       expect(doc.uploadedAt).toBeGreaterThanOrEqual(before)
     })
 
+    it('omits ingestStatus by default but persists it when supplied', async () => {
+      const plain = await storeDocument(
+        { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x' },
+        fake.callTool,
+      )
+      expect(plain.ingestStatus).toBeUndefined()
+
+      // The upload gate persists 'pending' in this FIRST write so a status poll
+      // can't read a no-status gap and flicker; it must round-trip from Redis.
+      const pending = await storeDocument(
+        { sessionId: 's1', filename: 'b.txt', mimeType: 'text/plain', content: 'y', ingestStatus: 'pending' },
+        fake.callTool,
+      )
+      expect(pending.ingestStatus).toBe('pending')
+      expect((await getDocument('s1', pending.id, fake.callTool))?.ingestStatus).toBe('pending')
+    })
+
     it('writes to the namespaced key and registers the session index with a TTL', async () => {
       const doc = await storeDocument(
         { sessionId: 's1', filename: 'a.txt', mimeType: 'text/plain', content: 'x', id: 'fixed-id' },

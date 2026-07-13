@@ -35,20 +35,30 @@ export async function POST(event: APIEvent) {
 
     try {
       const { agentId, ...storeInput } = input
-      const doc = await storeDocument(storeInput)
-      const { content: _content, ...meta } = doc
-      void _content
 
       // Harness-aware Data Stash: if this session's agent composes a retriever
       // wired to the local redis vector store, auto-ingest the upload. The GATE
-      // DECISION is fast (memoized per agentId) so we can report
-      // `ingestStatus: 'pending'` in THIS response — the panel shows "embedding…"
-      // instantly, without waiting on a status poll. The actual embed (slow on
-      // the serial gateway) runs in the background; the client reconciles to
-      // indexed/failed via `GET ?sessionId`. The agentId hint lets this work even
-      // before the session is persisted (drop-files-then-chat).
-      if (await willAutoIngest(input.sessionId, userId, doc.encoding, agentId)) {
-        meta.ingestStatus = 'pending'
+      // DECISION is fast (memoized per agentId), and we decide it BEFORE storing
+      // so the very first write persists `ingestStatus: 'pending'`. That closes
+      // the status gap: Redis reflects "embedding…" from t=0, so a status poll
+      // (chip / composer-block) can never read a no-status doc and flicker. The
+      // actual embed (slow on the serial gateway) runs in the background; the
+      // client reconciles to indexed/failed via `GET ?sessionId`. The agentId
+      // hint lets this work even before the session is persisted (drop-then-chat).
+      const ingest = await willAutoIngest(
+        input.sessionId,
+        userId,
+        storeInput.encoding,
+        agentId,
+      )
+      const doc = await storeDocument({
+        ...storeInput,
+        ...(ingest ? { ingestStatus: 'pending' as const } : {}),
+      })
+      const { content: _content, ...meta } = doc
+      void _content
+
+      if (ingest) {
         void ingestStashDocument(input.sessionId, doc.id).catch(() => {})
       }
 

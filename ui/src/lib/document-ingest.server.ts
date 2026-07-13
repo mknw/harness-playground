@@ -252,10 +252,14 @@ export async function ingestStashDocument(
     await setDocumentFlags(sessionId, docId, { ingestStatus: 'failed' }, callTool)
     return null
   }
-  // Mark 'pending' up front so the panel shows "embedding…" for BOTH the
-  // upload-gate and the lazy-ensure paths (embedding a doc is slow on the serial
-  // gateway; without this the UI looks stuck at no-status).
-  await setDocumentFlags(sessionId, docId, { ingestStatus: 'pending' }, callTool)
+  // Mark 'pending' up front so the panel shows "embedding…" while we embed
+  // (slow on the serial gateway; without this the lazy-ensure path looks stuck
+  // at no-status). The upload-gate path already persisted 'pending' in the
+  // store write, so skip the redundant round-trip there — re-writing the same
+  // value only burns a serial gateway call and a list-cache invalidation.
+  if (doc.ingestStatus !== 'pending') {
+    await setDocumentFlags(sessionId, docId, { ingestStatus: 'pending' }, callTool)
+  }
   try {
     const result = await ingestDocument(doc, opts)
     await setDocumentFlags(sessionId, docId, { ingestStatus: 'indexed' }, callTool)
