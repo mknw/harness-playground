@@ -248,3 +248,32 @@ describe('cross-turn persistence after conversation switch', () => {
     expect(restored.events.find((e) => e.id === 'ev-second-turn')).toBeTruthy()
   })
 })
+
+describe('status lifting on save (agent-trigger status column)', () => {
+  // The harness leaves a *successful* run as ctx.status='running' (runChain
+  // never calls setDone). saveSession is only ever called after the harness
+  // returns, so a persisted 'running' means "completed" → it must lift to
+  // 'done' for the sidebar badge. 'paused'/'error' are explicit and preserved.
+  async function savedStatus(sessionId: string, ctxStatus: string): Promise<string | undefined> {
+    const ctx = createContext('hi', {}, sessionId)
+    ;(ctx as { status: string }).status = ctxStatus
+    await saveSession(sessionId, TEST_USER, 'default', serializeContext(ctx))
+    return (await loadSession(sessionId, TEST_USER))?.status
+  }
+
+  it("lifts a completed run's 'running' status to 'done'", async () => {
+    if (!dbAvailable) return
+    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'running')).toBe('done')
+  })
+
+  it("preserves 'paused' (awaiting approval) and 'error'", async () => {
+    if (!dbAvailable) return
+    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'paused')).toBe('paused')
+    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'error')).toBe('error')
+  })
+
+  it("maps an explicit 'done' through unchanged", async () => {
+    if (!dbAvailable) return
+    expect(await savedStatus(`xt-${Math.random().toString(36).slice(2, 10)}`, 'done')).toBe('done')
+  })
+})

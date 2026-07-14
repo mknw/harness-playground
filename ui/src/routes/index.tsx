@@ -50,6 +50,26 @@ export default function Home() {
     mutateThreads(list => (list ?? []).map(t => (t.id === sid ? { ...t, title } : t)))
   }
 
+  // Promotion: flip the row's kind in-place so it moves from Actions to Chats.
+  const handlePromoted = (sid: string) => {
+    mutateThreads(list =>
+      (list ?? []).map(t => (t.id === sid ? { ...t, kind: 'conversation' as const } : t)),
+    )
+  }
+
+  // Background actions complete off any browser channel, so poll the list while
+  // at least one action is still `running` to surface the running→done flip.
+  // The effect re-runs on every threads() change; it only arms an interval when
+  // a running action exists, and clears it as soon as none remain.
+  createEffect(() => {
+    const hasRunningAction = (threads() ?? []).some(
+      t => t.kind === 'action' && t.status === 'running',
+    )
+    if (!hasRunningAction) return
+    const interval = setInterval(() => refetchThreads(), 5000)
+    onCleanup(() => clearInterval(interval))
+  })
+
   // ===========================================================================
   // Per-session progress + run state (#47)
   // ===========================================================================
@@ -276,6 +296,7 @@ export default function Home() {
                 registerAbortController={registerAbortController}
                 unregisterAbortController={unregisterAbortController}
                 onTitleUpdated={handleTitleUpdated}
+                onPromoted={handlePromoted}
                 focusInputToken={focusInputToken()}
               />
             </div>

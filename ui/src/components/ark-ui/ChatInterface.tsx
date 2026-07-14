@@ -17,7 +17,7 @@
  *   calls into the correct controller even after the user switches threads.
  */
 
-import { createSignal, createEffect, createMemo, onMount } from 'solid-js'
+import { createSignal, createEffect, createMemo, onMount, Show } from 'solid-js'
 import { ChatMessages, type Message } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
@@ -26,6 +26,7 @@ import type { ChainProgressController } from './useChainProgress'
 import {
   approveAction,
   rejectAction,
+  promoteAction,
   loadConversation,
   extractGraphFromResult,
   extractGraphElements,
@@ -80,6 +81,10 @@ export interface ChatInterfaceProps {
    *  `title_updated` SSE event after the first-turn LLM title resolves.
    *  Route patches its threads cache in-place; no refetch required. */
   onTitleUpdated?: (sessionId: string, title: string) => void
+  /** Fired after an action is promoted to a conversation (the user confirmed
+   *  sending into it). The parent flips the row's `kind` in its threads cache
+   *  so it moves from the Actions segment to Chats. */
+  onPromoted?: (sessionId: string) => void
   /** Monotonic token forwarded to ChatInput — every change focuses the
    *  composer textarea (used to land focus there after `+ New Chat`). */
   focusInputToken?: number
@@ -99,6 +104,13 @@ const WELCOME_MESSAGE: Message = {
 export const ChatInterface = (props: ChatInterfaceProps) => {
   const [messages, setMessages] = createSignal<Message[]>([])
   const [selectedAgent, setSelectedAgent] = createSignal('default')
+  // Row kind for the open thread — gates the promotion confirm on send. A
+  // brand-new chat (load throws) stays 'conversation'. Set from loadConversation.
+  const [currentKind, setCurrentKind] = createSignal<'conversation' | 'action'>('conversation')
+  // Pending promotion: holds the drafted message while the confirm modal is up.
+  // null → modal closed. Declining clears it WITHOUT sending (hard gate).
+  const [promotionDraft, setPromotionDraft] = createSignal<string | null>(null)
+  const [promoting, setPromoting] = createSignal(false)
   // Report the selected agent up to the parent (initial 'default', then on load
   // and on every change) so agent-aware UI like the Tools panel can react.
   createEffect(() => props.onSelectedAgentChange?.(selectedAgent()))
@@ -128,9 +140,14 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     prevEventCount = 0
     props.onResetForNewSession?.()
 
+    // Default to 'conversation' until the load resolves — a brand-new chat
+    // (load rejects) must never gate its first send.
+    setCurrentKind('conversation')
+
     loadConversation(sid)
       .then((loaded) => {
         setSelectedAgent(loaded.agentId)
+        setCurrentKind(loaded.kind)
         setMessages(
           loaded.messages.map((m) => ({
             id: m.id,
@@ -173,7 +190,42 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     props.onAgentChangeRequestsNewSession?.()
   }
 
-  const handleSendMessage = async (content: string) => {
+  // Promotion gate: sending into an `action` first asks the user to confirm
+  // turning it into a conversation. Declining cancels the send entirely (the
+  // draft is dropped — the user chose not to interact). Once promoted, the
+  // thread is a normal conversation and never gates again.
+  const handleSendMessage = (content: string) => {
+    if (currentKind() === 'action') {
+      setPromotionDraft(content)
+      return
+    }
+    void runSend(content)
+  }
+
+  const confirmPromotion = async () => {
+    const content = promotionDraft()
+    if (content == null || promoting()) return
+    setPromoting(true)
+    try {
+      await promoteAction(props.sessionId)
+      setCurrentKind('conversation')
+      props.onPromoted?.(props.sessionId)
+      setPromotionDraft(null)
+      void runSend(content)
+    } catch (err) {
+      console.error('[ChatInterface] promotion failed:', err)
+      // Leave the modal open so the user can retry or cancel.
+    } finally {
+      setPromoting(false)
+    }
+  }
+
+  const cancelPromotion = () => {
+    // Hard gate: drop the drafted message without sending.
+    setPromotionDraft(null)
+  }
+
+  const runSend = async (content: string) => {
     // Snapshot the active sessionId at submit time. The user may switch
     // threads mid-stream; without this, late-arriving events would corrupt
     // whichever thread happens to be in view (#47).
@@ -508,6 +560,69 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           focusToken={props.focusInputToken}
         />
       </div>
+
+      {/* Promotion confirm — shown when the user sends into an action. */}
+      <Show when={promotionDraft() != null}>
+        <div
+          data-role="promotion-confirm"
+          style={{
+            position: 'fixed',
+            inset: '0',
+            'z-index': '200',
+            display: 'flex',
+            'align-items': 'center',
+            'justify-content': 'center',
+            background: 'rgba(0,0,0,0.55)',
+          }}
+          onClick={cancelPromotion}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            bg="dark-bg-secondary"
+            border="1 neon-cyan/30"
+            rounded="lg"
+            p="5"
+            shadow="2xl"
+            style={{ 'max-width': '24rem', margin: '1rem' }}
+          >
+            <div flex="~" items="center" gap="2" m="b-2">
+              <span class="i-mdi-lightning-bolt-outline" style={{ width: '20px', height: '20px', color: '#22d3ee' }} />
+              <span text="sm dark-text-primary" font="medium">Turn this action into a conversation?</span>
+            </div>
+            <p text="xs dark-text-secondary" m="b-4" style={{ 'line-height': '1.5' }}>
+              Sending a message will promote this triggered action into a regular
+              conversation. If you cancel, the message won't be sent and it stays
+              an action.
+            </p>
+            <div flex="~" gap="2" justify="end">
+              <button
+                onClick={cancelPromotion}
+                disabled={promoting()}
+                p="x-3 y-1.5"
+                rounded="md"
+                text="xs dark-text-secondary"
+                bg="transparent hover:dark-bg-hover"
+                border="1 dark-border-secondary"
+                transition="all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmPromotion}
+                disabled={promoting()}
+                p="x-3 y-1.5"
+                rounded="md"
+                text="xs white"
+                bg="cyber-700 hover:cyber-600"
+                font="medium"
+                transition="all"
+              >
+                {promoting() ? 'Promoting…' : 'Promote & send'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Show>
     </div>
   )
 }

@@ -189,5 +189,6 @@ Custom tokens: `dark-bg-{primary,secondary,tertiary}`, `dark-text-{primary,secon
 | [GitHub Project — "Harness Playground tasks"](https://github.com/users/mknw/projects/5) | Planning board / roadmap — replaced `docs/ROADMAP.md`; planning lives in GitHub Projects now |
 | [`docs/UI_ARCHITECTURE.md`](docs/UI_ARCHITECTURE.md) | Component structure, data flow, Chat-Graph linking |
 | [`docs/DATA_STASH.md`](docs/DATA_STASH.md) | Data Stash pipeline: upload → chunk → embed → search (#6/#9/#8), API routes, Redis storage, redis-stack + local-embedder requirements |
+| [`docs/AGENT_TRIGGER.md`](docs/AGENT_TRIGGER.md) | `POST /api/agents/:id` async agent trigger → action rows: contract, fire-and-forget model, `kind`/`source`/`status` columns, token auth (`configs/action-tokens.yaml`), recording playback via Data Stash, promotion gate |
 | [`ui/README.md`](ui/README.md) | UI quick start and file index |
 | [`ui/src/lib/harness-patterns/README.md`](ui/src/lib/harness-patterns/README.md) | Harness patterns full API |

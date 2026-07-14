@@ -2,16 +2,28 @@ import { For, Show, createSignal } from 'solid-js'
 import { SettingsPanel } from './SettingsPanel'
 import { regenerateConversationTitle } from '../../lib/harness-client'
 
+/** Mirror of the server's ConversationKind/Status (kept local so the sidebar
+ *  has no server-module import). */
+export type ThreadKind = 'conversation' | 'action'
+export type ThreadStatus = 'running' | 'paused' | 'done' | 'error'
+
 export interface ChatThreadSummary {
   id: string
   title: string | null
   /** ISO 8601 timestamp from the server. */
   updatedAt: string
+  /** 'conversation' (chat) | 'action' (POST-triggered). Drives the filter. */
+  kind: ThreadKind
+  /** Lifted run status — drives the in-flight spinner / error badge. */
+  status: ThreadStatus
   /** Optimistic client-side row for a brand-new chat that hasn't been
    *  persisted yet. Replaced in place once the real row appears in the
    *  threadsResource refetch. */
   isPlaceholder?: boolean
 }
+
+/** The sidebar's segmented filter. */
+export type ThreadFilter = 'all' | 'conversation' | 'action'
 
 const PLACEHOLDER_TITLE = 'new chat'
 
@@ -35,9 +47,22 @@ export function mergeThreadsWithPlaceholder(
     id: placeholderId,
     title: null,
     updatedAt: nowIso(),
+    // A freshly-minted "+ New Chat" is always a chat conversation.
+    kind: 'conversation',
+    status: 'done',
     isPlaceholder: true,
   }
   return [placeholder, ...threads]
+}
+
+/** Filter threads by the selected segment. The optimistic placeholder is a
+ *  conversation, so it shows under 'all' and 'conversation' but not 'action'. */
+export function filterThreads(
+  threads: ChatThreadSummary[],
+  filter: ThreadFilter,
+): ChatThreadSummary[] {
+  if (filter === 'all') return threads
+  return threads.filter(t => t.kind === filter)
 }
 
 const formatTimestamp = (iso: string): string => {
@@ -69,9 +94,65 @@ interface ChatSidebarProps {
   onTitleRegenerated?: (sessionId: string, title: string) => void
 }
 
+/** A small status indicator for action rows: spinner while running, red dot on
+ *  error, amber dot when paused (awaiting approval). Done actions / all
+ *  conversations render nothing. */
+const StatusBadge = (props: { kind: ThreadKind; status: ThreadStatus }) => {
+  if (props.kind !== 'action') return null
+  if (props.status === 'running') {
+    return (
+      <span
+        title="Running"
+        aria-label="running"
+        class="i-mdi-loading animate-spin"
+        style={{ width: '14px', height: '14px', color: '#22d3ee', 'flex-shrink': 0 }}
+      />
+    )
+  }
+  if (props.status === 'error') {
+    return (
+      <span
+        title="Failed"
+        aria-label="error"
+        class="i-mdi-alert-circle-outline"
+        style={{ width: '14px', height: '14px', color: '#f87171', 'flex-shrink': 0 }}
+      />
+    )
+  }
+  if (props.status === 'paused') {
+    return (
+      <span
+        title="Awaiting approval"
+        aria-label="paused"
+        class="i-mdi-pause-circle-outline"
+        style={{ width: '14px', height: '14px', color: '#f59e0b', 'flex-shrink': 0 }}
+      />
+    )
+  }
+  // Done action — a subtle bolt marks it as POST-triggered without shouting.
+  return (
+    <span
+      title="Action (completed)"
+      aria-label="action"
+      class="i-mdi-lightning-bolt-outline"
+      style={{ width: '13px', height: '13px', color: '#71717a', 'flex-shrink': 0 }}
+    />
+  )
+}
+
+const FILTER_LABELS: ReadonlyArray<{ value: ThreadFilter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'conversation', label: 'Chats' },
+  { value: 'action', label: 'Actions' },
+]
+
 export const ChatSidebar = (props: ChatSidebarProps) => {
   // Per-thread pending state for the ↻ button — keyed by sessionId.
   const [pendingRegen, setPendingRegen] = createSignal<ReadonlySet<string>>(new Set())
+  // Segmented Actions/Conversations/All filter (#agent-trigger). Local state —
+  // the parent passes the full thread list; we filter for display.
+  const [filter, setFilter] = createSignal<ThreadFilter>('all')
+  const visibleThreads = () => filterThreads(props.threads, filter())
 
   const handleRegenerate = async (e: MouseEvent, threadId: string) => {
     // Stop the click from also selecting the thread.
@@ -137,17 +218,43 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
       {/* Thread List */}
       {!props.collapsed && (
         <>
+          {/* Segmented filter: All / Chats / Actions */}
+          <div p="x-2 t-2" flex="~" gap="1">
+            <For each={FILTER_LABELS}>
+              {(opt) => {
+                const active = () => filter() === opt.value
+                return (
+                  <button
+                    onClick={() => setFilter(opt.value)}
+                    flex="1"
+                    p="y-1"
+                    rounded="md"
+                    text={active() ? 'xs neon-cyan' : 'xs dark-text-tertiary'}
+                    bg={active() ? 'cyber-700/30' : 'transparent hover:dark-bg-hover'}
+                    border={active() ? '1 neon-cyan/40' : '1 transparent'}
+                    transition="all"
+                    font="medium"
+                    aria-pressed={active() ? 'true' : 'false'}
+                  >
+                    {opt.label}
+                  </button>
+                )
+              }}
+            </For>
+          </div>
           <div flex="1" overflow="auto">
             <Show
-              when={props.threads.length > 0}
+              when={visibleThreads().length > 0}
               fallback={
                 <div p="4" text="xs dark-text-tertiary">
-                  No conversations yet. Send a message to start.
+                  {filter() === 'action'
+                    ? 'No actions yet. Trigger one via POST /api/agents/:id.'
+                    : 'No conversations yet. Send a message to start.'}
                 </div>
               }
             >
               <div p="2" space="y-1">
-                <For each={props.threads}>
+                <For each={visibleThreads()}>
                   {(thread) => {
                     const isSelected = () => thread.id === props.selectedId
                     const isRegenerating = () => pendingRegen().has(thread.id)
@@ -167,15 +274,18 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                         relative=""
                         class="group"
                       >
-                        <div
-                          text={thread.isPlaceholder ? 'sm dark-text-tertiary' : 'sm dark-text-primary'}
-                          font={thread.isPlaceholder ? 'normal italic' : 'medium'}
-                          truncate
-                          pr="6"
-                        >
-                          {thread.isPlaceholder
-                            ? PLACEHOLDER_TITLE
-                            : thread.title ?? '(untitled)'}
+                        <div flex="~" items="center" gap="1.5" pr="6">
+                          <StatusBadge kind={thread.kind} status={thread.status} />
+                          <div
+                            text={thread.isPlaceholder ? 'sm dark-text-tertiary' : 'sm dark-text-primary'}
+                            font={thread.isPlaceholder ? 'normal italic' : 'medium'}
+                            truncate
+                            flex="1"
+                          >
+                            {thread.isPlaceholder
+                              ? PLACEHOLDER_TITLE
+                              : thread.title ?? '(untitled)'}
+                          </div>
                         </div>
                         <div text="xs dark-text-tertiary" m="t-1">
                           {formatTimestamp(thread.updatedAt)}

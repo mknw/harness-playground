@@ -25,8 +25,8 @@ const { mergeThreadsWithPlaceholder } = await import('../../../components/ark-ui
 type ChatThreadSummary = import('../../../components/ark-ui/ChatSidebar').ChatThreadSummary
 
 const persisted: ChatThreadSummary[] = [
-  { id: 'a', title: 'Alpha', updatedAt: '2026-05-10T00:00:00Z' },
-  { id: 'b', title: 'Beta', updatedAt: '2026-05-09T00:00:00Z' },
+  { id: 'a', title: 'Alpha', updatedAt: '2026-05-10T00:00:00Z', kind: 'conversation', status: 'done' },
+  { id: 'b', title: 'Beta', updatedAt: '2026-05-09T00:00:00Z', kind: 'conversation', status: 'done' },
 ]
 
 describe('mergeThreadsWithPlaceholder', () => {
@@ -45,6 +45,8 @@ describe('mergeThreadsWithPlaceholder', () => {
       id: 'new-id',
       title: null,
       updatedAt: '2026-05-10T12:00:00Z',
+      kind: 'conversation',
+      status: 'done',
       isPlaceholder: true,
     })
     expect(merged[1].id).toBe('a')
@@ -53,7 +55,7 @@ describe('mergeThreadsWithPlaceholder', () => {
 
   it('drops the placeholder once a persisted row with the same id arrives', () => {
     const withRow: ChatThreadSummary[] = [
-      { id: 'new-id', title: 'First message…', updatedAt: '2026-05-10T12:00:00Z' },
+      { id: 'new-id', title: 'First message…', updatedAt: '2026-05-10T12:00:00Z', kind: 'conversation', status: 'done' },
       ...persisted,
     ]
     const merged = mergeThreadsWithPlaceholder(withRow, 'new-id')
@@ -77,6 +79,8 @@ describe('mergeThreadsWithPlaceholder', () => {
       id: `cl-${i}`,
       title: `Conversation ${i}`,
       updatedAt: '2026-05-10T00:00:00Z',
+      kind: 'conversation' as const,
+      status: 'done' as const,
     }))
     const uuid = '550e8400-e29b-41d4-a716-446655440000'
     const merged = mergeThreadsWithPlaceholder(
