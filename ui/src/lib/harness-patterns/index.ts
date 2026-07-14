@@ -114,6 +114,8 @@ export {
   isRetrieverConfig,
   harnessHasRetriever,
   harnessHasRedisRetriever,
+  isSyncWorkspaceConfig,
+  harnessUsesSyncWorkspace,
 } from './pattern-capabilities'
 
 // ============================================================================

@@ -7,6 +7,9 @@
 # MCP config (contains secrets — use template.mcp-config.yaml as reference)
 configs/mcp-config.yaml
 
+# Action API tokens (contains secrets — use template.action-tokens.yaml as reference)
+configs/action-tokens.yaml
+
 # Python-generated files
 __pycache__/
 *.py[oc]

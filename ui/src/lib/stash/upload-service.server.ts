@@ -49,6 +49,18 @@ const MIME_BY_EXT: Record<string, string> = {
   webp: 'image/webp',
   zip: 'application/zip',
   parquet: 'application/vnd.apache.parquet',
+  // Audio — the agent-trigger endpoint stores voice recordings here. Mapped so
+  // a file arriving without a usable `blob.type` is still classified binary
+  // (audio/* fails isTextMime → base64) rather than corrupted as UTF-8 text.
+  m4a: 'audio/mp4',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  aac: 'audio/aac',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  opus: 'audio/opus',
+  flac: 'audio/flac',
+  caf: 'audio/x-caf',
 }
 
 /** Best-effort MIME from a filename extension; defaults to `text/plain`. */

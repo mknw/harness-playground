@@ -6,17 +6,23 @@
  * close + destroy), cleanup discipline on partial failure, and the
  * visibility guarantee that the inner pattern sees the transport via ALS.
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 
 vi.mock('../../../lib/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-import { withSandbox } from '../../../lib/sandbox/with-sandbox.server'
+import {
+  withSandbox,
+  getDefaultAttachments,
+  __resetSandboxDefaultsForTests,
+} from '../../../lib/sandbox/with-sandbox.server'
 import { getActiveSandbox } from '../../../lib/sandbox/scope.server'
 import { WarmPool } from '../../../lib/sandbox/warm-pool.server'
 import { SandboxScheduler } from '../../../lib/sandbox/scheduler.server'
 import { AttachmentTable } from '../../../lib/sandbox/attachment-table.server'
+import { DockerBackend } from '../../../lib/sandbox/docker-backend.server'
+import { harnessUsesSyncWorkspace } from '../../../lib/harness-patterns/pattern-capabilities'
 import type {
   ComputeBackend,
   HealthStatus,
@@ -36,12 +42,13 @@ type Calls = {
   destroy: VMHandle[]
   connectMcp: VMHandle[]
   closes: number
+  reapOrphans: number
 }
 
 function fakeBackend(opts?: {
   connectMcpFails?: boolean
 }): ComputeBackend & { calls: Calls } {
-  const calls: Calls = { boot: [], destroy: [], connectMcp: [], closes: 0 }
+  const calls: Calls = { boot: [], destroy: [], connectMcp: [], closes: 0, reapOrphans: 0 }
   const handle: VMHandle = {
     id: 'sbx-test',
     backend: 'docker',
@@ -81,6 +88,10 @@ function fakeBackend(opts?: {
     },
     async health(): Promise<HealthStatus> {
       return { state: 'healthy' }
+    },
+    async reapOrphans() {
+      calls.reapOrphans += 1
+      return 0
     },
   }
   return backend
@@ -439,5 +450,82 @@ describe('withSandbox id/fresh (step 6)', () => {
 
     await wrap.fn(fakeScope({}), fakeView)
     expect(kit.backend.calls.boot.length).toBe(before) // no extra boot
+  })
+})
+
+describe('withSandbox default-singleton orphan reaper (#97 Gap 1)', () => {
+  // These tests build the process-shared default singletons (everything else in
+  // this file injects backends), so reset module state around each one and stub
+  // the real reaper — it would otherwise shell out to `docker` (not hermetic).
+  afterEach(() => {
+    vi.restoreAllMocks()
+    __resetSandboxDefaultsForTests()
+  })
+
+  it('reaps orphans exactly once when the default singletons are first built', async () => {
+    __resetSandboxDefaultsForTests()
+    const reapSpy = vi.spyOn(DockerBackend.prototype, 'reapOrphans').mockResolvedValue(0)
+
+    // First default-singleton access constructs the shared DockerBackend and
+    // fires the one-shot reaper before anything is allocated.
+    getDefaultAttachments()
+    expect(reapSpy).toHaveBeenCalledTimes(1)
+
+    // Subsequent accesses reuse the singleton — the reaper does not re-fire.
+    getDefaultAttachments()
+    getDefaultAttachments()
+    expect(reapSpy).toHaveBeenCalledTimes(1)
+
+    // Let the fire-and-forget reap settle so the stub isn't torn down mid-flight.
+    await Promise.resolve()
+  })
+
+  it('does not reap on the injected-backend path (tests / non-default)', async () => {
+    __resetSandboxDefaultsForTests()
+    const reapSpy = vi.spyOn(DockerBackend.prototype, 'reapOrphans').mockResolvedValue(0)
+
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    await withSandbox({ backend })(inner).fn(fakeScope({}), fakeView)
+
+    // Neither the default DockerBackend nor the injected backend was reaped —
+    // withSandbox itself never reaps; only the default-singleton builder does.
+    expect(reapSpy).not.toHaveBeenCalled()
+    expect(backend.calls.reapOrphans).toBe(0)
+  })
+})
+
+describe('withSandbox durable-workspace capability marker (#97 Gap 3)', () => {
+  it('exposes the wrapped pattern as children', () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const wrapped = withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
+    expect(wrapped.children).toEqual([inner])
+  })
+
+  it('stamps sandboxSyncWorkspace when id + syncWorkspace are both set', () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const wrapped = withSandbox({ backend, id: 'sess-1', syncWorkspace: true })(inner)
+    expect((wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace).toBe(true)
+    // Detectable by the capability walker (the registry's agentUsesSyncWorkspace path).
+    expect(harnessUsesSyncWorkspace([wrapped])).toBe(true)
+  })
+
+  it('does NOT stamp the marker without syncWorkspace (config stays transparent)', () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const wrapped = withSandbox({ backend, id: 'sess-1' })(inner)
+    expect((wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace).toBeUndefined()
+    expect(wrapped.config).toEqual(inner.config)
+    expect(harnessUsesSyncWorkspace([wrapped])).toBe(false)
+  })
+
+  it('does NOT stamp the marker for syncWorkspace without an id (a no-op at runtime)', () => {
+    const backend = fakeBackend()
+    const inner = fakePattern(async (scope) => scope)
+    const wrapped = withSandbox({ backend, syncWorkspace: true })(inner)
+    expect((wrapped.config as { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace).toBeUndefined()
+    expect(wrapped.config).toEqual(inner.config)
   })
 })

@@ -11,6 +11,7 @@ export {
   processMessageWithAgent,
   approveAction,
   rejectAction,
+  promoteAction,
   clearSession,
   getAgentList,
   listConversations,

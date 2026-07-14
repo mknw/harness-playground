@@ -219,6 +219,37 @@ export class DockerBackend implements ComputeBackend {
     return DockerMcpTransport.open(vm.id, containerId(vm))
   }
 
+  /**
+   * Reap every sandbox container on the host (running or stopped). Each is
+   * tagged `kg-sandbox=1` by `runContainer`, so the labelled force-remove is
+   * safe by construction — it never touches non-sandbox containers. Mirrors
+   * the manual recipe in docs/sandbox/README.md → "Reap leftovers".
+   *
+   * Caveat (#97): this removes ALL labelled containers, including any a
+   * *concurrent* harness process on the same Docker host owns. Correct for
+   * single-process dev (the only v0 shape); gate behind a setting / grace
+   * window if multi-process sharing of one host becomes real.
+   */
+  async reapOrphans(): Promise<number> {
+    let listed: string
+    try {
+      listed = await docker(['ps', '-aq', '--filter', 'label=kg-sandbox=1'])
+    } catch {
+      // Docker engine unavailable ⇒ nothing reapable. Not a startup failure.
+      return 0
+    }
+    const ids = listed
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (ids.length === 0) return 0
+    await docker(['rm', '-f', ...ids]).catch(() => {
+      // Best-effort: a container may have exited/auto-removed between the
+      // `ps` and the `rm`. The id count still reflects what we found.
+    })
+    return ids.length
+  }
+
   async health(vm: VMHandle): Promise<HealthStatus> {
     const cid = containerId(vm)
     try {

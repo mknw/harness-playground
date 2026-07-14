@@ -15,6 +15,9 @@ import { onMount, onCleanup, createSignal } from 'solid-js'
 
 export interface InteractiveTerminalProps {
   sessionId: string
+  /** Active agent id — forwarded to the stream route so the Shell can hydrate
+   *  /work for durable-workspace agents on a first boot it triggers (#97 Gap 3). */
+  agentId?: string
 }
 
 type ConnState = 'connecting' | 'connected' | 'closed'
@@ -82,10 +85,14 @@ export const InteractiveTerminal = (props: InteractiveTerminalProps) => {
       }).catch(() => {})
     })
 
-    // PTY output down. Each frame is a JSON-encoded raw byte string.
-    const es = new EventSource(
-      `/api/sandbox/pty/stream?sessionId=${encodeURIComponent(sessionId)}`,
-    )
+    // PTY output down. Each frame is a JSON-encoded raw byte string. Forward
+    // the agent id so the server can hydrate /work for durable-workspace agents
+    // when this Shell is the first to boot the container (#97 Gap 3).
+    const agentId = props.agentId
+    const streamUrl =
+      `/api/sandbox/pty/stream?sessionId=${encodeURIComponent(sessionId)}` +
+      (agentId ? `&agentId=${encodeURIComponent(agentId)}` : '')
+    const es = new EventSource(streamUrl)
     es.onopen = () => {
       setState('connected')
       postResize()

@@ -24,6 +24,8 @@ import {
   saveConversation,
   deleteConversation,
   deriveTitle,
+  type ConversationKind,
+  type ConversationStatus,
 } from '../db/conversations.server'
 
 assertServerOnImport()
@@ -88,6 +90,11 @@ export function evictPatterns(sessionId: string): void {
 export interface LoadedSession {
   serializedContext: string
   agentId: string
+  /** Row kind — the promotion gate reads this to decide whether sending into
+   *  the thread should prompt "turn this action into a conversation?". */
+  kind: ConversationKind
+  /** Lifted status copy — surfaced so callers don't re-deserialize the blob. */
+  status: ConversationStatus
 }
 
 /** Load a serialized context for (sessionId, userId), or null if not found. */
@@ -97,7 +104,12 @@ export async function loadSession(
 ): Promise<LoadedSession | null> {
   const row = await loadConversation(sessionId, userId)
   if (!row) return null
-  return { serializedContext: row.serializedContext, agentId: row.agentId }
+  return {
+    serializedContext: row.serializedContext,
+    agentId: row.agentId,
+    kind: row.kind,
+    status: row.status,
+  }
 }
 
 /**
@@ -112,12 +124,18 @@ export async function saveSession(
   serializedContext: string
 ): Promise<void> {
   const title = extractTitleFromContext(serializedContext)
+  const status = extractStatusFromContext(serializedContext)
   await saveConversation({
     id: sessionId,
     userId,
     agentId,
     title,
     serializedContext,
+    status,
+    // kind/source omitted → only used on the row's first INSERT (a fresh chat
+    // defaults to 'conversation'/'chat'). For an already-inserted action row
+    // the ON CONFLICT UPDATE leaves kind/source untouched, so this save just
+    // refreshes context + status without demoting the action.
   })
 }
 
@@ -158,6 +176,31 @@ function extractTitleFromContext(serializedContext: string): string | null {
     return deriveTitle(content)
   } catch {
     return null
+  }
+}
+
+/**
+ * Lift `status` out of the serialized context so it can be stored in its own
+ * column, mapping it to the terminal value a *persisted* turn should carry.
+ *
+ * Key subtlety: the harness never flips a successful run to 'done' — `runChain`
+ * leaves `ctx.status === 'running'` and the synthesizer emits the final
+ * assistant_message directly (harness.server.ts's `status === 'done'` push is
+ * effectively dead). Since `saveSession` is only ever called *after* the
+ * harness returns, a persisted 'running' means "completed, never flipped" → we
+ * store it as 'done'. The genuinely in-flight 'running' badge comes solely from
+ * `seedActionRow`, which writes the column directly and bypasses this path.
+ * 'paused' (awaiting approval) and 'error' are explicit and preserved as-is.
+ */
+function extractStatusFromContext(serializedContext: string): ConversationStatus {
+  try {
+    const ctx = deserializeContext<Record<string, unknown>>(serializedContext)
+    const status = ctx.status as ConversationStatus | undefined
+    if (status === 'paused' || status === 'error') return status
+    // 'running' (completed-but-unflipped), 'done', or anything unexpected → done.
+    return 'done'
+  } catch {
+    return 'done'
   }
 }
 

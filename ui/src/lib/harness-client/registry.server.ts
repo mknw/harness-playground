@@ -10,7 +10,7 @@
 "use server";
 
 import type { ConfiguredPattern } from "../harness-patterns";
-import { usesCodeMode, harnessHasRedisRetriever } from "../harness-patterns";
+import { usesCodeMode, harnessHasRedisRetriever, harnessUsesSyncWorkspace } from "../harness-patterns";
 import type { SessionData } from "./session.server";
 
 // ============================================================================
@@ -146,6 +146,42 @@ export async function agentUsesRedisRetriever(
     const patterns = await agent.createPatterns(sessionId);
     const result = harnessHasRedisRetriever(patterns);
     redisRetrieverCapabilityCache.set(agentId, result);
+    return result;
+  } catch {
+    return false;
+  }
+}
+
+/** Memoized by agentId — same rationale as `codeModeCapabilityCache`: the
+ *  `withSandbox({ syncWorkspace })` flag is part of the static pattern shape,
+ *  independent of sessionId. */
+const syncWorkspaceCapabilityCache = new Map<string, boolean>();
+
+/**
+ * Whether an agent composes a **durable-workspace sandbox**
+ * (`withSandbox({ id, syncWorkspace: true })`) anywhere in its (possibly
+ * nested) pattern graph. The interactive Shell uses this to hydrate `/work/in`
+ * from the Data Stash when it is the first to boot the session container, so a
+ * Shell opened before the agent's first turn still sees prior files (#97 Gap 3).
+ *
+ * Structural detection (`harnessUsesSyncWorkspace`) + memoized by agentId,
+ * mirroring `agentUsesCodeMode`. On a `createPatterns` failure we return false
+ * and do NOT cache, so the next call re-attempts a real detection.
+ */
+export async function agentUsesSyncWorkspace(
+  agentId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const cached = syncWorkspaceCapabilityCache.get(agentId);
+  if (cached !== undefined) return cached;
+
+  const agent = getAgent(agentId);
+  if (!agent) return false;
+
+  try {
+    const patterns = await agent.createPatterns(sessionId);
+    const result = harnessUsesSyncWorkspace(patterns);
+    syncWorkspaceCapabilityCache.set(agentId, result);
     return result;
   } catch {
     return false;

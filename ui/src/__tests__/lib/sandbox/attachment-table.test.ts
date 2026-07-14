@@ -64,6 +64,7 @@ function makeBackend(overrides: Partial<ComputeBackend> = {}): ComputeBackend {
     }),
     connectMcp: vi.fn(async (vm: VMHandle) => makeTransport(vm.id)),
     health: vi.fn(async (): Promise<HealthStatus> => ({ state: 'healthy' })),
+    reapOrphans: vi.fn(async () => 0),
     ...overrides,
   }
   return backend
@@ -135,6 +136,77 @@ describe('AttachmentTable.acquire', () => {
     expect(a).not.toBe(b)
     expect(backend.boot).toHaveBeenCalledTimes(2)
     expect(table.size()).toBe(2)
+  })
+})
+
+describe('AttachmentTable.acquire health-check on reuse (#97 Gap 2)', () => {
+  it('health-checks the live entry on reuse and skips reboot when healthy', async () => {
+    const backend = makeBackend()
+    const pool = new WarmPool(backend, { caps: { base: 1 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    const first = await table.acquire('alpha', 'base', {})
+    const second = await table.acquire('alpha', 'base', {})
+
+    expect(second).toBe(first)
+    expect(first.refCount).toBe(2)
+    // Probed exactly once — only the reuse hit checks; the first (miss) boots.
+    expect(backend.health).toHaveBeenCalledTimes(1)
+    expect(backend.boot).toHaveBeenCalledTimes(1)
+    expect(backend.connectMcp).toHaveBeenCalledTimes(1)
+  })
+
+  it('evicts a dead entry and reboots a fresh attachment under the same id', async () => {
+    const health = vi.fn(async (): Promise<HealthStatus> => ({ state: 'healthy' }))
+    const backend = makeBackend({ health })
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    const first = await table.acquire('alpha', 'base', {})
+    const firstTransport = first.transport as FakeTransport
+    const firstVm = first.vm
+
+    // The container dies out from under us (crash / external `docker rm`).
+    health.mockResolvedValueOnce({ state: 'gone' })
+    const second = await table.acquire('alpha', 'base', {})
+
+    expect(second).not.toBe(first) // a fresh attachment, not the dead one
+    expect(second.id).toBe('alpha') // same id
+    expect(second.refCount).toBe(1)
+    expect(second.isFirstBoot).toBe(true) // re-hydration trigger for syncWorkspace
+    expect(firstTransport.closes).toBe(1) // stale transport torn down
+    expect(backend.destroy).toHaveBeenCalledWith(firstVm) // dead VM force-removed
+    expect(backend.boot).toHaveBeenCalledTimes(2) // rebooted
+    expect(table.has('alpha')).toBe(true)
+    expect(table.size()).toBe(1) // exactly one entry — no leak
+  })
+
+  it('treats an unhealthy (non-running) container as evictable too', async () => {
+    const health = vi.fn(async (): Promise<HealthStatus> => ({ state: 'healthy' }))
+    const backend = makeBackend({ health })
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    const first = await table.acquire('alpha', 'base', {})
+    health.mockResolvedValueOnce({ state: 'unhealthy', detail: 'exited' })
+    const second = await table.acquire('alpha', 'base', {})
+
+    expect(second).not.toBe(first)
+    expect(backend.boot).toHaveBeenCalledTimes(2)
+  })
+
+  it('reboots when the health probe itself throws (defensive)', async () => {
+    const health = vi.fn(async (): Promise<HealthStatus> => ({ state: 'healthy' }))
+    const backend = makeBackend({ health })
+    const pool = new WarmPool(backend, { caps: { base: 2 }, idleEvictMs: 60_000 })
+    const table = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+
+    const first = await table.acquire('alpha', 'base', {})
+    health.mockRejectedValueOnce(new Error('docker daemon gone'))
+    const second = await table.acquire('alpha', 'base', {})
+
+    expect(second).not.toBe(first)
+    expect(backend.boot).toHaveBeenCalledTimes(2)
   })
 })
 

@@ -348,3 +348,48 @@ describe('DockerBackend.reset', () => {
     await expect(backend.reset(handle)).rejects.toThrow(/boot failed/)
   })
 })
+
+describe('DockerBackend.reapOrphans', () => {
+  it('force-removes every kg-sandbox-labelled container and returns the count', async () => {
+    spawnPlan = (cmd, args) => {
+      if (args[0] === 'ps') return { stdout: 'abc123\ndef456\n', code: 0 }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    const n = await backend.reapOrphans()
+    expect(n).toBe(2)
+
+    // Listing is scoped to the family label so it never touches other containers.
+    const ps = spawnCalls.find((c) => c.args[0] === 'ps')!
+    expect(ps.args).toEqual(['ps', '-aq', '--filter', 'label=kg-sandbox=1'])
+
+    // A single force-remove passes every found id.
+    const rm = spawnCalls.find((c) => c.args[0] === 'rm')!
+    expect(rm.args).toEqual(['rm', '-f', 'abc123', 'def456'])
+  })
+
+  it('returns 0 and skips the remove when nothing is labelled', async () => {
+    spawnPlan = (cmd, args) => (args[0] === 'ps' ? { stdout: '', code: 0 } : { stdout: '', code: 0 })
+    const backend = await makeBackend()
+    expect(await backend.reapOrphans()).toBe(0)
+    expect(spawnCalls.some((c) => c.args[0] === 'rm')).toBe(false)
+  })
+
+  it('returns 0 (no throw) when the docker engine is unavailable', async () => {
+    spawnPlan = (cmd, args) =>
+      args[0] === 'ps' ? { stderr: 'cannot connect to docker daemon', code: 1 } : { stdout: '', code: 0 }
+    const backend = await makeBackend()
+    await expect(backend.reapOrphans()).resolves.toBe(0)
+    expect(spawnCalls.some((c) => c.args[0] === 'rm')).toBe(false)
+  })
+
+  it('still reports the found count when the remove partially fails', async () => {
+    spawnPlan = (cmd, args) => {
+      if (args[0] === 'ps') return { stdout: 'abc123\n', code: 0 }
+      if (args[0] === 'rm') return { stderr: 'No such container', code: 1 }
+      return { stdout: '', code: 0 }
+    }
+    const backend = await makeBackend()
+    await expect(backend.reapOrphans()).resolves.toBe(1)
+  })
+})

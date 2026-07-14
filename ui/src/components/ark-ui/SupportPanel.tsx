@@ -331,7 +331,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
 
           {/* Terminal Tab — read-only feed + interactive shell (#79) */}
           <Tabs.Content value="terminal" h="full">
-            <TerminalPanel events={props.contextEvents ?? []} sessionId={props.sessionId} />
+            <TerminalPanel events={props.contextEvents ?? []} sessionId={props.sessionId} agentId={props.agentId} />
           </Tabs.Content>
 
           {/* Actions Tab (Future) */}

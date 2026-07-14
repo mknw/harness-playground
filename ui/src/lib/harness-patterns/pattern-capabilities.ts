@@ -92,3 +92,22 @@ export function harnessHasRedisRetriever<T>(patterns: ConfiguredPattern<T>[] | u
   if (!patterns || patterns.length === 0) return false
   return patterns.some((p) => isRedisRetrieverConfig(p.config) || harnessHasRedisRetriever(p.children))
 }
+
+/** True when a pattern's resolved config carries the durable-workspace marker
+ *  that `withSandbox({ id, syncWorkspace: true })` stamps. The marker rides on
+ *  the wrapped pattern's config (the wrapper is not a leaf factory), so read it
+ *  via a widening cast like the retriever's `backendKinds`. */
+export function isSyncWorkspaceConfig(config: PatternConfig): boolean {
+  return (config as PatternConfig & { sandboxSyncWorkspace?: boolean }).sandboxSyncWorkspace === true
+}
+
+/**
+ * True when any pattern in the (nested) graph is a durable-workspace sandbox
+ * wrapper. The interactive Shell uses this (via `agentUsesSyncWorkspace`) to
+ * decide whether to hydrate `/work/in` when it is the first to boot the
+ * session container (#97 Gap 3).
+ */
+export function harnessUsesSyncWorkspace<T>(patterns: ConfiguredPattern<T>[] | undefined): boolean {
+  if (!patterns || patterns.length === 0) return false
+  return patterns.some((p) => isSyncWorkspaceConfig(p.config) || harnessUsesSyncWorkspace(p.children))
+}

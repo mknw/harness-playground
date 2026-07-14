@@ -42,6 +42,23 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS conversations_user_updated_idx
     ON conversations (user_id, updated_at DESC);
+
+  -- Agent-trigger endpoint: a row is either a chat 'conversation' or a
+  -- POST-triggered 'action'. These columns are added via ALTER (not in the
+  -- CREATE above) so EXISTING databases pick them up too — the CREATE only runs
+  -- when the table is absent. The defaults backfill existing rows correctly:
+  -- everything created before this migration is a completed chat conversation.
+  --   kind    — mutable; promotion flips 'action' -> 'conversation'.
+  --   source  — immutable provenance ('chat' | 'post').
+  --   status  — copy of UnifiedContext.status, for cheap list filtering + badge.
+  ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS kind   TEXT NOT NULL DEFAULT 'conversation';
+  ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'chat';
+  ALTER TABLE conversations
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'done';
+  CREATE INDEX IF NOT EXISTS conversations_user_kind_updated_idx
+    ON conversations (user_id, kind, updated_at DESC);
 `
 
 async function initSchema(): Promise<void> {

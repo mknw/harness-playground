@@ -43,6 +43,12 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 |----------|-------------|
 | [DATA_STASH.md](DATA_STASH.md) | Document upload → chunk → embed → search pipeline (#6/#9/#8): modules, API routes, Redis storage model (incl. base64 binary, #89), embedding-space rule, redis-stack + local-embedder requirements |
 
+### Agent Trigger Endpoint
+
+| Document | Description |
+|----------|-------------|
+| [AGENT_TRIGGER.md](AGENT_TRIGGER.md) | `POST /api/agents/:id` async agent trigger → **action** rows: endpoint contract, in-process fire-and-forget model, `kind`/`source`/`status` data model, per-user token auth (`configs/action-tokens.yaml`), recording storage + playback via the Data Stash, sidebar filter + promotion gate, status-lifecycle quirk |
+
 ---
 
 ## Infrastructure Documentation
@@ -58,6 +64,7 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 - `docker-compose.yaml` — service orchestration
 - `configs/mcp-config.yaml` — MCP server connection params
 - `configs/custom-catalog.yaml` — custom MCP server definitions (Docker image-based)
+- `configs/action-tokens.yaml` — Bearer secret → userId map for `POST /api/agents/:id` (git-ignored; see `template.action-tokens.yaml` and [AGENT_TRIGGER.md](AGENT_TRIGGER.md))
 - `.mcp.json` — Claude Code MCP integration (gateway URL port 8811)
 
 ---
@@ -97,6 +104,8 @@ kg-agent/
 ├── docs/
 │   ├── INDEX.md                 # You are here
 │   ├── UI_ARCHITECTURE.md       # Frontend architecture
+│   ├── DATA_STASH.md            # Document ingestion pipeline
+│   ├── AGENT_TRIGGER.md         # POST /api/agents/:id async trigger → actions
 │   ├── DOCKER_COMPOSE.md        # Docker setup
 │   ├── MCP_GATEWAY.md           # MCP Gateway reference
 │   └── harness-patterns/        # Harness patterns documentation

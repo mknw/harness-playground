@@ -10,6 +10,13 @@ import { query } from './client.server'
 
 assertServerOnImport()
 
+/** Whether a row is a chat conversation or a POST-triggered agent action. */
+export type ConversationKind = 'conversation' | 'action'
+/** Immutable provenance: where the row originated. */
+export type ConversationSource = 'chat' | 'post'
+/** Lifted copy of UnifiedContext.status for cheap list filtering + UI badge. */
+export type ConversationStatus = 'running' | 'paused' | 'done' | 'error'
+
 export interface ConversationRow {
   id: string
   userId: string
@@ -17,6 +24,9 @@ export interface ConversationRow {
   title: string | null
   /** Stringified UnifiedContext (matches serializeContext() output). */
   serializedContext: string
+  kind: ConversationKind
+  source: ConversationSource
+  status: ConversationStatus
   createdAt: Date
   updatedAt: Date
 }
@@ -25,6 +35,9 @@ export interface ConversationListItem {
   id: string
   agentId: string
   title: string | null
+  kind: ConversationKind
+  source: ConversationSource
+  status: ConversationStatus
   updatedAt: Date
 }
 
@@ -35,6 +48,9 @@ interface DbRow {
   title: string | null
   /** pg returns JSONB columns as already-parsed JS objects. */
   context: unknown
+  kind: ConversationKind
+  source: ConversationSource
+  status: ConversationStatus
   created_at: Date
   updated_at: Date
 }
@@ -43,6 +59,9 @@ interface DbListRow {
   id: string
   agent_id: string
   title: string | null
+  kind: ConversationKind
+  source: ConversationSource
+  status: ConversationStatus
   updated_at: Date
 }
 
@@ -53,6 +72,9 @@ function rowToConversation(row: DbRow): ConversationRow {
     agentId: row.agent_id,
     title: row.title,
     serializedContext: JSON.stringify(row.context),
+    kind: row.kind,
+    source: row.source,
+    status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -67,7 +89,7 @@ export async function loadConversation(
   userId: string
 ): Promise<ConversationRow | null> {
   const { rows } = await query<DbRow>(
-    'SELECT id, user_id, agent_id, title, context, created_at, updated_at FROM conversations WHERE id = $1 AND user_id = $2',
+    'SELECT id, user_id, agent_id, title, context, kind, source, status, created_at, updated_at FROM conversations WHERE id = $1 AND user_id = $2',
     [id, userId]
   )
   if (rows.length === 0) return null
@@ -82,22 +104,47 @@ export interface SaveConversationInput {
   title: string | null
   /** Full serializeContext() output. Stored as JSONB. */
   serializedContext: string
+  /**
+   * Lifted copy of the context status, refreshed on every save so the sidebar
+   * can filter/badge without deserializing the blob. Defaults to 'running'.
+   */
+  status?: ConversationStatus
+  /**
+   * Row kind. Only honoured on INSERT — `kind` is immutable through this upsert
+   * path (promotion uses {@link promoteConversation}), so an existing action
+   * stays an action across the background run's status saves. Default
+   * 'conversation' (the chat path).
+   */
+  kind?: ConversationKind
+  /**
+   * Immutable provenance. Only honoured on INSERT (never updated). Default
+   * 'chat'. The POST-trigger route passes 'post'.
+   */
+  source?: ConversationSource
 }
 
 /**
- * Upsert a conversation row. Title is sticky: once set it never changes via
- * this path (use a dedicated rename action when we ship one).
+ * Upsert a conversation row.
+ *
+ * Stickiness on UPDATE (ON CONFLICT):
+ *   - `title`           — sticky via COALESCE (a dedicated rename overrides it).
+ *   - `kind` / `source` — NOT in the UPDATE set, so they keep their INSERT
+ *     values. This is what lets the route insert `kind='action'` once and have
+ *     the background run's later status saves preserve it. Promotion is the
+ *     only mutator of `kind` (see {@link promoteConversation}).
+ *   - `status`          — always refreshed from the latest context.
  */
 export async function saveConversation(
   input: SaveConversationInput
 ): Promise<void> {
   await query(
-    `INSERT INTO conversations (id, user_id, agent_id, title, context)
-     VALUES ($1, $2, $3, $4, $5::jsonb)
+    `INSERT INTO conversations (id, user_id, agent_id, title, context, kind, source, status)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
      ON CONFLICT (id) DO UPDATE SET
        agent_id   = EXCLUDED.agent_id,
        context    = EXCLUDED.context,
        title      = COALESCE(conversations.title, EXCLUDED.title),
+       status     = EXCLUDED.status,
        updated_at = NOW()`,
     [
       input.id,
@@ -105,7 +152,43 @@ export async function saveConversation(
       input.agentId,
       input.title,
       input.serializedContext,
+      input.kind ?? 'conversation',
+      input.source ?? 'chat',
+      input.status ?? 'running',
     ]
+  )
+}
+
+/**
+ * Promote an action to a regular conversation (flip `kind`). Scoped by
+ * user_id, so a wrong userId silently no-ops. Idempotent — promoting an
+ * already-promoted row is a harmless no-op write.
+ */
+export async function promoteConversation(
+  id: string,
+  userId: string
+): Promise<void> {
+  await query(
+    `UPDATE conversations SET kind = 'conversation', updated_at = NOW()
+     WHERE id = $1 AND user_id = $2 AND kind = 'action'`,
+    [id, userId]
+  )
+}
+
+/**
+ * Update only the lifted `status` column (no context write). Used by the
+ * background runner's failure path to flip a stuck 'running' row to 'error'
+ * when the run threw before producing a serialized context. Scoped by user_id.
+ */
+export async function setConversationStatus(
+  id: string,
+  userId: string,
+  status: ConversationStatus
+): Promise<void> {
+  await query(
+    `UPDATE conversations SET status = $1, updated_at = NOW()
+     WHERE id = $2 AND user_id = $3`,
+    [status, id, userId]
   )
 }
 
@@ -116,13 +199,16 @@ export async function listConversations(
   userId: string
 ): Promise<ConversationListItem[]> {
   const { rows } = await query<DbListRow>(
-    'SELECT id, agent_id, title, updated_at FROM conversations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 200',
+    'SELECT id, agent_id, title, kind, source, status, updated_at FROM conversations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 200',
     [userId]
   )
   return rows.map((r) => ({
     id: r.id,
     agentId: r.agent_id,
     title: r.title,
+    kind: r.kind,
+    source: r.source,
+    status: r.status,
     updatedAt: r.updated_at,
   }))
 }
