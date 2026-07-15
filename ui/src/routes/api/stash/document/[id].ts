@@ -17,6 +17,7 @@ import {
   getDocument,
   deleteDocument,
   setDocumentFlags,
+  stripContent,
 } from '../../../../lib/document-store.server'
 import { json, withUser } from '../../../../lib/stash/http.server'
 
@@ -51,6 +52,16 @@ export async function GET(event: APIEvent) {
       })
     }
 
+    // Non-download: the viewer wants readable text. A converted binary
+    // (docx/pdf/pptx/odt) keeps its base64 original in `content` for downloads,
+    // so serve its derived markdown as the viewable `content` (utf8) instead —
+    // chunk offsets from citations index into THIS text. Drop the heavy base64
+    // blob and the duplicate `derivedText` field from the payload.
+    if (doc.derivedText != null) {
+      const { derivedText, ...rest } = doc
+      return json({ document: { ...rest, content: derivedText, encoding: 'utf8' as const } })
+    }
+
     return json({ document: doc })
   })
 }
@@ -79,8 +90,6 @@ export async function PATCH(event: APIEvent) {
       archived: body.archived,
     })
     if (!updated) return json({ error: 'Document not found' }, 404)
-    const { content: _content, ...meta } = updated
-    void _content
-    return json({ ok: true, document: meta })
+    return json({ ok: true, document: stripContent(updated) })
   })
 }

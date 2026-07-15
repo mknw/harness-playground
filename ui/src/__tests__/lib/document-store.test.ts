@@ -240,6 +240,28 @@ describe('document-store (Issue #6)', () => {
       expect((meta as unknown as Record<string, unknown>).content).toBeUndefined()
       expect(meta!.filename).toBe('a.txt')
     })
+
+    it('surfaces derivedText as a `converted` flag in meta, never the markdown itself', async () => {
+      const stored = await storeDocument(
+        { sessionId: 's1', filename: 'report.pdf', mimeType: 'application/pdf', content: 'Ym9keQ==', encoding: 'base64' },
+        fake.callTool,
+      )
+      // No derivation yet → not converted.
+      let meta = await getDocumentMeta('s1', stored.id, fake.callTool)
+      expect(meta!.converted).toBeUndefined()
+
+      // After the ingest converter persists derived markdown…
+      await setDocumentFlags('s1', stored.id, { derivedText: '# Report\n\nBody.' }, fake.callTool)
+      meta = await getDocumentMeta('s1', stored.id, fake.callTool)
+      expect(meta!.converted).toBe(true)
+      // The (potentially large) markdown must not ride along in the meta.
+      expect((meta as unknown as Record<string, unknown>).derivedText).toBeUndefined()
+      // …but the original base64 bytes are still on the full doc for download.
+      const full = await getDocument('s1', stored.id, fake.callTool)
+      expect(full!.encoding).toBe('base64')
+      expect(full!.content).toBe('Ym9keQ==')
+      expect(full!.derivedText).toBe('# Report\n\nBody.')
+    })
   })
 
   describe('listDocuments', () => {
