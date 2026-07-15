@@ -6,18 +6,21 @@ search pipeline) and the sandbox docs [`sandbox-plan.md`](sandbox-plan.md) /
 prose; this doc is the *how data moves* at a glance — four Mermaid diagrams
 covering the two subsystems and the bridge between them.
 
-The diagrams reflect the code as of the durable-workspace (#89), retriever
-(#102) and attachment-lifecycle (#97) merges. When they drift from the source,
-the source wins — every box maps to a named function in `ui/src/lib/`.
+The diagrams reflect the code as of the durable-workspace (#89), retriever +
+direct-Redis (#102 / #111) and attachment-lifecycle (#97) merges. When they
+drift from the source, the source wins — every box maps to a named function in
+`ui/src/lib/`.
 
 **Reading the diagrams**
 
 - `SID` / `DID` = a session id / document id; `SPACE` = the embedding-space tag
   (`provider_model_dim`) baked into vector index + key names so one index never
   mixes models.
-- Cylinders `▢` are Redis keyspaces; the double-bordered box is the RediSearch
-  vector index. All Redis access goes through the **MCP Gateway** (`:8811`) via
-  `callTool` — the app never opens a raw Redis socket.
+- Cylinders are Redis keyspaces; the double-bordered box is the RediSearch vector
+  index — all in one redis-stack. The Data Stash reaches it via `stashCallTool()`:
+  the **MCP Gateway** (`:8811`) by default, or a **direct `ioredis` socket** when
+  `STASH_DIRECT_REDIS=1` (#111). Agentic MCP tool calls always go through the
+  gateway.
 
 ---
 
@@ -37,33 +40,33 @@ flowchart TD
     DLREQ["Client: download"]
 
     UP --> RU["POST /api/stash/upload"]
-    RU --> PARSE["parseUploadRequest<br/>text → utf8 · binary → base64"]
-    PARSE --> STORE["storeDocument"]
-    STORE -->|"json_set + sadd"| DOC[("RedisJSON<br/>stash:doc:SID:DID<br/>+ stash:docs:SID index")]
-
-    STORE --> GATE{"agent harness has<br/>a redis retriever?"}
-    GATE -->|"yes · text only<br/>(background)"| CHUNK["chunkDocument"]
+    RU --> GATE{"agent harness has<br/>a redis retriever?"}
+    GATE --> STORE["storeDocument<br/>persists ingestStatus 'pending' in first write when ingesting"]
+    GATE -->|"yes · text only · background"| CHUNK["chunkDocument<br/>markdown-aware: headings bind to section body"]
     RIN["POST /api/stash/ingest"] --> CHUNK
     CHUNK --> EMBED["embed"]
     EMBED <-->|"POST /v1/embeddings"| EMBSVR["local llama-server :8090<br/>Qwen3-Embedding-0.6B"]
     EMBED --> UPSERT["vector-store · ensureIndex + upsert"]
-    UPSERT -->|"per chunk · 2 writes"| HNSW[["RediSearch HNSW<br/>stash_idx_SID_SPACE<br/>keys stashvec:SID:SPACE:*"]]
-    UPSERT --> SPACE[("stash:space:SID<br/>one model per corpus")]
 
     Q --> RS["GET /api/stash/search"]
-    RS --> SRCH["searchDocuments"]
-    SRCH -->|"embed query · recorded model"| EMBED
-    SRCH -->|"KNN top-k"| HNSW
-    HNSW -->|"hits + provenance"| SRCH
+    RS --> SRCH["searchDocuments<br/>embed query (recorded model) then KNN"]
+    DLREQ --> RD["GET /document/:id?download<br/>base64-decode if binary"]
 
-    DLREQ --> RD["GET /document/:id?download"]
-    RD --> DOC
-    DOC -->|"base64-decode if binary"| RD
+    STORE -->|"json_set doc + sadd index"| XPORT
+    UPSERT -->|"per chunk: set_vector + hset meta"| XPORT
+    UPSERT -->|"recordSpace"| XPORT
+    SRCH <-->|"KNN search"| XPORT
+    RD <-->|"json_get"| XPORT
 
-    subgraph gw["MCP Gateway :8811 → redis-stack"]
-        DOC
-        HNSW
-        SPACE
+    XPORT["stashCallTool()<br/>default → MCP gateway :8811 · serial · ~1.6s/call<br/>STASH_DIRECT_REDIS=1 → direct ioredis :6379 · sub-ms"]
+    XPORT --> DOC
+    XPORT --> HNSW
+    XPORT --> SPACE
+
+    subgraph redis["redis-stack · localhost:6379 — same instance + schema either transport"]
+        DOC[("RedisJSON<br/>stash:doc:SID:DID<br/>+ stash:docs:SID index")]
+        HNSW[["RediSearch HNSW<br/>stash_idx_SID_SPACE<br/>keys stashvec:SID:SPACE:*"]]
+        SPACE[("stash:space:SID<br/>one model per corpus")]
     end
 ```
 
@@ -76,13 +79,25 @@ flowchart TD
   `stash:space:SID`; re-ingesting under a different model throws unless
   `allowSpaceChange`, and queries are always embedded with the *recorded* model
   (`assertSameSpace`) — a search can never compare across spaces.
-- Auto-ingest is best-effort and decoupled from the upload's `201`: the doc is
-  marked `ingestStatus: 'pending'`, then embedded in the background. A retriever
-  also runs `ensureSessionIngested` on first search as a safety net for uploads
-  that predated the agent being known.
+- Auto-ingest is best-effort and decoupled from the upload's `201`: the gate is
+  decided *before* the first write, so `ingestStatus: 'pending'` is persisted in
+  that write (kills the status-flicker), then embedding runs in the background. A
+  retriever also runs `ensureSessionIngested` on first search as a safety net for
+  uploads that predated the agent being known.
 - Vectors live in RediSearch HNSW (COSINE); requires **redis-stack**, and on
   arm64 colima the redis service must run `platform: linux/amd64` (the native
   arm64 `redisearch.so` SIGILLs on vector ops — see `DATA_STASH.md`).
+- **Transport (#111).** The Data Stash layer is parameterised on an injectable
+  `CallTool`; `stashCallTool()` resolves to the **MCP gateway** (default) or a
+  **direct `ioredis`** client (`STASH_DIRECT_REDIS=1`) against the *same*
+  redis-stack, with a byte-identical key + FLOAT32 vector schema — so a corpus can
+  mix gateway- and direct-written chunks. The gateway's serial stdio pipe is
+  ~1.6s/call, so ingest (still a sequential 2-writes-per-chunk loop) drops from
+  ~200s to <1s on the direct client: the win is per-call latency, not fewer
+  writes. Only Data Stash modules use this — agentic MCP tools keep the gateway.
+- The agent-facing `retriever` pattern reuses this search path (its `redis`
+  backend calls `searchDocuments`), rather than a tool-calling loop — one embed +
+  KNN. See [`DATA_STASH.md`](DATA_STASH.md).
 
 ---
 
@@ -184,7 +199,7 @@ sequenceDiagram
     participant WS as withSandbox · PtyManager
     participant AT as AttachmentTable
     participant VM as Sandbox VM · /work
-    participant DS as Data Stash (Redis via gateway)
+    participant DS as Data Stash (Redis · gateway or direct)
 
     A->>WS: begin (id = sessionId, syncWorkspace)
     WS->>AT: acquire(sessionId)
@@ -224,6 +239,9 @@ sequenceDiagram
 - Everything is best-effort per file: one unwritable/unreadable file never
   aborts the turn, and a hydrate failure (e.g. gateway down) never blocks the
   turn or the Shell from opening.
+- Hydrate/promote reach the Data Stash through the same `stashCallTool()` as the
+  rest of the pipeline — direct `ioredis` when `STASH_DIRECT_REDIS=1`, else the
+  gateway (diagram 1).
 
 ---
 
@@ -244,6 +262,7 @@ flowchart LR
         MCPC["mcp-client.callTool"]
         BAML["BAML adapters<br/>append sandbox listTools to prompt"]
         PTY["PtyManager<br/>SSE-down / POST-up"]
+        STASH["Data Stash lib<br/>document-store · ingest · vector-store"]
     end
 
     CTRL -->|"tool call"| MCPC
@@ -255,6 +274,9 @@ flowchart LR
     GW --> NEO[("Neo4j")]
     GW --> RDS[("Redis · redis-stack<br/>Data Stash")]
     GW --> WEBX["web · github · memory · …"]
+
+    STASH -->|"gateway · default"| GW
+    STASH -.->|"STASH_DIRECT_REDIS=1<br/>direct ioredis :6379"| RDS
 
     DECIDE -->|"yes → in-VM"| TRANS["DockerMcpTransport<br/>1 MCP client per in-VM server"]
 
@@ -291,3 +313,6 @@ flowchart LR
 - `firecracker` is a declared backend kind in the `ComputeBackend` trait but not
   yet implemented (#78) — the same MCP-in-VM architecture and `sandbox_*`
   surface, only the boot/reset substrate differs.
+- The **Data Stash** modules reach the same redis-stack either through the gateway
+  (default) or a direct `ioredis` socket (`STASH_DIRECT_REDIS=1`, #111); agentic
+  MCP tool calls always use the gateway (diagram 1).
