@@ -14,6 +14,10 @@ upload ─▶ store (RedisJSON) ─▶ chunk ─▶ embed (local/OpenRouter) ─
 query ─────────────────────── embed query (same model) ────▶ KNN search ┘
 ```
 
+> **See it visually:** [`data-flow.md`](data-flow.md) has Mermaid data-flow
+> diagrams for this pipeline (upload → store → ingest → search) and how it
+> bridges into the sandbox `/work` durable workspace (#89).
+
 ## Modules (`ui/src/lib/`)
 
 | Module | Role |
