@@ -231,6 +231,52 @@ export default defineConfig({
           border-bottom: 1px solid #00ffff;
           color: #00ffff;
         }
+        /* Retriever citations: inline filename superscript + sources footer */
+        .doc-ref {
+          cursor: pointer;
+          border-bottom: 1px dashed rgba(34,211,238,0.5);
+          border-radius: 2px;
+          transition: all 0.15s ease;
+        }
+        .doc-ref:hover {
+          background: rgba(34,211,238,0.15);
+          border-bottom-color: #22d3ee;
+        }
+        .doc-ref-mark {
+          font-size: 0.7em;
+          color: #22d3ee;
+          margin-left: 1px;
+          vertical-align: super;
+          line-height: 0;
+        }
+        .doc-ref-footer {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 6px;
+          margin-top: 8px;
+          padding-top: 6px;
+          border-top: 1px solid rgba(255,255,255,0.06);
+        }
+        .doc-ref-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-family: "Fira Code", ui-monospace, monospace;
+          font-size: 10px;
+          color: #7dd3fc;
+          background: rgba(34,211,238,0.08);
+          border: 1px solid rgba(34,211,238,0.25);
+          border-radius: 5px;
+          padding: 1px 7px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+        .doc-ref-chip:hover {
+          background: rgba(34,211,238,0.18);
+          border-color: #22d3ee;
+          color: #e0f2fe;
+        }
       `,
     },
   ],

@@ -23,7 +23,7 @@
  */
 
 import { assertServerOnImport } from './harness-patterns/assert.server'
-import { callTool as defaultCallTool } from './harness-patterns/mcp-client.server'
+import { stashCallTool } from './redis-direct.server'
 import { redisWriteError, type CallTool } from './document-store.server'
 import type { EmbeddingSpace } from './embeddings.server'
 
@@ -75,7 +75,7 @@ const VID_KEY = '_vid'
 // ============================================================================
 
 export function createVectorStore(opts: VectorStoreOptions): VectorStore {
-  const callTool = opts.callTool ?? defaultCallTool
+  const callTool = opts.callTool ?? stashCallTool()
   const metric = opts.distanceMetric ?? 'COSINE'
 
   async function ensureIndex(): Promise<void> {
@@ -189,7 +189,18 @@ function parseHits(data: unknown): VectorHit[] {
   }
   if (rows && typeof rows === 'object' && !Array.isArray(rows)) {
     const obj = rows as Record<string, unknown>
-    rows = obj.results ?? obj.documents ?? obj.matches ?? []
+    const wrapped = obj.results ?? obj.documents ?? obj.matches
+    if (Array.isArray(wrapped)) {
+      rows = wrapped
+    } else if ('meta' in obj || '_vid' in obj || 'id' in obj || 'score' in obj) {
+      // The gateway aggregates N≥2 matches into an array, but returns a SINGLE
+      // match as one bare hit object (one text block, not wrapped). Treat a
+      // lone hit-shaped object as a one-element result set — otherwise a
+      // single-match KNN search silently yields zero hits.
+      rows = [obj]
+    } else {
+      rows = []
+    }
   }
   if (!Array.isArray(rows)) return []
 

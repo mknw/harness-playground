@@ -6,7 +6,8 @@
  */
 
 import { Tabs } from '@ark-ui/solid/tabs';
-import { Show, createSignal, createMemo, Suspense } from 'solid-js';
+import { Show, createSignal, createMemo, createEffect, Suspense } from 'solid-js';
+import type { OpenReferenceTarget } from '~/lib/harness-client';
 import { GraphVisualization } from './GraphVisualization';
 import { ObservabilityPanel } from './ObservabilityPanel';
 import { DataStashPanel, type StashAction } from './DataStashPanel';
@@ -66,6 +67,11 @@ export interface SupportPanelProps {
   agentId?: string;
   /** Callback for data stash actions (hide/unhide/archive/unarchive) */
   onStashAction?: (eventId: string, action: StashAction) => Promise<void>;
+  /** A citation clicked in the chat — switch to the Data Stash tab and open the
+   *  inline viewer at this reference. */
+  pendingReference?: OpenReferenceTarget | null;
+  /** Fired after a successful upload so the route can watch embedding status. */
+  onUploaded?: () => void;
 }
 
 // ============================================================================
@@ -74,6 +80,12 @@ export interface SupportPanelProps {
 
 export const SupportPanel = (props: SupportPanelProps) => {
   const [selectedTab, setSelectedTab] = createSignal('stats');
+
+  // A chat citation was clicked → surface the Data Stash tab so its inline
+  // viewer (opened by DataStashPanel from the same `pendingReference`) is visible.
+  createEffect(() => {
+    if (props.pendingReference) setSelectedTab('data');
+  });
 
   // Filter graph elements by source
   const neo4jElements = createMemo(() =>
@@ -301,7 +313,10 @@ export const SupportPanel = (props: SupportPanelProps) => {
               <DataStashPanel
                 events={props.contextEvents ?? []}
                 sessionId={props.sessionId ?? ''}
+                agentId={props.agentId}
                 onStashAction={props.onStashAction ?? (async () => {})}
+                pendingReference={props.pendingReference}
+                onUploaded={props.onUploaded}
               />
             </Suspense>
           </Tabs.Content>

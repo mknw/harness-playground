@@ -11,11 +11,12 @@
  * Hovering shows the LLM summary (or a raw preview if no summary yet).
  */
 
-import { For, Show, createSignal, createMemo, createResource } from 'solid-js'
+import { For, Show, createSignal, createMemo, createEffect, on, onCleanup } from 'solid-js'
 import { isServer } from 'solid-js/web'
 import { Tooltip } from '@ark-ui/solid/tooltip'
-import type { ContextEvent, ToolResultEventData } from '~/lib/harness-patterns'
+import type { ContextEvent, ToolResultEventData, RetrievalReference } from '~/lib/harness-patterns'
 import type { StashDocumentMeta } from '~/lib/document-store.server'
+import { referencesForDoc, type OpenReferenceTarget } from '~/lib/harness-client/reference-extractor'
 
 // ============================================================================
 // Types
@@ -29,7 +30,14 @@ export type DocAction = StashAction | 'delete' | 'download'
 export interface DataStashPanelProps {
   events: ContextEvent[]
   sessionId: string
+  /** The conversation's selected agent — sent with uploads so the auto-ingest
+   *  gate can resolve the harness even before the session is persisted. */
+  agentId?: string
   onStashAction: (eventId: string, action: StashAction) => Promise<void>
+  /** A citation clicked in the chat — open the inline viewer at this reference. */
+  pendingReference?: OpenReferenceTarget | null
+  /** Fired after a successful upload (so the route can watch embedding status). */
+  onUploaded?: () => void
 }
 
 interface ToolResultItem {
@@ -405,9 +413,16 @@ const DocChip = (props: {
   doc: StashDocumentMeta
   sessionId: string
   onAction: (id: string, action: DocAction) => Promise<void>
+  onView: () => void
+  active?: boolean
 }) => {
   const d = () => props.doc
   const grayed = () => !!(d().hidden || d().archived)
+  // Vector-ingestion status set by the harness-aware auto-ingest path. `pending`
+  // → the upload is being chunked/embedded into the local vector store; `failed`
+  // → ingest errored (e.g. embedder offline). Absent → not ingested (the agent
+  // has no redis retriever) — show nothing.
+  const status = () => d().ingestStatus
   const [loading, setLoading] = createSignal(false)
   const [menuOpen, setMenuOpen] = createSignal(false)
   // Inline audio player toggle (recordings from the agent trigger endpoint).
@@ -441,6 +456,36 @@ const DocChip = (props: {
 
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
+      {/* "Eye" — open the inline file viewer. Text docs only (binary has no
+          text view). Stops propagation so it doesn't also open the chip menu. */}
+      <Show when={d().encoding !== 'base64'}>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            props.onView()
+          }}
+          title="View file"
+          style={{
+            position: 'absolute',
+            top: '0px',
+            right: '0px',
+            'z-index': '6',
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            padding: '2px',
+            'line-height': '0',
+            opacity: props.active ? '1' : '0.55',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = props.active ? '1' : '0.55')}
+        >
+          <span
+            class={props.active ? 'i-mdi-eye' : 'i-mdi-eye-outline'}
+            style={{ width: '13px', height: '13px', color: '#22d3ee', display: 'block' }}
+          />
+        </button>
+      </Show>
       {/* Native title tooltip — keeps the chip simple; Ark's Tooltip is used by
           the tool-result chips above. */}
       <div
@@ -452,21 +497,54 @@ const DocChip = (props: {
         w="16"
         cursor="pointer"
         rounded="lg"
-        bg={menuOpen() ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-secondary'}
-        border={menuOpen() ? '1 dark-border-secondary' : '1 transparent hover:dark-border-primary'}
+        bg={props.active ? 'dark-bg-tertiary' : menuOpen() ? 'dark-bg-tertiary' : 'transparent hover:dark-bg-secondary'}
+        border={props.active || menuOpen() ? '1 dark-border-secondary' : '1 transparent hover:dark-border-primary'}
         transition="all"
         opacity={grayed() ? '35' : loading() ? '50' : '100'}
         onClick={() => setMenuOpen(!menuOpen())}
       >
-        <span
-          class={getDocIcon(d().mimeType, d().filename)}
-          style={{
-            width: '28px',
-            height: '28px',
-            color: grayed() ? '#52525b' : '#34d399',
-            transition: 'all 0.15s',
-          }}
-        />
+        {/* Icon + an ingestion indicator badge over its corner. */}
+        <div style={{ position: 'relative', display: 'inline-flex' }}>
+          <span
+            class={getDocIcon(d().mimeType, d().filename)}
+            style={{
+              width: '28px',
+              height: '28px',
+              color: grayed() ? '#52525b' : '#34d399',
+              opacity: status() === 'pending' ? '0.5' : '1',
+              transition: 'all 0.15s',
+            }}
+          />
+          <Show when={status() === 'pending'}>
+            <span
+              class="i-mdi-loading"
+              title="Embedding into the vector store…"
+              style={{
+                position: 'absolute',
+                top: '-5px',
+                right: '-7px',
+                width: '14px',
+                height: '14px',
+                color: '#f59e0b',
+                animation: 'spin 1s linear infinite',
+              }}
+            />
+          </Show>
+          <Show when={status() === 'failed'}>
+            <span
+              class="i-mdi-alert-circle"
+              title="Ingest failed — not searchable (is the embedder running?)"
+              style={{
+                position: 'absolute',
+                top: '-5px',
+                right: '-7px',
+                width: '13px',
+                height: '13px',
+                color: '#f87171',
+              }}
+            />
+          </Show>
+        </div>
         <span
           style={{
             'font-family': '"Fira Code", ui-monospace, monospace',
@@ -480,6 +558,17 @@ const DocChip = (props: {
         >
           {truncate(d().filename, 18)}
         </span>
+        {/* "embedding…" / "failed" line below the icon. */}
+        <Show when={status() === 'pending'}>
+          <span style={{ 'font-size': '8px', color: '#f59e0b', 'line-height': '1.1' }}>
+            embedding…
+          </span>
+        </Show>
+        <Show when={status() === 'failed'}>
+          <span style={{ 'font-size': '8px', color: '#f87171', 'line-height': '1.1' }}>
+            index failed
+          </span>
+        </Show>
       </div>
 
       <Show when={menuOpen()}>
@@ -573,6 +662,189 @@ const DocChip = (props: {
 }
 
 // ============================================================================
+// Inline File Viewer — raw text + line numbers, scrollable, reference-highlighted
+// ============================================================================
+
+/** A char range to highlight in the viewer (from a retrieval reference). Line
+ *  numbers are derived here, after the file content is fetched. */
+export interface ViewerHighlight {
+  startOffset: number
+  endOffset: number
+}
+
+/** 1-based inclusive line range for a char offset span in `content`. */
+function offsetsToLines(content: string, h: ViewerHighlight): { startLine: number; endLine: number } {
+  const start = Math.max(0, Math.min(h.startOffset, content.length))
+  const end = Math.max(start, Math.min(h.endOffset, content.length))
+  return {
+    startLine: content.slice(0, start).split('\n').length,
+    endLine: content.slice(0, end).split('\n').length,
+  }
+}
+
+const FileViewer = (props: {
+  sessionId: string
+  doc: StashDocumentMeta
+  highlights: ViewerHighlight[]
+  initialIndex?: number
+  onClose: () => void
+}) => {
+  const [content, setContent] = createSignal<string | null>(null)
+  const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(true)
+  // Which highlight the navigator is focused on (scrolled to + emphasized).
+  const [current, setCurrent] = createSignal(props.initialIndex ?? 0)
+
+  // Reset the focused highlight when the target doc or the incoming index
+  // changes (the viewer instance is reused across re-opens).
+  createEffect(() => {
+    props.doc.id
+    setCurrent(props.initialIndex ?? 0)
+  })
+
+  // Fetch the full document text on open / when the target doc changes.
+  createEffect(() => {
+    const id = props.doc.id
+    const sid = props.sessionId
+    setLoading(true)
+    setError(null)
+    setContent(null)
+    fetch(`/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      // The route wraps the doc: `{ document: { content, encoding, … } }`.
+      .then((body: { document?: { content?: string; encoding?: string } }) => {
+        const d = body.document
+        if (!d) setError('Document not found')
+        else if (d.encoding === 'base64') setError('Binary file — no text preview')
+        else setContent(d.content ?? '')
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load file'))
+      .finally(() => setLoading(false))
+  })
+
+  const lines = createMemo(() => (content() ?? '').split('\n'))
+
+  // All highlight ranges (aligned with props.highlights), once content is in.
+  const ranges = createMemo(() => {
+    const c = content()
+    if (!c) return [] as { startLine: number; endLine: number }[]
+    return props.highlights.map((h) => offsetsToLines(c, h))
+  })
+  const activeRange = createMemo(() => ranges()[current()] ?? null)
+  // Every line covered by any highlight (light tint).
+  const hotLines = createMemo(() => {
+    const s = new Set<number>()
+    for (const r of ranges()) for (let n = r.startLine; n <= r.endLine; n++) s.add(n)
+    return s
+  })
+  const total = () => props.highlights.length
+
+  // Scroll the focused range's first line into view when content / current change.
+  const lineEls = new Map<number, HTMLDivElement>()
+  createEffect(() => {
+    const r = activeRange()
+    if (content() && r) lineEls.get(r.startLine)?.scrollIntoView({ block: 'center' })
+  })
+
+  return (
+    <div border="t dark-border-primary" bg="dark-bg-secondary" flex="~ col" style={{ 'max-height': '340px' }}>
+      <div flex="~" items="center" gap="2" p="x-3 y-2" bg="dark-bg-tertiary" border="b dark-border-primary">
+        <span
+          class={getDocIcon(props.doc.mimeType, props.doc.filename)}
+          style={{ width: '14px', height: '14px', color: '#34d399', 'flex-shrink': '0' }}
+        />
+        <span text="xs dark-text-secondary" font="mono" style={{ flex: '1', 'word-break': 'break-all' }}>
+          {props.doc.filename}
+        </span>
+        <Show when={activeRange()}>
+          {(r) => (
+            <span text="xs" style={{ color: '#f59e0b', 'font-family': 'monospace' }}>
+              L{r().startLine}{r().endLine !== r().startLine ? `–${r().endLine}` : ''}
+            </span>
+          )}
+        </Show>
+        {/* Prev/next navigator across this doc's referenced chunks. */}
+        <Show when={total() > 1}>
+          <div flex="~" items="center" gap="1">
+            <button
+              onClick={() => setCurrent((c) => Math.max(0, c - 1))}
+              disabled={current() === 0}
+              title="Previous reference"
+              style={{ background: 'transparent', border: 'none', cursor: current() === 0 ? 'default' : 'pointer', color: current() === 0 ? '#3f3f46' : '#a1a1aa', 'font-size': '13px', 'line-height': '1', padding: '0 2px' }}
+            >
+              ‹
+            </button>
+            <span text="xs dark-text-tertiary" font="mono">{current() + 1}/{total()}</span>
+            <button
+              onClick={() => setCurrent((c) => Math.min(total() - 1, c + 1))}
+              disabled={current() === total() - 1}
+              title="Next reference"
+              style={{ background: 'transparent', border: 'none', cursor: current() === total() - 1 ? 'default' : 'pointer', color: current() === total() - 1 ? '#3f3f46' : '#a1a1aa', 'font-size': '13px', 'line-height': '1', padding: '0 2px' }}
+            >
+              ›
+            </button>
+          </div>
+        </Show>
+        <button
+          onClick={() => props.onClose()}
+          title="Close viewer"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#71717a', 'font-size': '13px', 'line-height': '1', padding: '2px 4px' }}
+        >
+          ✕
+        </button>
+      </div>
+      <div
+        style={{ overflow: 'auto', 'font-family': '"Fira Code", ui-monospace, monospace', 'font-size': '11px', 'line-height': '1.55' }}
+      >
+        <Show when={loading()}>
+          <div p="3" flex="~" items="center" gap="2" text="xs dark-text-tertiary">
+            <span class="i-mdi-loading" style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />
+            <span>Loading file…</span>
+          </div>
+        </Show>
+        <Show when={error()}>
+          <div p="3" text="xs red-400">{error()}</div>
+        </Show>
+        <Show when={content() !== null}>
+          <For each={lines()}>
+            {(line, i) => {
+              const n = i() + 1
+              const hot = () => hotLines().has(n)
+              const r = () => activeRange()
+              const active = () => !!r() && n >= r()!.startLine && n <= r()!.endLine
+              return (
+                <div
+                  ref={(el) => lineEls.set(n, el)}
+                  flex="~"
+                  style={{ background: active() ? 'rgba(245,158,11,0.16)' : hot() ? 'rgba(245,158,11,0.07)' : 'transparent' }}
+                >
+                  <span
+                    style={{
+                      width: '42px',
+                      'flex-shrink': '0',
+                      'text-align': 'right',
+                      padding: '0 8px',
+                      color: '#52525b',
+                      'user-select': 'none',
+                      'border-right': active() ? '2px solid #f59e0b' : hot() ? '2px solid rgba(245,158,11,0.4)' : '2px solid transparent',
+                    }}
+                  >
+                    {n}
+                  </span>
+                  <span style={{ 'white-space': 'pre-wrap', 'word-break': 'break-word', padding: '0 10px', color: '#d4d4d8', flex: '1' }}>
+                    {line || ' '}
+                  </span>
+                </div>
+              )
+            }}
+          </For>
+        </Show>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================================
 // Upload Zone — file picker + drag-and-drop (Issue #6)
 // ============================================================================
 
@@ -650,6 +922,14 @@ const UploadZone = (props: {
 // Main Component
 // ============================================================================
 
+// Client-side cache of a session's uploaded-doc list. Ark's Tabs unmounts the
+// inactive tab, so this panel re-mounts every time it's selected — without the
+// cache, each re-mount re-ran a ~12s `listDocuments` and the Suspense boundary
+// flashed "Loading data…". We seed the signal from the cache (instant) and
+// refresh in the background, so re-selecting the tab is immediate and never
+// blanks the panel. (No suspending resource → the Suspense fallback never fires.)
+const docCache = new Map<string, StashDocumentMeta[]>()
+
 async function fetchDocuments(sessionId: string): Promise<StashDocumentMeta[]> {
   const res = await fetch(`/api/stash/upload?sessionId=${encodeURIComponent(sessionId)}`)
   if (!res.ok) return []
@@ -659,17 +939,95 @@ async function fetchDocuments(sessionId: string): Promise<StashDocumentMeta[]> {
 
 export const DataStashPanel = (props: DataStashPanelProps) => {
   // Uploaded documents live in Redis (Issue #6), separate from the tool_result
-  // events in `props.events`. Fetched on mount and refetched after mutations.
-  // Guarded against SSR — relative-URL fetch has no origin on the server.
-  const [documents, { refetch }] = createResource(
-    () => (isServer ? undefined : props.sessionId || undefined),
-    fetchDocuments,
+  // events in `props.events`. Seeded from the module cache, refreshed in the
+  // background — see `docCache` above.
+  const [docs, setDocs] = createSignal<StashDocumentMeta[]>(
+    props.sessionId ? (docCache.get(props.sessionId) ?? []) : [],
   )
+  const [loading, setLoading] = createSignal(false)
   const [uploading, setUploading] = createSignal(false)
   const [uploadError, setUploadError] = createSignal<string | null>(null)
+  // Post-upload watch window: ingest runs in the background server-side, so we
+  // poll briefly after an upload to catch the (absent → pending → indexed)
+  // status transitions even before the first `pending` lands.
+  const [watching, setWatching] = createSignal(false)
+  let watchTimer: ReturnType<typeof setTimeout> | undefined
+  let inFlight = false
+  // Inline file viewer: which doc is open + an optional char range to highlight.
+  const [viewer, setViewer] = createSignal<{
+    doc: StashDocumentMeta
+    highlights: ViewerHighlight[]
+    index: number
+  } | null>(null)
+
+  /** Open the viewer for a doc, highlighting its retrieved chunks (from the
+   *  latest retriever result in props.events), focused on `index`. */
+  const openViewer = (doc: StashDocumentMeta, index = 0) => {
+    const highlights = referencesForDoc(props.events, doc.id).map((r) => ({
+      startOffset: r.startOffset,
+      endOffset: r.endOffset,
+    }))
+    setViewer({ doc, highlights, index: Math.max(0, Math.min(index, Math.max(0, highlights.length - 1))) })
+  }
+
+  const applyDocs = (sid: string, list: StashDocumentMeta[]) => {
+    docCache.set(sid, list)
+    if (sid === props.sessionId) setDocs(list)
+  }
+
+  // Close the viewer if its doc disappears (deleted) or the session changes.
+  createEffect(() => {
+    const v = viewer()
+    if (v && !docs().some((d) => d.id === v.doc.id)) setViewer(null)
+  })
+
+  // A citation was clicked in the chat → open the viewer at that reference.
+  // Scoped to `pendingReference` only (via `on`), so a background doc-list
+  // refresh doesn't re-open/reset the viewer while the user navigates chunks.
+  createEffect(
+    on(
+      () => props.pendingReference,
+      (ref) => {
+        if (!ref) return
+        const doc = docs().find((d) => d.id === ref.docId)
+        if (!doc) return // not one of this session's uploads
+        const refs = referencesForDoc(props.events, ref.docId)
+        const idx =
+          ref.startOffset != null
+            ? refs.findIndex(
+                (r) => r.startOffset === ref.startOffset && r.endOffset === ref.endOffset,
+              )
+            : 0
+        openViewer(doc, Math.max(0, idx))
+      },
+    ),
+  )
+
+  // Single-flight background refresh. Shows a spinner only on the cold load
+  // (nothing cached yet); otherwise updates silently behind the cached view.
+  const refresh = async () => {
+    const sid = props.sessionId
+    if (!sid || isServer || inFlight) return
+    inFlight = true
+    if (!docCache.has(sid)) setLoading(true)
+    try {
+      applyDocs(sid, await fetchDocuments(sid))
+    } finally {
+      inFlight = false
+      setLoading(false)
+    }
+  }
+
+  // (Re)seed from cache + refresh whenever the session changes.
+  createEffect(() => {
+    const sid = props.sessionId
+    setDocs(sid ? (docCache.get(sid) ?? []) : [])
+    if (sid) void refresh()
+  })
 
   const uploadFiles = async (files: File[]) => {
-    if (!props.sessionId) {
+    const sid = props.sessionId
+    if (!sid) {
       setUploadError('Start a conversation before uploading')
       return
     }
@@ -678,29 +1036,47 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
     try {
       for (const file of files) {
         const form = new FormData()
-        form.set('sessionId', props.sessionId)
+        form.set('sessionId', sid)
+        if (props.agentId) form.set('agentId', props.agentId)
         form.set('file', file)
         const res = await fetch('/api/stash/upload', { method: 'POST', body: form })
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: string }
-          throw new Error(body.error ?? `Upload failed (${res.status})`)
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string
+          document?: StashDocumentMeta
+        }
+        if (!res.ok) throw new Error(body.error ?? `Upload failed (${res.status})`)
+        // Show each upload the instant it's stored — the POST returns before
+        // ingest finishes, so there's no blocking refetch here.
+        if (body.document) {
+          const doc = body.document
+          applyDocs(sid, [doc, ...docs().filter((d) => d.id !== doc.id)])
         }
       }
-      await refetch()
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setUploading(false)
+      // The upload response already carries `ingestStatus` (the optimistic add
+      // shows "embedding…" instantly), so we DON'T refresh immediately — an
+      // early fetch would race the background ingest and clobber the optimistic
+      // `pending` back to none. Open a ~25s watch window instead; the poll
+      // reconciles pending → indexed once redis catches up.
+      setWatching(true)
+      if (watchTimer) clearTimeout(watchTimer)
+      watchTimer = setTimeout(() => setWatching(false), 25000)
+      // Let the route track embedding status (to block the chat composer).
+      props.onUploaded?.()
     }
   }
 
   const handleDocAction = async (id: string, action: DocAction) => {
-    if (!props.sessionId) return
+    const sid = props.sessionId
+    if (!sid) return
     if (action === 'download') {
       // Stream the raw file via the ?download route (binary is base64-decoded
       // server-side). Anchor-click so the Content-Disposition filename is used.
       const a = document.createElement('a')
-      a.href = `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(props.sessionId)}&download`
+      a.href = `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}&download`
       a.download = ''
       a.rel = 'noopener'
       document.body.appendChild(a)
@@ -709,8 +1085,9 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       return
     }
     if (action === 'delete') {
+      applyDocs(sid, docs().filter((d) => d.id !== id)) // optimistic remove
       await fetch(
-        `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(props.sessionId)}`,
+        `/api/stash/document/${encodeURIComponent(id)}?sessionId=${encodeURIComponent(sid)}`,
         { method: 'DELETE' },
       )
     } else {
@@ -725,13 +1102,25 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       await fetch(`/api/stash/document/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: props.sessionId, ...patch }),
+        body: JSON.stringify({ sessionId: sid, ...patch }),
       })
     }
-    await refetch()
+    void refresh()
   }
 
-  const docs = createMemo(() => documents() ?? [])
+  // Gentle, single-flight status poll while an upload is `pending` or within the
+  // post-upload watch window. The `inFlight` guard in `refresh` prevents overlap
+  // (no 12s list-storm), and the server-side list cache keeps each poll cheap.
+  createEffect(() => {
+    if (isServer) return
+    const active = watching() || docs().some((d) => d.ingestStatus === 'pending')
+    if (!active) return
+    const timer = setInterval(() => void refresh(), 4000)
+    onCleanup(() => clearInterval(timer))
+  })
+  onCleanup(() => {
+    if (watchTimer) clearTimeout(watchTimer)
+  })
 
   const partitioned = createMemo(() => {
     const toolResults: ToolResultItem[] = props.events
@@ -792,8 +1181,35 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
         <Show when={docs().length > 0}>
           <div flex="~ wrap" gap="2" p="x-3 y-2">
             <For each={docs()}>
-              {(doc) => <DocChip doc={doc} sessionId={props.sessionId} onAction={handleDocAction} />}
+              {(doc) => (
+                <DocChip
+                  doc={doc}
+                  sessionId={props.sessionId}
+                  onAction={handleDocAction}
+                  onView={() => (viewer()?.doc.id === doc.id ? setViewer(null) : openViewer(doc))}
+                  active={viewer()?.doc.id === doc.id}
+                />
+              )}
             </For>
+          </div>
+        </Show>
+        {/* Inline viewer for the open file — full width, below the gallery. */}
+        <Show when={viewer()}>
+          {(v) => (
+            <FileViewer
+              sessionId={props.sessionId}
+              doc={v().doc}
+              highlights={v().highlights}
+              initialIndex={v().index}
+              onClose={() => setViewer(null)}
+            />
+          )}
+        </Show>
+        {/* Cold-load only — never blocks the drop zone (background refresh). */}
+        <Show when={loading() && docs().length === 0}>
+          <div flex="~" items="center" gap="2" p="x-3 y-2" text="xs dark-text-tertiary">
+            <span class="i-mdi-loading" style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />
+            <span>Loading uploads…</span>
           </div>
         </Show>
       </CollapsibleSection>

@@ -10,7 +10,7 @@
 "use server";
 
 import type { ConfiguredPattern } from "../harness-patterns";
-import { usesCodeMode, harnessUsesSyncWorkspace } from "../harness-patterns";
+import { usesCodeMode, harnessHasRedisRetriever, harnessUsesSyncWorkspace } from "../harness-patterns";
 import type { SessionData } from "./session.server";
 
 // ============================================================================
@@ -117,6 +117,38 @@ export async function agentUsesCodeMode(
     return result;
   } catch {
     return agentId === "code-mode";
+  }
+}
+
+/** Memoized by agentId (harness structure is session-independent). */
+const redisRetrieverCapabilityCache = new Map<string, boolean>();
+
+/**
+ * Whether an agent composes a `retriever` wired to the redis/local-vector
+ * backend — i.e. whether uploads to its sessions should be auto-ingested. The
+ * upload route uses this as a **fast** gate decision so it can return
+ * `ingestStatus: 'pending'` immediately (the panel shows "embedding…" without
+ * waiting on a poll), while the actual embedding runs in the background. Builds
+ * the patterns once per agentId and caches the boolean; on a `createPatterns`
+ * failure returns `false` without caching (retry next time).
+ */
+export async function agentUsesRedisRetriever(
+  agentId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const cached = redisRetrieverCapabilityCache.get(agentId);
+  if (cached !== undefined) return cached;
+
+  const agent = getAgent(agentId);
+  if (!agent) return false;
+
+  try {
+    const patterns = await agent.createPatterns(sessionId);
+    const result = harnessHasRedisRetriever(patterns);
+    redisRetrieverCapabilityCache.set(agentId, result);
+    return result;
+  } catch {
+    return false;
   }
 }
 

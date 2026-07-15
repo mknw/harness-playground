@@ -148,6 +148,34 @@ describe('vector-store', () => {
       expect(await store.search([1, 2, 3])).toEqual([])
     })
 
+    it('parses a SINGLE match returned as a bare hit object (gateway 1-result shape)', async () => {
+      // Live regression: for exactly ONE match the gateway returns the hit as a
+      // bare object (not an array, not a {results:[…]} wrapper) — one text block,
+      // un-aggregated. The old parseHits treated any non-array object as a
+      // wrapper, found no .results/.documents/.matches, and yielded [] → search
+      // silently returned nothing. (N≥2 matches arrive as an array and worked.)
+      const meta = 'b64:' + Buffer.from(JSON.stringify({ content: 'hello', _vid: 'd1:0' })).toString('base64')
+      const callTool: CallTool = async (name) =>
+        name === 'vector_search_hash'
+          ? { success: true, data: { id: 'p:d1:0', payload: null, score: '0.2044', meta } }
+          : { success: true, data: 1 }
+      const store = createVectorStore({ indexName: 'idx1', prefix: 'p:', dim: 3, callTool })
+      const hits = await store.search([0, 0, 0], 3)
+      expect(hits).toHaveLength(1)
+      expect(hits[0].id).toBe('d1:0')
+      expect(hits[0].payload.content).toBe('hello')
+      expect(hits[0].score).toBe(0.2044) // string score coerced to number
+    })
+
+    it('ignores a non-hit bare object (e.g. an empty/no-results response)', async () => {
+      const callTool: CallTool = async (name) =>
+        name === 'vector_search_hash'
+          ? { success: true, data: { count: 0 } }
+          : { success: true, data: 1 }
+      const store = createVectorStore({ indexName: 'idx1', prefix: 'p:', dim: 3, callTool })
+      expect(await store.search([0, 0, 0], 3)).toEqual([])
+    })
+
     it('parses a JSON-string meta and a {result} wrapper shape', async () => {
       // Mimic a backend that returns rows under a key, with meta as raw JSON.
       const callTool: CallTool = async (name) =>

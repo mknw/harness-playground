@@ -163,19 +163,26 @@ describe('ensureSessionIngested', () => {
     expect(embedSpy.mock.calls.length).toBe(callsAfterFirst) // nothing re-embedded
   })
 
-  it('skips terminal (failed) and binary (base64) docs, ingesting only the fresh one', async () => {
+  it('ingests failed + absent, skips indexed + pending + binary', async () => {
     const { embedFn } = makeEmbedder('m', 3)
     const embedSpy = vi.fn(embedFn)
-    await seed(fake, 'old-failed', 'x')
+    await seed(fake, 'already', 'Already indexed text.')
+    await setDocumentFlags('s1', 'already', { ingestStatus: 'indexed' }, fake.callTool)
+    await seed(fake, 'old-failed', 'Previously failed (embedder was down).')
     await setDocumentFlags('s1', 'old-failed', { ingestStatus: 'failed' }, fake.callTool)
+    await seed(fake, 'in-flight', 'Being ingested by the upload gate.')
+    await setDocumentFlags('s1', 'in-flight', { ingestStatus: 'pending' }, fake.callTool)
     await seed(fake, 'bin', Buffer.from('b').toString('base64'), { encoding: 'base64' })
     await seed(fake, 'fresh', 'Fresh content here.')
 
     await ensureSessionIngested('s1', { callTool: fake.callTool, embedFn: embedSpy })
 
-    expect((await getDocument('s1', 'fresh', fake.callTool))?.ingestStatus).toBe('indexed')
-    expect((await getDocument('s1', 'old-failed', fake.callTool))?.ingestStatus).toBe('failed') // untouched
-    expect((await getDocument('s1', 'bin', fake.callTool))?.ingestStatus).toBeUndefined() // skipped
-    expect(embedSpy).toHaveBeenCalledTimes(1) // only 'fresh'
+    expect((await getDocument('s1', 'fresh', fake.callTool))?.ingestStatus).toBe('indexed') // absent → ingested
+    // A prior failure is transient — retried and recovered now the embedder's up.
+    expect((await getDocument('s1', 'old-failed', fake.callTool))?.ingestStatus).toBe('indexed')
+    expect((await getDocument('s1', 'already', fake.callTool))?.ingestStatus).toBe('indexed') // skipped
+    expect((await getDocument('s1', 'in-flight', fake.callTool))?.ingestStatus).toBe('pending') // skipped (gate owns it)
+    expect((await getDocument('s1', 'bin', fake.callTool))?.ingestStatus).toBeUndefined() // skipped (binary)
+    expect(embedSpy).toHaveBeenCalledTimes(2) // old-failed + fresh only
   })
 })

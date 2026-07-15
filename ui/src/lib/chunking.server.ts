@@ -156,10 +156,16 @@ export function chunkBySentence(text: string, config?: Partial<ChunkConfig>): Ch
   return packUnits(text, splitUnits(text, SENTENCE_SEP), cfg.maxChars, cfg.overlap)
 }
 
-/** Split on blank lines, then greedily pack paragraphs into `maxChars` chunks. */
+/**
+ * Split on blank lines, then greedily pack paragraphs into `maxChars` chunks.
+ * A markdown heading binds forward to its section body (see {@link bindHeadings})
+ * so a bare "## Heading" is never emitted as its own (useless) chunk. On
+ * headingless prose this is a no-op, so no MIME-type dispatch is needed.
+ */
 export function chunkByParagraph(text: string, config?: Partial<ChunkConfig>): Chunk[] {
   const cfg = normalizeConfig(config)
-  return packUnits(text, splitUnits(text, PARAGRAPH_SEP), cfg.maxChars, cfg.overlap)
+  const units = bindHeadings(text, splitUnits(text, PARAGRAPH_SEP))
+  return packUnits(text, units, cfg.maxChars, cfg.overlap)
 }
 
 /**
@@ -180,6 +186,58 @@ function splitUnits(text: string, separatorRe: RegExp): Unit[] {
   }
   if (start < text.length) units.push({ start, end: text.length })
   return units.filter((u) => text.slice(u.start, u.end).trim().length > 0)
+}
+
+/** An ATX markdown heading line: 1–6 `#` then whitespace (`# `, `### `, …). */
+const HEADING_LINE = /^#{1,6}\s+/
+
+/**
+ * A unit whose every non-empty line is a heading — i.e. it carries no body of
+ * its own. `# Header` (a lone heading) is pure; `# Header\ntext` (heading + body
+ * with no blank line between, which `splitUnits` keeps as one unit) is not.
+ */
+function isPureHeadingUnit(text: string, u: Unit): boolean {
+  let sawContent = false
+  for (const line of text.slice(u.start, u.end).split('\n')) {
+    if (line.trim() === '') continue
+    sawContent = true
+    if (!HEADING_LINE.test(line)) return false
+  }
+  return sawContent
+}
+
+/**
+ * Fuse each run of consecutive pure-heading units with the body unit that
+ * follows, so a markdown heading is never emitted as its own chunk (a bare
+ * "## Architecture" retrieves nothing useful). Two stacked headings both attach
+ * to the next paragraph. Units are contiguous (or separated only by whitespace
+ * `splitUnits` dropped), so a fused unit is still a single span
+ * `[firstHeading.start, body.end]` — the offset invariant
+ * (`content === text.slice(start, end)`) is preserved, and a section longer than
+ * `maxChars` still sub-splits in `packUnits` with the heading on the first
+ * window. Trailing heading(s) with no following body (EOF) are left as-is.
+ */
+function bindHeadings(text: string, units: Unit[]): Unit[] {
+  const out: Unit[] = []
+  let i = 0
+  while (i < units.length) {
+    if (!isPureHeadingUnit(text, units[i])) {
+      out.push(units[i])
+      i++
+      continue
+    }
+    let j = i
+    while (j < units.length && isPureHeadingUnit(text, units[j])) j++
+    if (j < units.length) {
+      // Heading run [i, j) + the following body unit j → one contiguous span.
+      out.push({ start: units[i].start, end: units[j].end })
+      i = j + 1
+    } else {
+      // Nothing to bind forward to — keep the trailing heading(s) as-is.
+      for (; i < j; i++) out.push(units[i])
+    }
+  }
+  return out
 }
 
 /** Trim leading/trailing whitespace of a span, keeping offsets faithful. */

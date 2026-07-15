@@ -337,6 +337,56 @@ describe('synthesizer execution', () => {
     expect(JSON.stringify(errorEvents[0].data)).toContain('Synthesis failed')
   })
 
+  it('thread mode: keeps a bare tool_result with no preceding controller_action (the retriever)', async () => {
+    // Regression: the retriever emits a single tool_result and NO
+    // controller_action. The old reconstruction only attached a tool_result to
+    // an existing iteration (created by a controller_action), so the result was
+    // dropped → loopHistory had 0 iterations → Synthesize got nothing → the
+    // synthesizer answered from nothing ("after the retriever, nothing happens").
+    const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
+    const { createScope } = await import('../../../../lib/harness-patterns/context.server')
+    const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
+
+    let captured: import('../../../../lib/harness-patterns/types').SynthesizerInput | undefined
+    const pattern = synthesizer({
+      mode: 'thread',
+      synthesize: async (input) => {
+        captured = input
+        return `iters=${input.loopHistory?.iterations.length ?? 0}`
+      },
+    })
+
+    const scope = createScope('test', {})
+    const now = Date.now()
+    const matches = [{ backend: 'redis', id: 'doc:0', content: 'Harness patterns are covered in §3.' }]
+    const mockContext = {
+      sessionId: 'test',
+      createdAt: now,
+      events: [
+        { type: 'user_message' as const, ts: now, patternId: 'harness', data: { content: 'which sections cover harness patterns?' } },
+        { type: 'pattern_enter' as const, ts: now + 1, patternId: 'retriever', data: { pattern: 'retriever' } },
+        { type: 'tool_result' as const, ts: now + 2, patternId: 'retriever', data: { tool: 'retriever', result: { matches, backends: ['redis'], query: 'harness patterns' }, success: true } },
+        { type: 'pattern_exit' as const, ts: now + 3, patternId: 'retriever', data: { status: 'completed' } },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'which sections cover harness patterns?',
+    }
+    const view = createEventView(mockContext)
+
+    const result = await pattern.fn(scope, view)
+
+    // The bare tool_result becomes a standalone turn carrying the matches.
+    expect(captured?.loopHistory?.iterations).toHaveLength(1)
+    expect(captured?.loopHistory?.iterations[0].result).toEqual({
+      matches,
+      backends: ['redis'],
+      query: 'harness patterns',
+    })
+    expect(captured?.loopHistory?.iterations[0].action.tool_name).toBe('retriever')
+    expect(result.data.synthesizedResponse).toBe('iters=1')
+  })
+
   it('should build input from events for thread mode', async () => {
     const { synthesizer } = await import('../../../../lib/harness-patterns/patterns/synthesizer.server')
     const { createScope } = await import('../../../../lib/harness-patterns/context.server')

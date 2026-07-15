@@ -97,6 +97,61 @@ describe('chunking (Issue #9)', () => {
     })
   })
 
+  describe('heading binding (markdown)', () => {
+    it('keeps a heading in the same chunk as its following paragraph', () => {
+      const text = '# Architecture\n\nThe system uses a layered design.'
+      const chunks = chunkByParagraph(text, { maxChars: 1000, overlap: 0 })
+      expect(chunks).toHaveLength(1)
+      expect(chunks[0].content).toContain('# Architecture')
+      expect(chunks[0].content).toContain('The system uses a layered design.')
+      assertOffsetInvariant(text, chunks)
+      assertContiguousIndices(chunks)
+    })
+
+    it('prepends two consecutive headings to the paragraph they introduce', () => {
+      const text = '# Top\n\n## Sub\n\nBody text here.'
+      const chunks = chunkByParagraph(text, { maxChars: 1000, overlap: 0 })
+      expect(chunks).toHaveLength(1)
+      expect(chunks[0].content).toContain('# Top')
+      expect(chunks[0].content).toContain('## Sub')
+      expect(chunks[0].content).toContain('Body text here.')
+      assertOffsetInvariant(text, chunks)
+      assertContiguousIndices(chunks)
+    })
+
+    it('puts the heading on the first window only when the section overflows', () => {
+      const body = 'x'.repeat(60)
+      const text = `## Architecture\n\n${body}` // 77 chars > maxChars
+      const chunks = chunkByParagraph(text, { maxChars: 40, overlap: 0 })
+      expect(chunks.length).toBeGreaterThan(1)
+      expect(chunks[0].content.startsWith('## Architecture')).toBe(true)
+      for (let i = 1; i < chunks.length; i++) {
+        expect(chunks[i].content).not.toContain('## Architecture')
+      }
+      assertOffsetInvariant(text, chunks)
+      assertContiguousIndices(chunks)
+    })
+
+    it('keeps a trailing heading with no body rather than dropping it', () => {
+      const text = 'Some body paragraph.\n\n# Dangling'
+      const chunks = chunkByParagraph(text, { maxChars: 1000, overlap: 0 })
+      expect(chunks.map((c) => c.content).join('\n')).toContain('# Dangling')
+      assertOffsetInvariant(text, chunks)
+      assertContiguousIndices(chunks)
+    })
+
+    it('is a no-op on headingless prose (paragraphs still split normally)', () => {
+      const text = 'First paragraph here.\n\nSecond paragraph here.'
+      const chunks = chunkByParagraph(text, { maxChars: 25, overlap: 0 })
+      expect(chunks.map((c) => c.content)).toEqual([
+        'First paragraph here.',
+        'Second paragraph here.',
+      ])
+      assertOffsetInvariant(text, chunks)
+      assertContiguousIndices(chunks)
+    })
+  })
+
   describe('chunkBySentence', () => {
     it('splits on sentence punctuation and packs to maxChars', () => {
       const text = 'First sentence. Second one! Third here? Fourth final.'

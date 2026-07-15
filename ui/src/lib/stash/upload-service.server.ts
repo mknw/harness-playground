@@ -88,7 +88,7 @@ export function isTextMime(mimeType: string): boolean {
  */
 export async function parseUploadRequest(
   request: Request,
-): Promise<StoreDocumentInput> {
+): Promise<StoreDocumentInput & { agentId?: string }> {
   const contentType = request.headers.get('content-type') ?? ''
 
   if (contentType.includes('multipart/form-data')) {
@@ -102,6 +102,10 @@ export async function parseUploadRequest(
     }
     const blob = file as File
     const sessionId = String(form.get('sessionId') ?? '').trim()
+    // Optional: the conversation's selected agent, so the auto-ingest gate can
+    // resolve the harness even before the session is persisted (uploads made
+    // before the first chat message).
+    const agentId = String(form.get('agentId') ?? '').trim() || undefined
     const filename = blob.name || 'upload'
     const ttlRaw = form.get('ttlSeconds')
     const ttlSeconds =
@@ -118,13 +122,14 @@ export async function parseUploadRequest(
       content,
       ...(isText ? {} : { encoding: 'base64' as const }),
       ...(Number.isFinite(ttlSeconds) ? { ttlSeconds } : {}),
+      ...(agentId ? { agentId } : {}),
     }
   }
 
   // Default: JSON body.
-  let body: Partial<StoreDocumentInput>
+  let body: Partial<StoreDocumentInput> & { agentId?: string }
   try {
-    body = (await request.json()) as Partial<StoreDocumentInput>
+    body = (await request.json()) as Partial<StoreDocumentInput> & { agentId?: string }
   } catch {
     throw new Error('Request body must be JSON or multipart/form-data')
   }
@@ -132,6 +137,7 @@ export async function parseUploadRequest(
     throw new Error('content (string) is required')
   }
   const filename = body.filename?.trim() || 'upload.txt'
+  const agentId = typeof body.agentId === 'string' ? body.agentId.trim() || undefined : undefined
   return {
     sessionId: String(body.sessionId ?? '').trim(),
     filename,
@@ -139,5 +145,6 @@ export async function parseUploadRequest(
     content: body.content,
     ...(body.encoding === 'base64' ? { encoding: 'base64' as const } : {}),
     ...(typeof body.ttlSeconds === 'number' ? { ttlSeconds: body.ttlSeconds } : {}),
+    ...(agentId ? { agentId } : {}),
   }
 }
