@@ -27,6 +27,7 @@ query ─────────────────────── embe
 | `embeddings.server.ts` (#8) | Provider-pluggable embedding with a one-model-per-corpus guard |
 | `vector-store.server.ts` | Shared RediSearch wrapper: `createVectorStore` → `ensureIndex` / `upsert` / `search`; owns the index/key/payload plumbing + naming (`spaceTag`) |
 | `document-ingest.server.ts` | Orchestrator: chunk → embed → vector store, `searchDocuments` (KNN), and the status-tracked `ingestStashDocument` / `ensureSessionIngested` (harness-aware ingest) |
+| `doc-convert.server.ts` | Binary → markdown conversion via the `doc-convert` HTTP sidecar (`POST /extract`); gated by `STASH_CONVERT_DOCS`. See [Document conversion](#document-conversion) |
 | `retriever/redis-backend.server.ts`, `retriever/supabase-backend.server.ts` | `RetrieverBackend` impls for the harness `retriever` pattern — local Data Stash (`redis`, live) + company pgvector via the Supabase MCP (`supabase`, deferred stub) |
 | `stash/upload-service.server.ts`, `stash/http.server.ts` | Upload request parsing (multipart + JSON), auth/response helpers |
 
@@ -53,7 +54,7 @@ The Data Stash adapts to the agent's harness composition:
 - **A `retriever` wired to the `redis` backend present** → uploads are **auto-ingested** into the local vector store so they're semantically searchable. An agent without such a retriever never ingests — the upload is just stored.
 - Both can hold at once (independent, composable).
 
-**The gate.** `POST /api/stash/upload`, after storing, resolves the session's agent (`loadSession` → `getOrBuildPatterns`) and checks `harnessHasRedisRetriever(patterns)` — static introspection in `harness-patterns/pattern-capabilities.ts` that walks `ConfiguredPattern.children` (the combinators — `routes`, `chain`, `withReferences`, `withSandbox` — all expose them). On a match it marks the doc `ingestStatus: 'pending'` and ingests **in the background** (the response returns immediately — embedding a large doc takes seconds). Base64 binaries are skipped (`failed`). Best-effort: any failure leaves the `201` untouched.
+**The gate.** `POST /api/stash/upload`, after storing, resolves the session's agent (`loadSession` → `getOrBuildPatterns`) and checks `harnessHasRedisRetriever(patterns)` — static introspection in `harness-patterns/pattern-capabilities.ts` that walks `ConfiguredPattern.children` (the combinators — `routes`, `chain`, `withReferences`, `withSandbox` — all expose them). On a match it marks the doc `ingestStatus: 'pending'` and ingests **in the background** (the response returns immediately — embedding a large doc takes seconds). Base64 binaries are skipped (`failed`) — unless [document conversion](#document-conversion) is on and the type is convertible, in which case they're converted to markdown first. Best-effort: any failure leaves the `201` untouched.
 
 **Safety net.** Docs uploaded *before* the agent was known (session not yet persisted) miss the gate. The redis backend runs `ensureSessionIngested` on its first search per session (idempotent via `ingestStatus`), so they still become searchable on first retrieval.
 
@@ -80,13 +81,25 @@ The `type` field distinguishes vector backends from future non-vector ones (web 
 
 ## Storage model (Redis)
 
-- **Document**: RedisJSON blob at `stash:doc:{sessionId}:{docId}`, TTL default 7 days. `content` is UTF-8 text by default; binary files (xlsx, pdf, images) are stored with `encoding: 'base64'` and `size` = the original (decoded) byte count (#89). Binary content is byte-faithful but **not** semantically searchable — `POST /api/stash/ingest` rejects base64 docs (chunking/embedding is text-only). An `ingestStatus` (`pending` | `indexed` | `failed`) is stamped when the harness-aware path ingests the doc; absent means it was never ingested (no redis-retriever in the harness).
+- **Document**: RedisJSON blob at `stash:doc:{sessionId}:{docId}`, TTL default 7 days. `content` is UTF-8 text by default; binary files (xlsx, pdf, images) are stored with `encoding: 'base64'` and `size` = the original (decoded) byte count (#89). Binary content is byte-faithful and, by default, **not** semantically searchable (chunking/embedding is text-only) — unless [document conversion](#document-conversion) is enabled, which turns a convertible type (docx/pdf/pptx/odt) into markdown stored alongside as `derivedText` (the original bytes stay in `content` for `?download`). An `ingestStatus` (`pending` | `indexed` | `failed`) is stamped when the harness-aware path ingests the doc; absent means it was never ingested (no redis-retriever in the harness). Meta reads expose a computed `converted` flag when `derivedText` is present.
 - **Session index**: a Redis SET `stash:docs:{sessionId}` of doc ids (self-healing — stale entries pruned on list).
 - **Chunk**: a Redis HASH `stashvec:{sessionId}:{spaceTag}:{docId}:{chunkIndex}` with `vector` (float blob) + `meta` (base64 of a JSON `{content, doc_id, source, chunk_index, offsets, model, provider, dim}`). 2 writes/chunk.
 - **Vector index**: a RediSearch HNSW index per `(session, embedding-space)`; `dim` matches the embedding model.
 - **Embedding space**: recorded at `stash:space:{sessionId}` as `{provider, model, dimensions}`.
 
 `MAX_CONTENT_BYTES` = 5 MiB (applies to the original bytes, base64 or not). Text files store verbatim; recognized binary types are base64-encoded by the upload service (`isTextMime` decides). Text remains the path for anything you want to search; binary is for byte-faithful round-trips (e.g. the sandbox `/work` flow, #89).
+
+## Document conversion
+
+Convertible binary uploads — **docx, odt, pptx, pdf** (+ legacy `.doc`/`.ppt`/`.odp`) — are turned into markdown so they flow through the same chunk → embed → search path as text. Off by default; enable with **`STASH_CONVERT_DOCS=1`**.
+
+- **Sidecar, not MCP.** Conversion is a host pipeline step (like the direct-Redis app path), so `doc-convert.server.ts` calls a document-extraction service over plain HTTP (`POST /extract`, multipart `files` + `config={"output_format":"markdown"}`) rather than the serial MCP gateway. `DOC_CONVERT_URL` defaults to `http://localhost:8000`.
+- **Engine.** The compose `doc-convert` service runs stable **kreuzberg 4.x** (`ghcr.io/kreuzberg-dev/kreuzberg-full`) — Rust core, native parsers (no LibreOffice/pandoc), heading-preserving markdown that feeds `bindHeadings`. The **xberg** successor exposes the same `/extract` contract and is a one-line image swap (RC-only today); the response parser accepts kreuzberg's bare array **and** xberg's `{results:[…]}`.
+- **When.** In `ingestStashDocument`: a convertible base64 doc is converted, the markdown persisted as `derivedText`, then *that* is chunked (an in-memory text doc is handed to the unchanged `ingestDocument`). The upload gate + `ensureSessionIngested` admit convertible binaries, so they get the `pending → indexed` UX + composer-block; non-convertible binaries (zip, images) stay stored-only. `convertFn` is injectable for tests.
+- **Both kept.** The original bytes remain in `content` (so `?download` + the `/work` sync serve the real file); `derivedText` holds the markdown. Chunk char-offsets and the file viewer index into `derivedText`, so chat citations line up with what's shown — `GET /api/stash/document/:id` (no `download`) serves `derivedText` for converted docs, and the panel shows the view-eye via the computed `converted` flag.
+- **Graceful fallback.** Sidecar down/unreachable → the doc is marked `ingestStatus: 'failed'`; the upload itself still succeeds. Flag off → binaries behave exactly as before.
+
+Start the sidecar: `docker compose up -d doc-convert`.
 
 ## Chunking (#9)
 
@@ -119,6 +132,7 @@ llama-server --embedding -m models/Qwen3-Embedding-0.6B-Q8_0.gguf --port 8090 --
 - **redis-stack** (not plain `redis`): the pipeline needs **RedisJSON** (`json_*`) and **RediSearch** (`create_vector_index_hash` / `vector_search_hash`). The compose `redis` service uses `redis/redis-stack` (merged in #91).
 - **Apple-Silicon / colima:** redis-stack's arm64 `redisearch.so` SIGILL-crashes on the colima VM during vector ops. Run the redis service as `platform: linux/amd64` (emulated) — see the git-ignored `docker-compose.override.yml`. Long-term: colima CPU passthrough (`--vm-type vz`). Store/RedisJSON is unaffected; only vector search needs this.
 - **Gateway argument/result quirks** (see [CLAUDE.md → Redis MCP Tool Parameters](../CLAUDE.md)): the MCP gateway runs the redis server over serial stdio (so ingest is sequential and minimal-call), returns multi-value results as one text block per element (handled by `callTool` aggregation), and auto-parses JSON-looking string args into objects (so chunk `meta` is base64-encoded).
+- **`doc-convert` sidecar** (only when `STASH_CONVERT_DOCS=1`): the `doc-convert` compose service must be up (`docker compose up -d doc-convert`) and reachable at `DOC_CONVERT_URL`. If it's down, convertible uploads are marked `failed` rather than crashing the upload. See [Document conversion](#document-conversion).
 
 ## Relationships
 
