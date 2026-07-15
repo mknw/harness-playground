@@ -38,6 +38,12 @@ import {
 } from './document-store.server'
 import { chunkDocument, type Chunk, type ChunkConfig } from './chunking.server'
 import {
+  conversionEnabled,
+  convertToMarkdown,
+  isConvertible,
+  MARKDOWN_MIME,
+} from './doc-convert.server'
+import {
   embed as defaultEmbed,
   embedOne as defaultEmbedOne,
   assertSameSpace,
@@ -63,6 +69,10 @@ export interface IngestOptions {
   allowSpaceChange?: boolean
   callTool?: CallTool
   embedFn?: (texts: string[], config?: EmbeddingConfig) => Promise<EmbeddingResult>
+  /** Binary→markdown converter (injectable for tests, mirroring embedFn).
+   *  Defaults to the doc-convert sidecar client. Called only for convertible
+   *  base64 docs before chunking. */
+  convertFn?: (base64Content: string, filename: string, mimeType: string) => Promise<string>
 }
 
 export interface IngestResult {
@@ -232,9 +242,11 @@ export async function ingestDocument(
  * retriever's lazy safety net:
  *
  *  - missing doc            → `null` (nothing to do)
- *  - `base64` binary        → status `'failed'` (the text pipeline can't chunk
- *                             binary; mark it so we don't retry forever)
- *  - ingest throws          → status `'failed'`, returns `null`
+ *  - `base64` binary        → converted to markdown first when it's a
+ *                             convertible type (docx/pdf/pptx/odt) and
+ *                             conversion is enabled; otherwise status `'failed'`
+ *                             (the text pipeline can't chunk it — don't retry)
+ *  - convert/ingest throws  → status `'failed'`, returns `null`
  *  - ingest ok              → status `'indexed'`, returns the {@link IngestResult}
  *
  * Best-effort by contract: it never throws (failures live in the status field),
@@ -248,20 +260,36 @@ export async function ingestStashDocument(
   const callTool = opts.callTool ?? stashCallTool()
   const doc = await getDocument(sessionId, docId, callTool)
   if (!doc) return null
-  if (doc.encoding === 'base64') {
+
+  // Binary docs are only ingestable if we can convert them to text. A
+  // convertible type (docx/pdf/pptx/odt) with conversion enabled is handled in
+  // the try below; any other base64 is marked failed so we don't retry forever.
+  const needsConversion = doc.encoding === 'base64'
+  if (needsConversion && !(conversionEnabled() && isConvertible(doc.mimeType))) {
     await setDocumentFlags(sessionId, docId, { ingestStatus: 'failed' }, callTool)
     return null
   }
-  // Mark 'pending' up front so the panel shows "embedding…" while we embed
-  // (slow on the serial gateway; without this the lazy-ensure path looks stuck
-  // at no-status). The upload-gate path already persisted 'pending' in the
-  // store write, so skip the redundant round-trip there — re-writing the same
-  // value only burns a serial gateway call and a list-cache invalidation.
+
+  // Mark 'pending' up front so the panel shows "embedding…" while we
+  // convert/embed (both slow). The upload-gate path already persisted 'pending'
+  // in the store write, so skip the redundant round-trip there — re-writing the
+  // same value only burns a gateway call and a list-cache invalidation.
   if (doc.ingestStatus !== 'pending') {
     await setDocumentFlags(sessionId, docId, { ingestStatus: 'pending' }, callTool)
   }
   try {
-    const result = await ingestDocument(doc, opts)
+    let ingestDoc = doc
+    if (needsConversion) {
+      // docx/pdf/… → markdown. Persist the derived text so the file viewer and
+      // chat citations can render it (chunk offsets index into this markdown,
+      // not the base64 original — which stays in `content` for downloads). Then
+      // feed an in-memory text doc to the unchanged `ingestDocument`.
+      const convertFn = opts.convertFn ?? convertToMarkdown
+      const markdown = await convertFn(doc.content, doc.filename, doc.mimeType)
+      await setDocumentFlags(sessionId, docId, { derivedText: markdown }, callTool)
+      ingestDoc = { ...doc, content: markdown, mimeType: MARKDOWN_MIME, encoding: undefined }
+    }
+    const result = await ingestDocument(ingestDoc, opts)
     await setDocumentFlags(sessionId, docId, { ingestStatus: 'indexed' }, callTool)
     return result
   } catch {
@@ -282,7 +310,7 @@ export async function ingestStashDocument(
  *    session was persisted).
  * Skips `'indexed'` (searchable), `'pending'` (the gate is actively ingesting
  * it — re-ingesting would double the work and contend on the serial gateway),
- * and `base64` binaries (never text-ingestable). A fully-indexed corpus costs
+ * and non-convertible `base64` binaries. A fully-indexed corpus costs
  * just one `listDocuments`.
  */
 export async function ensureSessionIngested(
@@ -293,7 +321,9 @@ export async function ensureSessionIngested(
   const metas = await listDocuments(sessionId, callTool)
   for (const m of metas) {
     if (m.ingestStatus === 'indexed' || m.ingestStatus === 'pending') continue
-    if (m.encoding === 'base64') continue
+    // Skip binaries we can't turn into text; convertible ones (with conversion
+    // enabled) fall through to ingestStashDocument, which converts them.
+    if (m.encoding === 'base64' && !(conversionEnabled() && isConvertible(m.mimeType))) continue
     await ingestStashDocument(sessionId, m.id, opts)
   }
 }

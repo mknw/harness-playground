@@ -18,6 +18,7 @@ import { ingestStashDocument } from '../../../lib/document-ingest.server'
 import { loadSession } from '../../../lib/harness-client/session.server'
 import { agentUsesRedisRetriever } from '../../../lib/harness-client/registry.server'
 import { parseUploadRequest } from '../../../lib/stash/upload-service.server'
+import { conversionEnabled, isConvertible } from '../../../lib/doc-convert.server'
 import { json, withUser } from '../../../lib/stash/http.server'
 
 export async function POST(event: APIEvent) {
@@ -49,6 +50,7 @@ export async function POST(event: APIEvent) {
         input.sessionId,
         userId,
         storeInput.encoding,
+        storeInput.mimeType,
         agentId,
       )
       const doc = await storeDocument({
@@ -82,9 +84,15 @@ async function willAutoIngest(
   sessionId: string,
   userId: string,
   encoding: 'utf8' | 'base64' | undefined,
+  mimeType: string,
   agentId: string | undefined,
 ): Promise<boolean> {
-  if (encoding === 'base64') return false // binary: not text-ingestable
+  // Binary is ingestable only if we can convert it to text — a convertible type
+  // (docx/pdf/pptx/odt) with conversion enabled. Other binaries (zip, images,
+  // parquet) are stored but not searchable, so don't fire the gate for them.
+  if (encoding === 'base64' && !(conversionEnabled() && isConvertible(mimeType))) {
+    return false
+  }
   try {
     const resolvedAgentId = agentId ?? (await loadSession(sessionId, userId))?.agentId
     if (!resolvedAgentId) return false // session not persisted + no agent hint
