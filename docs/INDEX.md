@@ -42,6 +42,7 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 | Document | Description |
 |----------|-------------|
 | [DATA_STASH.md](DATA_STASH.md) | Document upload → chunk → embed → search pipeline (#6/#9/#8): modules, API routes, Redis storage model (incl. base64 binary, #89), embedding-space rule, redis-stack + local-embedder requirements |
+| [data-flow.md](data-flow.md) | **Visual data-flow diagrams** (Mermaid) — Data Stash pipeline, sandbox attachment lifecycle (#79/#97), `/work` ⇄ Data Stash sync (#89), and sandbox tool dispatch / runtime topology. Spans Data Stash + sandbox |
 
 ### Agent Trigger Endpoint
 
@@ -105,6 +106,7 @@ kg-agent/
 │   ├── INDEX.md                 # You are here
 │   ├── UI_ARCHITECTURE.md       # Frontend architecture
 │   ├── DATA_STASH.md            # Document ingestion pipeline
+│   ├── data-flow.md             # Mermaid data-flow diagrams (Data Stash + sandbox)
 │   ├── AGENT_TRIGGER.md         # POST /api/agents/:id async trigger → actions
 │   ├── DOCKER_COMPOSE.md        # Docker setup
 │   ├── MCP_GATEWAY.md           # MCP Gateway reference

@@ -5,6 +5,10 @@ Quick reference for observing what's happening inside the compute sandbox
 what containers exist, what's running inside them, how to peek, and how to
 clean up. Pairs with the design spec at [`docs/sandbox-plan.md`](../sandbox-plan.md).
 
+For the runtime data flow — attachment lifecycle, `/work` ⇄ Data Stash sync, and
+tool dispatch / topology — see the Mermaid diagrams in
+[`docs/data-flow.md`](../data-flow.md).
+
 ## How to identify sandbox containers
 
 Every sandbox container carries two labels (set in
