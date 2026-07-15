@@ -27,7 +27,7 @@
  */
 
 import { assertServerOnImport } from './harness-patterns/assert.server'
-import { callTool as defaultCallTool } from './harness-patterns/mcp-client.server'
+import { stashCallTool } from './redis-direct.server'
 import {
   DEFAULT_TTL_SECONDS,
   getDocument,
@@ -118,7 +118,7 @@ function spaceKey(sessionId: string): string {
 /** Read the embedding space a session's corpus was built with, if any. */
 export async function getEmbeddingSpace(
   sessionId: string,
-  callTool: CallTool = defaultCallTool,
+  callTool: CallTool = stashCallTool(),
 ): Promise<EmbeddingSpace | null> {
   const res = await callTool('json_get', { name: spaceKey(sessionId), path: '$' })
   if (!res.success || res.data == null) return null
@@ -165,7 +165,7 @@ export async function ingestDocument(
   doc: StashDocument,
   opts: IngestOptions = {},
 ): Promise<IngestResult> {
-  const callTool = opts.callTool ?? defaultCallTool
+  const callTool = opts.callTool ?? stashCallTool()
   const embedFn = opts.embedFn ?? defaultEmbed
   const ttl = opts.ttlSeconds ?? DEFAULT_TTL_SECONDS
 
@@ -245,12 +245,20 @@ export async function ingestStashDocument(
   docId: string,
   opts: IngestOptions = {},
 ): Promise<IngestResult | null> {
-  const callTool = opts.callTool ?? defaultCallTool
+  const callTool = opts.callTool ?? stashCallTool()
   const doc = await getDocument(sessionId, docId, callTool)
   if (!doc) return null
   if (doc.encoding === 'base64') {
     await setDocumentFlags(sessionId, docId, { ingestStatus: 'failed' }, callTool)
     return null
+  }
+  // Mark 'pending' up front so the panel shows "embedding…" while we embed
+  // (slow on the serial gateway; without this the lazy-ensure path looks stuck
+  // at no-status). The upload-gate path already persisted 'pending' in the
+  // store write, so skip the redundant round-trip there — re-writing the same
+  // value only burns a serial gateway call and a list-cache invalidation.
+  if (doc.ingestStatus !== 'pending') {
+    await setDocumentFlags(sessionId, docId, { ingestStatus: 'pending' }, callTool)
   }
   try {
     const result = await ingestDocument(doc, opts)
@@ -264,19 +272,27 @@ export async function ingestStashDocument(
 
 /**
  * Idempotently ingest every not-yet-indexed document in a session. The
- * retriever's safety net: an upload that happened before the agent was known
- * (so the upload-time gate couldn't fire) still becomes searchable on first
- * retrieval. Skips docs already `'indexed'` or `'failed'` (terminal) and binary
- * uploads, so a fully-indexed corpus costs just one `listDocuments`.
+ * retriever's safety net: an upload that happened before the agent was known (so
+ * the upload-time gate couldn't fire), or one whose ingest failed transiently
+ * (embedder offline at upload time), becomes searchable on first retrieval.
+ *
+ * Ingests only what the upload-time gate can't or didn't handle:
+ *  - `'failed'` — retried (usually a transient embedder-down at upload time);
+ *  - absent (no status) — the gate never fired (e.g. uploaded before the
+ *    session was persisted).
+ * Skips `'indexed'` (searchable), `'pending'` (the gate is actively ingesting
+ * it — re-ingesting would double the work and contend on the serial gateway),
+ * and `base64` binaries (never text-ingestable). A fully-indexed corpus costs
+ * just one `listDocuments`.
  */
 export async function ensureSessionIngested(
   sessionId: string,
   opts: IngestOptions = {},
 ): Promise<void> {
-  const callTool = opts.callTool ?? defaultCallTool
+  const callTool = opts.callTool ?? stashCallTool()
   const metas = await listDocuments(sessionId, callTool)
   for (const m of metas) {
-    if (m.ingestStatus === 'indexed' || m.ingestStatus === 'failed') continue
+    if (m.ingestStatus === 'indexed' || m.ingestStatus === 'pending') continue
     if (m.encoding === 'base64') continue
     await ingestStashDocument(sessionId, m.id, opts)
   }
@@ -297,7 +313,7 @@ export async function searchDocuments(
   query: string,
   opts: SearchOptions = {},
 ): Promise<SearchHit[]> {
-  const callTool = opts.callTool ?? defaultCallTool
+  const callTool = opts.callTool ?? stashCallTool()
   const embedOneFn = opts.embedOneFn ?? defaultEmbedOne
 
   const recorded = await getEmbeddingSpace(sessionId, callTool)

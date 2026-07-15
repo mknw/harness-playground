@@ -13,15 +13,10 @@ import type { APIEvent } from '@solidjs/start/server'
 import {
   storeDocument,
   listDocuments,
-  setDocumentFlags,
-  type IngestStatus,
 } from '../../../lib/document-store.server'
 import { ingestStashDocument } from '../../../lib/document-ingest.server'
-import {
-  getOrBuildPatterns,
-  loadSession,
-} from '../../../lib/harness-client/session.server'
-import { harnessHasRedisRetriever } from '../../../lib/harness-patterns'
+import { loadSession } from '../../../lib/harness-client/session.server'
+import { agentUsesRedisRetriever } from '../../../lib/harness-client/registry.server'
 import { parseUploadRequest } from '../../../lib/stash/upload-service.server'
 import { json, withUser } from '../../../lib/stash/http.server'
 
@@ -39,22 +34,34 @@ export async function POST(event: APIEvent) {
     if (!input.sessionId) return json({ error: 'sessionId is required' }, 400)
 
     try {
-      const doc = await storeDocument(input)
+      const { agentId, ...storeInput } = input
+
       // Harness-aware Data Stash: if this session's agent composes a retriever
-      // wired to the local redis vector store, make the upload searchable.
-      // Best-effort and decoupled from upload success — a failure here never
-      // changes the 201.
-      const ingestStatus = await maybeAutoIngest(
+      // wired to the local redis vector store, auto-ingest the upload. The GATE
+      // DECISION is fast (memoized per agentId), and we decide it BEFORE storing
+      // so the very first write persists `ingestStatus: 'pending'`. That closes
+      // the status gap: Redis reflects "embedding…" from t=0, so a status poll
+      // (chip / composer-block) can never read a no-status doc and flicker. The
+      // actual embed (slow on the serial gateway) runs in the background; the
+      // client reconciles to indexed/failed via `GET ?sessionId`. The agentId
+      // hint lets this work even before the session is persisted (drop-then-chat).
+      const ingest = await willAutoIngest(
         input.sessionId,
         userId,
-        doc.id,
-        doc.encoding,
+        storeInput.encoding,
+        agentId,
       )
-      // Return metadata only — the client already has the content it uploaded,
-      // and full inlining bloats the response.
+      const doc = await storeDocument({
+        ...storeInput,
+        ...(ingest ? { ingestStatus: 'pending' as const } : {}),
+      })
       const { content: _content, ...meta } = doc
       void _content
-      if (ingestStatus) meta.ingestStatus = ingestStatus
+
+      if (ingest) {
+        void ingestStashDocument(input.sessionId, doc.id).catch(() => {})
+      }
+
       return json({ ok: true, document: meta }, 201)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Upload failed'
@@ -65,31 +72,25 @@ export async function POST(event: APIEvent) {
 }
 
 /**
- * Auto-ingest gate. Returns the ingest status to stamp on the response, or
- * `undefined` when the upload should not be ingested (binary, no persisted
- * session, no redis-retriever in the harness, or a resolution failure). Marks
- * the doc `'pending'` synchronously, then ingests in the background so the
- * upload returns immediately — embedding a large doc takes seconds. Docs
- * uploaded before the session is persisted are covered by the retriever's
- * lazy `ensureSessionIngested` net on first search.
+ * Fast gate decision: should this upload be auto-ingested? True only for a
+ * text doc whose (client-hinted or persisted) agent composes a redis retriever.
+ * `agentUsesRedisRetriever` is memoized per agentId, so this is cheap after the
+ * first call. Best-effort: never throws (returns false); the retriever's lazy
+ * `ensureSessionIngested` net still covers anything missed on first search.
  */
-async function maybeAutoIngest(
+async function willAutoIngest(
   sessionId: string,
   userId: string,
-  docId: string,
   encoding: 'utf8' | 'base64' | undefined,
-): Promise<IngestStatus | undefined> {
-  if (encoding === 'base64') return undefined // binary: not text-ingestable
+  agentId: string | undefined,
+): Promise<boolean> {
+  if (encoding === 'base64') return false // binary: not text-ingestable
   try {
-    const loaded = await loadSession(sessionId, userId)
-    if (!loaded) return undefined
-    const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
-    if (!harnessHasRedisRetriever(patterns)) return undefined
-    await setDocumentFlags(sessionId, docId, { ingestStatus: 'pending' })
-    void ingestStashDocument(sessionId, docId).catch(() => {})
-    return 'pending'
+    const resolvedAgentId = agentId ?? (await loadSession(sessionId, userId))?.agentId
+    if (!resolvedAgentId) return false // session not persisted + no agent hint
+    return await agentUsesRedisRetriever(resolvedAgentId, sessionId)
   } catch {
-    return undefined
+    return false
   }
 }
 

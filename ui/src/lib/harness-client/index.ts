@@ -32,5 +32,12 @@ export {
   extractGraphFromResult
 } from './graph-extractor'
 
+// Reference Extraction (client-safe) — retriever citations
+export {
+  extractReferences,
+  referencesForDoc,
+  type OpenReferenceTarget
+} from './reference-extractor'
+
 // Types
 export type { GraphElement } from './types'

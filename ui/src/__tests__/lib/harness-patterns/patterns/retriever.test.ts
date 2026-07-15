@@ -24,6 +24,31 @@ vi.mock('../../../../lib/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
+// Mock the BAML client (the retriever dynamically imports it for RetrieveQuery).
+vi.mock('../../../../../baml_client', () => ({
+  b: { RetrieveQuery: vi.fn(async () => 'rewritten search query') },
+}))
+
+// Collector must be a real class so `new Collector()` works + has `.last`.
+vi.mock('@boundaryml/baml', () => {
+  class MockCollector {
+    last = {
+      rawLlmResponse: 'raw',
+      usage: { inputTokens: 10, outputTokens: 4 },
+      calls: [
+        {
+          httpRequest: { body: { messages: [] } },
+          provider: 'anthropic',
+          clientName: 'DescribeAnthropic',
+          selected: true,
+        },
+      ],
+    }
+    constructor(_name?: string) {}
+  }
+  return { Collector: MockCollector }
+})
+
 type Ev = { type: EventType; ts: number; patternId: string; data: unknown }
 
 function ctxOf(events: Ev[]): UnifiedContext<Record<string, unknown>> {
@@ -46,7 +71,8 @@ async function load() {
   )
   const { createScope } = await import('../../../../lib/harness-patterns/context.server')
   const { createEventView } = await import('../../../../lib/harness-patterns/patterns')
-  return { retriever, createScope, createEventView }
+  const { b } = await import('../../../../../baml_client')
+  return { retriever, createScope, createEventView, b }
 }
 
 /** A mock backend that records the query it received and returns canned hits. */
@@ -84,12 +110,12 @@ async function run(
   events: Ev[],
   config: Parameters<Awaited<ReturnType<typeof load>>['retriever']>[0],
 ) {
-  const { retriever, createScope, createEventView } = await load()
+  const { retriever, createScope, createEventView, b } = await load()
   const pattern = retriever(config)
   const scope = createScope(PATTERN_ID, scopeData)
   const view = createEventView(ctxOf(events), pattern.config.viewConfig, PATTERN_ID)
   const result = await pattern.fn(scope, view)
-  return { pattern, result }
+  return { pattern, result, baml: b }
 }
 
 function toolResults(events: ContextEvent[]): ToolResultEventData[] {
@@ -121,39 +147,90 @@ describe('retriever', () => {
     ])
   })
 
-  it('queries with the compacted intent when present (preferred source)', async () => {
-    const b = mockBackend('redis', [hit('redis', 'a', 0.1)])
-    const { result } = await run(
-      { intent: 'find the quarterly revenue figure' },
+  it('uses the raw last user message as the query by default (ignores scope.data.intent)', async () => {
+    const backend = mockBackend('redis', [hit('redis', 'a', 0.1)])
+    const { result, baml } = await run(
+      { intent: 'some classified intent' },
       [userMsg('what was it again?')],
-      { backends: [b], k: 5 },
+      { backends: [backend], k: 5 },
     )
-    expect(b.calls).toHaveLength(1)
-    expect(b.calls[0].text).toBe('find the quarterly revenue figure')
-    expect(b.calls[0].intent).toBe('find the quarterly revenue figure')
+    expect(backend.calls).toHaveLength(1)
+    // The user's own words are the query — NOT the router/compacted intent.
+    expect(backend.calls[0].text).toBe('what was it again?')
+    // intent is still passed through as a context hint.
+    expect(backend.calls[0].intent).toBe('some classified intent')
+    expect(baml.RetrieveQuery).not.toHaveBeenCalled() // no rewrite without generateQuery
     expect((result.data as { matches?: RetrievalHit[] }).matches).toHaveLength(1)
   })
 
-  it('falls back to the last user message when there is no intent', async () => {
-    const b = mockBackend('redis', [])
+  it('uses the latest user message across multiple turns', async () => {
+    const backend = mockBackend('redis', [])
     const { result } = await run({}, [userMsg('first'), userMsg('latest question')], {
-      backends: [b],
+      backends: [backend],
     })
-    expect(b.calls[0].text).toBe('latest question')
-    expect(b.calls[0].intent).toBeUndefined()
+    expect(backend.calls[0].text).toBe('latest question')
+    expect(backend.calls[0].intent).toBeUndefined()
     expect((result.data as { matches?: RetrievalHit[] }).matches).toEqual([])
   })
 
-  it('widens the query to the last N user turns when turnWindow is set', async () => {
-    const b = mockBackend('redis', [])
-    await run(
+  it('widens the query to the last N user turns when turnWindow is set (no LLM)', async () => {
+    const backend = mockBackend('redis', [])
+    const { baml } = await run(
       {},
       [userMsg('alpha', 1), userMsg('beta', 2), userMsg('gamma', 3)],
-      { backends: [b], turnWindow: 3 },
+      { backends: [backend], turnWindow: 3 },
     )
-    // Joined recent user turns (no intent present).
-    expect(b.calls[0].text).toContain('alpha')
-    expect(b.calls[0].text).toContain('gamma')
+    expect(backend.calls[0].text).toContain('alpha')
+    expect(backend.calls[0].text).toContain('gamma')
+    expect(baml.RetrieveQuery).not.toHaveBeenCalled()
+  })
+
+  it('with generateQuery + history, rewrites the query via RetrieveQuery', async () => {
+    const backend = mockBackend('redis', [])
+    const { baml } = await run(
+      {},
+      [
+        userMsg('what is RAG?', 1),
+        { type: 'assistant_message', ts: 2, patternId: 'synth', data: { content: 'RAG is…' } },
+        userMsg('tell me more about that', 3),
+      ],
+      { backends: [backend], generateQuery: true },
+    )
+    expect(baml.RetrieveQuery).toHaveBeenCalledTimes(1)
+    const [history, latest] = vi.mocked(baml.RetrieveQuery).mock.calls[0]
+    expect(latest).toBe('tell me more about that')
+    expect(history.length).toBe(2) // prior user + assistant
+    expect(backend.calls[0].text).toBe('rewritten search query')
+  })
+
+  it('with generateQuery but NO history (turn 1), searches verbatim — no LLM call', async () => {
+    const backend = mockBackend('redis', [])
+    const { baml } = await run({}, [userMsg('what is RAG?')], {
+      backends: [backend],
+      generateQuery: true,
+    })
+    expect(baml.RetrieveQuery).not.toHaveBeenCalled()
+    expect(backend.calls[0].text).toBe('what is RAG?')
+  })
+
+  it('falls back to the raw message + tracks an error when RetrieveQuery throws', async () => {
+    const { retriever, createScope, createEventView, b } = await load()
+    vi.mocked(b.RetrieveQuery).mockRejectedValueOnce(new Error('describe model down'))
+    const backend = mockBackend('redis', [hit('redis', 'a', 0.1)])
+    const pattern = retriever({ backends: [backend], generateQuery: true, patternId: PATTERN_ID })
+    const scope = createScope(PATTERN_ID, {})
+    const view = createEventView(
+      ctxOf([userMsg('first', 1), userMsg('again', 2)]),
+      pattern.config.viewConfig,
+      PATTERN_ID,
+    )
+    const result = await pattern.fn(scope, view)
+    // Degrades to the raw latest message and still searches.
+    expect(backend.calls[0].text).toBe('again')
+    expect((result.data as { matches: RetrievalHit[] }).matches).toHaveLength(1)
+    const errors = result.events.filter((e) => e.type === 'error')
+    expect(errors.length).toBeGreaterThan(0)
+    expect(JSON.stringify(errors[0].data)).toContain('describe model down')
   })
 
   it('fans out to all backends and merges closest-first, capped at k', async () => {
@@ -181,19 +258,49 @@ describe('retriever', () => {
   })
 
   it('emits a tool_result the synthesizer can read, with matches + backends + query', async () => {
-    const b = mockBackend('redis', [hit('redis', 'a', 0.1)])
-    const { result } = await run({ intent: 'the query' }, [userMsg('x')], {
-      backends: [b],
+    const backend = mockBackend('redis', [hit('redis', 'a', 0.1)])
+    const { result } = await run({}, [userMsg('the query')], {
+      backends: [backend],
     })
     const trs = toolResults(result.events)
     expect(trs).toHaveLength(1)
     expect(trs[0].tool).toBe('retriever')
     expect(trs[0].success).toBe(true)
-    const payload = trs[0].result as { matches: RetrievalHit[]; backends: string[]; query: string }
+    const payload = trs[0].result as {
+      matches: RetrievalHit[]
+      backends: string[]
+      query: string
+      references: unknown[]
+    }
     expect(payload.matches).toHaveLength(1)
     expect(payload.backends).toEqual(['redis'])
     expect(payload.query).toBe('the query')
+    expect(Array.isArray(payload.references)).toBe(true) // no locator on plain hits
     expect(trs[0].summary).toContain('1 match')
+  })
+
+  it('builds typed references from hits that carry a source locator', async () => {
+    const located: RetrievalHit = {
+      backend: 'redis',
+      id: 'doc1:2',
+      content: 'the matched chunk',
+      source: 'notes.md',
+      score: 0.2,
+      docId: 'doc1',
+      chunkIndex: 2,
+      startOffset: 10,
+      endOffset: 42,
+    }
+    // A web-style hit with no locator must NOT produce a reference.
+    const unlocated: RetrievalHit = { backend: 'web', id: 'u1', content: 'x', score: 0.1 }
+    const backend = mockBackend('redis', [located, unlocated])
+    const { result } = await run({}, [userMsg('q')], { backends: [backend], k: 5 })
+    const refs = (result.events.find((e) => e.type === 'tool_result')!.data as {
+      result: { references: RetrievalHit[] }
+    }).result.references
+    expect(refs).toEqual([
+      { source: 'notes.md', docId: 'doc1', chunkIndex: 2, startOffset: 10, endOffset: 42, score: 0.2 },
+    ])
   })
 
   it('reports "no matches" (empty) without erroring when backends find nothing', async () => {

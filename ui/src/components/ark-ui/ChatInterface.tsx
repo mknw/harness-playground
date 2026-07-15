@@ -30,6 +30,8 @@ import {
   loadConversation,
   extractGraphFromResult,
   extractGraphElements,
+  extractReferences,
+  type OpenReferenceTarget,
 } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
 import { parseChatStream, type DoneEventData } from '~/lib/sse-client'
@@ -71,6 +73,11 @@ export interface ChatInterfaceProps {
   graphEntityNames?: Map<string, string[]>
   /** Callback to highlight specific graph element IDs */
   onHighlightEntities?: (ids: string[]) => void
+  /** Open the inline file viewer for a citation clicked in an assistant message. */
+  onOpenReference?: (target: OpenReferenceTarget) => void
+  /** True while uploaded sources are still embedding — blocks the composer so the
+   *  user can't query the retriever before its documents are searchable. */
+  embeddingSources?: boolean
   // ---- Per-session progress + run state (lives in the route, see #47) ----
   getProgress: (sessionId: string) => ChainProgressController
   getRunState: (sessionId: string) => SessionRunState
@@ -172,6 +179,22 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           }
           if (props.onContextUpdate) {
             props.onContextUpdate(ctx)
+          }
+          // Re-attach retriever citations to the latest assistant message so the
+          // Sources footer + inline chips survive reload (best-effort — only the
+          // most recent turn's references are recoverable from the event stream).
+          const refs = extractReferences(events)
+          if (refs.length) {
+            setMessages((prev) => {
+              const next = [...prev]
+              for (let i = next.length - 1; i >= 0; i--) {
+                if (next[i].role === 'assistant') {
+                  next[i] = { ...next[i], references: refs }
+                  break
+                }
+              }
+              return next
+            })
           }
         } catch (err) {
           console.warn('[ChatInterface] failed to replay events:', err)
@@ -371,6 +394,8 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           role: 'assistant',
           content: finalResponse,
           timestamp: new Date(),
+          // Retriever citations for this turn (inline superscripts + footer).
+          references: extractReferences(finalResult?.context?.events ?? []),
           toolCall: finalResult?.status === 'paused' && (finalResult.data as Record<string, unknown>).pendingAction ? {
             type: 'neo4j',
             status: 'pending',
@@ -536,6 +561,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           onRejectWrite={handleRejectWrite}
           graphEntityNames={props.graphEntityNames}
           onHighlightEntities={props.onHighlightEntities}
+          onOpenReference={props.onOpenReference}
           trailing={() => (
             <LiveProgressBar
               status={currentSnapshot().status}
@@ -555,8 +581,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       <div border="t dark-border-primary" p="4" bg="dark-bg-secondary/80" backdrop-blur="sm">
         <ChatInput
           onSend={handleSendMessage}
-          disabled={isProcessing()}
-          blockedMessage={blockedMessage()}
+          disabled={isProcessing() || !!props.embeddingSources}
+          blockedMessage={
+            props.embeddingSources
+              ? 'Embedding sources… you can ask once indexing finishes.'
+              : blockedMessage()
+          }
           focusToken={props.focusInputToken}
         />
       </div>

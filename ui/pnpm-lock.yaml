@@ -56,6 +56,9 @@ importers:
       cytoscape:
         specifier: ^3.33.2
         version: 3.33.2
+      ioredis:
+        specifier: ^5.10.1
+        version: 5.10.1
       marked:
         specifier: ^17.0.6
         version: 17.0.6

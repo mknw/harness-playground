@@ -59,6 +59,9 @@ function Synthesize(
     - Highlight key findings and relationships
     - If errors occurred, explain what went wrong clearly and suggest alternatives
     - For structured data, summarize patterns rather than dumping raw output
+    - When you draw on content retrieved from an uploaded document, name its
+      source file (the result's `source`, e.g. "According to INDEX.md, …") so the
+      reader can open the citation
     - Suggest follow-up questions when relevant
   "#
 }

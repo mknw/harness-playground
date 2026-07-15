@@ -6,7 +6,7 @@ import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPane
 import type { ContextEvent, UnifiedContext, ToolResultEventData } from '~/lib/harness-patterns'
 import { executeCypherWrite } from '~/lib/neo4j/write-action'
 import { mergeGraphElements } from '~/lib/graph-merge'
-import { listConversations } from '~/lib/harness-client'
+import { listConversations, type OpenReferenceTarget } from '~/lib/harness-client'
 import { newSessionId } from '~/lib/session-id'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { createChainProgress, type ChainProgressController } from '~/components/ark-ui/useChainProgress'
@@ -31,8 +31,48 @@ export default function Home() {
 
   const [graphElements, setGraphElements] = createSignal<GraphElement[]>([])
   const [highlightedIds, setHighlightedIds] = createSignal<string[]>([])
+  // A citation clicked in an assistant message → SupportPanel switches to the
+  // Data Stash tab and opens the inline viewer at that reference.
+  const [pendingReference, setPendingReference] = createSignal<OpenReferenceTarget | null>(null)
   const [contextEvents, setContextEvents] = createSignal<ContextEvent[]>([])
   const [unifiedContext, setUnifiedContext] = createSignal<UnifiedContext | undefined>(undefined)
+
+  // Block the chat composer while uploaded sources are still embedding, so the
+  // user can't query the retriever before its documents are searchable. Tracked
+  // here (always mounted) via a light status poll — works even when the Data
+  // Stash tab (which also polls) is closed; the list cache keeps polls cheap.
+  const [embeddingSources, setEmbeddingSources] = createSignal(false)
+  let embedPollTimer: ReturnType<typeof setTimeout> | undefined
+  let embedPolls = 0
+  const pollEmbedding = async (sid: string) => {
+    if (!sid) return
+    try {
+      const res = await fetch(`/api/stash/upload?sessionId=${encodeURIComponent(sid)}`)
+      const body = res.ok ? ((await res.json()) as { documents?: Array<{ ingestStatus?: string }> }) : {}
+      if (sid !== selectedSessionId()) return // session switched mid-poll
+      const pending = (body.documents ?? []).some((d) => d.ingestStatus === 'pending')
+      setEmbeddingSources(pending)
+      embedPolls += 1
+      // Keep watching while pending (cap ~6 min so a stuck ingest can't block forever).
+      if (pending && embedPolls < 120) embedPollTimer = setTimeout(() => void pollEmbedding(sid), 3000)
+    } catch {
+      setEmbeddingSources(false)
+    }
+  }
+  const watchEmbedding = (sid: string) => {
+    if (embedPollTimer) clearTimeout(embedPollTimer)
+    embedPolls = 0
+    if (sid) void pollEmbedding(sid)
+  }
+  // Poll on session open (catches a session reopened mid-embed) and after uploads.
+  createEffect(() => {
+    const sid = selectedSessionId()
+    setEmbeddingSources(false)
+    watchEmbedding(sid)
+  })
+  onCleanup(() => {
+    if (embedPollTimer) clearTimeout(embedPollTimer)
+  })
   // The conversation's selected agent, reported up from ChatInterface, so the
   // Tools panel's code-mode gate tracks the live selection (default until set).
   const [currentAgentId, setCurrentAgentId] = createSignal<string>('default')
@@ -290,6 +330,8 @@ export default function Home() {
                 onSelectedAgentChange={setCurrentAgentId}
                 graphEntityNames={graphEntityNames()}
                 onHighlightEntities={setHighlightedIds}
+                onOpenReference={setPendingReference}
+                embeddingSources={embeddingSources()}
                 getProgress={getProgress}
                 getRunState={getRunState}
                 updateRunState={updateRunState}
@@ -326,6 +368,8 @@ export default function Home() {
             sessionId={selectedSessionId()}
             agentId={currentAgentId()}
             onStashAction={handleStashAction}
+            pendingReference={pendingReference()}
+            onUploaded={() => watchEmbedding(selectedSessionId())}
           />
         </Splitter.Panel>
       </Splitter.Root>

@@ -161,6 +161,8 @@ export {
   type RetrieverConfig,
   type RetrieverData,
   type RetrievalHit,
+  type RetrievalReference,
+  type RetrieverResult,
   type ApprovalPredicate,
   type WithApprovalData,
   type JudgeConfig,

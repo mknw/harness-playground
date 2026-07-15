@@ -16,6 +16,8 @@ export {
   type RetrieverConfig,
   type RetrieverData,
   type RetrievalHit,
+  type RetrievalReference,
+  type RetrieverResult,
 } from './retriever.server'
 export { parallel } from './parallel.server'
 export { judge, type JudgeConfig, type JudgeData, type EvaluatorFn } from './judge.server'

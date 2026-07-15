@@ -38,15 +38,16 @@ export function createRedisBackend(
     type: 'vector',
     async search({ text }, { k }): Promise<RetrievalHit[]> {
       if (ensureIngested && !ensured) {
-        // Mark before awaiting so racing searches don't double-ensure; a
-        // transient failure won't be retried this session (the upload gate is
-        // the primary path — this is only a net).
+        // Fire the ingest safety net in the BACKGROUND — never block the query.
+        // Ingesting a session's docs is O(chunks) serial gateway writes (minutes
+        // for several docs); awaiting it here made the first retrieval take
+        // ~200s. The query searches whatever's already indexed; results fill in
+        // as ingest completes (the panel shows per-doc "embedding…" → "indexed").
+        // Mark first so racing searches don't re-trigger it.
         ensured = true
-        try {
-          await ensureFn(sessionId)
-        } catch {
-          /* best-effort */
-        }
+        void ensureFn(sessionId).catch(() => {
+          /* best-effort net; the upload-time gate is the primary path */
+        })
       }
       const hits = await searchFn(sessionId, text, { k })
       return hits.map((h) => ({
@@ -55,12 +56,11 @@ export function createRedisBackend(
         content: h.content,
         source: h.source,
         score: h.score,
-        metadata: {
-          docId: h.docId,
-          chunkIndex: h.chunkIndex,
-          startOffset: h.startOffset,
-          endOffset: h.endOffset,
-        },
+        // First-class locator → enables typed RetrievalReference + the viewer.
+        docId: h.docId,
+        chunkIndex: h.chunkIndex,
+        startOffset: h.startOffset,
+        endOffset: h.endOffset,
       }))
     },
   }

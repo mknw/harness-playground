@@ -16,15 +16,16 @@
  * Composition:
  *   router({ retriever | neo4j | web_search })
  *     → routes({
- *         retriever:  chain(compactIntent(), retriever({ backends:[redis] })),
+ *         retriever:  retriever({ backends:[redis], generateQuery: true }),
  *         neo4j:      simpleLoop(neo4j),
  *         web_search: simpleLoop(web),
  *       })
  *     → synthesizer('thread')
  *
- * `chain(compactIntent(), retriever())` rephrases the conversation into a clean
- * search query (one cheap Haiku/Sonnet call) before the vector search — reusing
- * the existing `compactIntent` pattern rather than a bespoke query step.
+ * The retriever searches with the user's **raw message** by default — the user's
+ * own words embed better than a paraphrase. `generateQuery: true` rewrites the
+ * query with a cheap `RetrieveQuery` call ONLY when the turn has history (to
+ * resolve "more on that" / "those sections"); turn-1 messages search verbatim.
  *
  * The Supabase backend (company pgvector via the Supabase MCP) is a deferred
  * stub; add `createSupabaseBackend()` to `backends` once IT provides access.
@@ -34,9 +35,7 @@
 import {
   router,
   routes,
-  chain,
   simpleLoop,
-  compactIntent,
   retriever,
   synthesizer,
   withReferences,
@@ -61,17 +60,17 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
   const tools = await Tools();
   const schema = await getSchema();
 
-  // ── retriever route: rephrase → vector search over this session's uploads ──
+  // ── retriever route: vector search over this session's uploaded docs ──
+  // Raw user message by default; rewritten to a search query only when the turn
+  // has history (generateQuery).
   const redisBackend = createRedisBackend(sessionId);
-  const retrieverPattern = chain<SessionData>(
-    compactIntent<SessionData>({ patternId: "retriever-intent", liveEvents: true }),
-    retriever<SessionData>({
-      patternId: "retriever",
-      backends: [redisBackend],
-      k: 5,
-      liveEvents: true,
-    }),
-  );
+  const retrieverPattern = retriever<SessionData>({
+    patternId: "retriever",
+    backends: [redisBackend],
+    k: 5,
+    generateQuery: true,
+    liveEvents: true,
+  });
 
   // ── neo4j + web routes: identical to the default agent ──
   const neo4jController = createNeo4jController(tools.neo4j ?? []);
