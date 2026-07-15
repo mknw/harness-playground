@@ -97,6 +97,25 @@ services:
       timeout: 5s
       retries: 10
 
+  doc-convert:
+    # Document → markdown extraction sidecar for the Data Stash pipeline: turns
+    # binary uploads (docx/odt/pptx/pdf) into markdown so they can be chunked,
+    # embedded and searched. Serves `POST /extract` (multipart `files` +
+    # `config`) and `GET /health` on :8000. Used only when STASH_CONVERT_DOCS=1
+    # (the app reads DOC_CONVERT_URL, default http://localhost:8000).
+    #
+    # Stable kreuzberg 4.x (Rust core, native parsers — no LibreOffice/pandoc).
+    # Alternative: the xberg successor line, e.g.
+    #   image: ghcr.io/xberg-io/xberg:1.0.0-rc.29-core
+    # exposes the same /extract contract (currently release-candidate only).
+    image: ghcr.io/kreuzberg-dev/kreuzberg-full:latest
+    container_name: doc-convert-seederis
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+
 networks:
   app-network:
     driver: bridge
