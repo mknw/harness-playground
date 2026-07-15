@@ -71,6 +71,14 @@ export interface StashDocumentMeta {
    * offline). Absent → never ingested (no redis-retriever in the harness).
    */
   ingestStatus?: IngestStatus
+  /**
+   * True when a text derivation exists (see {@link StashDocument.derivedText}) —
+   * a binary upload (docx/pdf/pptx/odt) converted to markdown for ingest.
+   * Meta-only convenience flag, computed from `derivedText` presence in
+   * {@link stripContent} (never stored separately). The panel uses it to offer
+   * the file viewer on converted binaries whose `encoding` is still `'base64'`.
+   */
+  converted?: boolean
 }
 
 export type IngestStatus = 'pending' | 'indexed' | 'failed'
@@ -83,6 +91,14 @@ export interface StashDocument extends StashDocumentMeta {
    * storing — this layer treats `content` as opaque UTF-8 text.
    */
   content: string
+  /**
+   * Markdown derived from a binary `content` (docx/pdf/pptx/odt) by the ingest
+   * converter (xberg sidecar). Present only on converted binaries; `content`
+   * still holds the original base64 bytes (so `?download` and the `/work` sync
+   * serve the real file). This is the text that gets chunked/embedded and shown
+   * in the file viewer — chunk char-offsets index into THIS, not `content`.
+   */
+  derivedText?: string
 }
 
 /** Input for {@link storeDocument}. `id` and `uploadedAt` are minted here. */
@@ -432,7 +448,13 @@ export async function listDocuments(
 export async function setDocumentFlags(
   sessionId: string,
   docId: string,
-  patch: { hidden?: boolean; archived?: boolean; ingestStatus?: IngestStatus },
+  patch: {
+    hidden?: boolean
+    archived?: boolean
+    ingestStatus?: IngestStatus
+    /** Derived markdown for a converted binary (see {@link StashDocument.derivedText}). */
+    derivedText?: string
+  },
   callTool: CallTool = stashCallTool(),
 ): Promise<StashDocument | null> {
   const doc = await getDocument(sessionId, docId, callTool)
@@ -441,6 +463,7 @@ export async function setDocumentFlags(
   if (patch.hidden !== undefined) doc.hidden = patch.hidden
   if (patch.archived !== undefined) doc.archived = patch.archived
   if (patch.ingestStatus !== undefined) doc.ingestStatus = patch.ingestStatus
+  if (patch.derivedText !== undefined) doc.derivedText = patch.derivedText
 
   // Rewriting via json_set at `$` would clear any existing expiry, so we
   // re-apply a TTL. There is no `ttl` tool on the Redis MCP surface to read the
@@ -512,8 +535,11 @@ export function toPriorResult(
 // Internal helpers
 // ============================================================================
 
-function stripContent(doc: StashDocument): StashDocumentMeta {
-  const { content: _content, ...meta } = doc
+export function stripContent(doc: StashDocument): StashDocumentMeta {
+  const { content: _content, derivedText, ...meta } = doc
   void _content
-  return meta
+  // Surface a boolean instead of the (potentially large) derived markdown, so
+  // the meta list stays light but the panel still knows a converted binary is
+  // viewable/ingested. Kept out of the stored JSON — computed on every read.
+  return { ...meta, ...(derivedText != null ? { converted: true } : {}) }
 }

@@ -456,9 +456,10 @@ const DocChip = (props: {
 
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
-      {/* "Eye" — open the inline file viewer. Text docs only (binary has no
-          text view). Stops propagation so it doesn't also open the chip menu. */}
-      <Show when={d().encoding !== 'base64'}>
+      {/* "Eye" — open the inline file viewer. Text docs, plus converted
+          binaries (docx/pdf/… whose derived markdown is viewable); a raw binary
+          has no text view. Stops propagation so it doesn't also open the menu. */}
+      <Show when={d().encoding !== 'base64' || d().converted}>
         <button
           onClick={(e) => {
             e.stopPropagation()
