@@ -40,10 +40,15 @@ import {
 import { withSandbox } from "../../sandbox/with-sandbox.server";
 import type { SessionData } from "../session.server";
 import type { AgentConfig } from "../registry.server";
+import type { FewShot } from "../../../../baml_client/types";
 
 const WORKSPACE_NOTE = `
 Files under /work/in are restored inputs; write deliverables the user should keep
 to /work/out (saved to the Data Stash and restored next time). /work is scratch.
+Python notes: for multi-line Python, WRITE a .py file (sandbox_write) and run it,
+or use a quoted heredoc (python3 - <<'PY' ... PY) — never nest escaped quotes in
+python3 -c. Python runs with PYTHONSAFEPATH=1 (cwd is not on sys.path); to import
+your own helper modules from /work, run with PYTHONPATH=/work.
 `.trim();
 
 const BASIC_GUIDANCE = `
@@ -75,10 +80,40 @@ creating PDFs. Edit files from /work/in and save results to /work/out.
 ${WORKSPACE_NOTE}
 `.trim();
 
+/**
+ * Few-shot examples for the actor's `tool_args` formatting (#85 — mirrors
+ * `sandbox-session`'s shots, which this agent originally lacked). Observed
+ * live (.harness-logs/regression.json): Sonnet 5 emitted multiline
+ * `python3 -c \"` commands whose over-escaped quotes bash mangles into
+ * "unterminated string literal". The heredoc shot anchors the quote-free way
+ * to run multi-line Python inline; the write shot anchors write-then-run.
+ */
+const FLAVOURED_SANDBOX_FEW_SHOTS: FewShot[] = [
+  {
+    user: "Write a hello-world Python script to /work/hi.py and run it.",
+    reasoning:
+      "Write the file first. Keys and string values are double-quoted; the newline inside the script is the escape sequence \\n, not a raw line break.",
+    tool: "sandbox_write",
+    args: JSON.stringify({ path: "/work/hi.py", content: 'print("hello")\n' }),
+  },
+  {
+    user: "How many rows does /work/in/data.csv have?",
+    reasoning:
+      "Multi-line Python inline: use a quoted heredoc so no quotes need escaping inside the command. Never wrap a multi-line script in python3 -c \\\"...\\\".",
+    tool: "sandbox_bash",
+    args: JSON.stringify({
+      command: "python3 - <<'PY'\nimport csv\nwith open('/work/in/data.csv') as f:\n    print(sum(1 for _ in f) - 1)\nPY",
+    }),
+  },
+];
+
 /** A sandbox tool-loop; the actor sees the in-VM `sandbox_*` tools via the ALS
  *  scope `withSandbox` sets up, so `availableTools` is left empty. */
 function sandboxLoop(patternId: string, guidance: string) {
-  const actor = createActorControllerAdapter({ contextPrefix: guidance });
+  const actor = createActorControllerAdapter({
+    contextPrefix: guidance,
+    fewShots: FLAVOURED_SANDBOX_FEW_SHOTS,
+  });
   const critic = createCriticAdapter();
   return actorCritic<SessionData>(actor, critic, [], {
     patternId,

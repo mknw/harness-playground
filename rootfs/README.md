@@ -14,6 +14,15 @@ project root" the sandbox needs — there is no separate pool-manager daemon.
 | `/work` | Agent working directory | The filesystem MCP is scoped to this; shell `cwd` defaults here. |
 | `/opt/mcp/init.sh` | Entry/launcher | Idle-host entrypoint + `serve <name>` launch path for `docker exec`. |
 
+### PYTHONSAFEPATH
+
+The image sets `PYTHONSAFEPATH=1`: Python does **not** prepend the script dir /
+cwd to `sys.path`. Agents name their own scripts, and a `/work/inspect.py` (or
+`types.py`, `email.py`, …) would otherwise shadow the stdlib module of the same
+name and break unrelated imports (`import pandas` fails via numpy's
+`import inspect`). Cost: importing sibling modules from `/work` needs an
+explicit `PYTHONPATH=/work` — the agents' guidance says so.
+
 ## Architecture: MCP-in-VM (Docker model)
 
 The container is a **long-lived idle host**. It does *not* run the MCP servers
