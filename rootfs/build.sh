@@ -15,5 +15,8 @@ docker build -f Dockerfile.image-processing -t kg-sandbox:image-processing .
 echo "==> kg-sandbox:data"
 docker build -f Dockerfile.data -t kg-sandbox:data .
 
+echo "==> kg-sandbox:office"
+docker build -f Dockerfile.office -t kg-sandbox:office .
+
 echo "==> built:"
 docker images --format '{{.Repository}}:{{.Tag}}\t{{.Size}}' | grep '^kg-sandbox:'

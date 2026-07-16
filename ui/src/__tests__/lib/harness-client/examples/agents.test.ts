@@ -277,8 +277,8 @@ describe('Agent Harnesses', () => {
       const names = patterns.map(p => p.name)
       expect(patterns.length).toBe(3)
       expect(names).toContain('router')
-      // The routes name embeds the route keys (basic|image_processing|data).
-      expect(names.some(n => n.includes('routes') && n.includes('image_processing'))).toBe(true)
+      // The routes name embeds the route keys (basic|image_processing|data|office).
+      expect(names.some(n => n.includes('routes') && n.includes('image_processing') && n.includes('office'))).toBe(true)
       expect(names[2]).toBe('synthesizer')
     })
 

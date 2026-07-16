@@ -16,10 +16,10 @@ import type { ToolCallResult, MCPToolDescription } from '../harness-patterns/typ
 // Identity & config
 // ============================================================================
 
-/** Rootfs flavor. `base` is the default; `image-processing` / `data` are the
- *  first flavour-catalog images (#78, docs/sandbox-flavours.md). The open
- *  `(string & {})` keeps arbitrary future flavours valid. */
-export type RootfsId = 'base' | 'image-processing' | 'data' | (string & {})
+/** Rootfs flavor. `base` is the default; `image-processing` / `data` / `office`
+ *  are the first flavour-catalog images (#78, docs/sandbox-flavours.md). The
+ *  open `(string & {})` keeps arbitrary future flavours valid. */
+export type RootfsId = 'base' | 'image-processing' | 'data' | 'office' | (string & {})
 
 /** Per-VM runtime knobs. Defaults come from HarnessSettings at call time. */
 export interface RuntimeConfig {

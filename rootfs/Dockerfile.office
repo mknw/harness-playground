@@ -1,0 +1,14 @@
+# Sandbox rootfs — flavor: office
+#
+# base + the MS-Office editing stack (via uv): python-docx (Word), openpyxl +
+# xlsxwriter (Excel read/edit + write), PyMuPDF (PDF read/edit/create). Focused
+# on EDITING office documents as deliverables — distinct from the ingest-side
+# many→markdown doc-convert sidecar (see docs/sandbox-flavours.md → overlap
+# note). True format *conversion* (docx↔odt, →pdf via an office engine) stays
+# deferred to a LibreOffice service (#116). Build via rootfs/build.sh.
+
+FROM kg-sandbox:base AS office
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
+RUN uv pip install --system --break-system-packages --no-cache \
+        python-docx openpyxl xlsxwriter pymupdf

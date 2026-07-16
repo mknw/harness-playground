@@ -47,7 +47,8 @@ Beyond `base`, two purpose-split flavours extend it (design:
 | Tag | Adds | Dockerfile |
 |-----|------|------------|
 | `kg-sandbox:image-processing` | numpy, Pillow, OpenCV via apt (`python3-opencv`; the pip wheel SIGILLs on arm64) + imagemagick | `Dockerfile.image-processing` |
-| `kg-sandbox:data` | a `uv` venv (pandas, numpy, polars, pyarrow, matplotlib, seaborn + openpyxl, python-docx, python-pptx, reportlab, pypdf) | `Dockerfile.data` |
+| `kg-sandbox:data` | via `uv`: pandas, numpy, polars, pyarrow, matplotlib, seaborn + excel backends (openpyxl, fastexcel, xlsxwriter) + python-docx, python-pptx, reportlab, pypdf | `Dockerfile.data` |
+| `kg-sandbox:office` | via `uv`: python-docx (Word), openpyxl + xlsxwriter (Excel), PyMuPDF (PDF) — document *editing* | `Dockerfile.office` |
 
 Build all three (base first — the flavours are `FROM kg-sandbox:base`):
 

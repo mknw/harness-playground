@@ -12,7 +12,9 @@
  *   - image_processing → PERSISTENT `image-processing` box (Pillow, OpenCV,
  *                        imagemagick).
  *   - data             → PERSISTENT `data` box (pandas/numpy/polars/pyarrow,
- *                        matplotlib/seaborn, openpyxl/python-docx/… office+pdf).
+ *                        matplotlib/seaborn, excel backends, reportlab/pypdf).
+ *   - office           → PERSISTENT `office` box (python-docx, openpyxl +
+ *                        xlsxwriter, PyMuPDF) for editing docx/xlsx/pdf files.
  *
  * The two persistent routes use a **flavour-scoped attachment id**
  * (`${sessionId}:${rootfs}`) so they get separate containers, while `sessionId`
@@ -58,9 +60,18 @@ ${WORKSPACE_NOTE}
 
 const DATA_GUIDANCE = `
 You have a PERSISTENT data sandbox. Available via sandbox_bash: Python 3 with
-pandas, numpy, polars, pyarrow, matplotlib and seaborn (plots), plus openpyxl /
-python-docx / python-pptx / reportlab / pypdf for office & PDF files. Save
-plots/spreadsheets/reports to /work/out.
+pandas, numpy, polars, pyarrow, matplotlib and seaborn (plots). Excel is fully
+supported: read xlsx with pandas (openpyxl) or polars (fastexcel/calamine),
+write with xlsxwriter/openpyxl. Also python-docx / python-pptx / reportlab /
+pypdf. Save plots/spreadsheets/reports to /work/out.
+${WORKSPACE_NOTE}
+`.trim();
+
+const OFFICE_GUIDANCE = `
+You have a PERSISTENT office sandbox for EDITING documents. Available via
+sandbox_bash: Python 3 with python-docx (Word), openpyxl + xlsxwriter (Excel),
+and PyMuPDF (\`import pymupdf\` or \`import fitz\`) for reading, editing and
+creating PDFs. Edit files from /work/in and save results to /work/out.
 ${WORKSPACE_NOTE}
 `.trim();
 
@@ -103,12 +114,22 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
     syncWorkspace: true,
   })(sandboxLoop("flavour-data-loop", DATA_GUIDANCE));
 
+  const office = withSandbox({
+    id: `${sessionId}:office`,
+    sessionId,
+    rootfs: "office",
+    egress: "mcp-only",
+    syncWorkspace: true,
+  })(sandboxLoop("flavour-office-loop", OFFICE_GUIDANCE));
+
   const routerPattern = router<SessionData>(
     {
       basic: "Quick one-off shell / general Linux work in a throwaway box",
       image_processing:
         "Image manipulation — Pillow, OpenCV (cv2), imagemagick (resize, convert, analyze images)",
-      data: "Data analysis & office docs — pandas/numpy/polars, matplotlib/seaborn plots, xlsx/docx/pptx/pdf",
+      data: "Data ANALYSIS — pandas/numpy/polars over datasets (incl. xlsx/csv), matplotlib/seaborn plots, reports",
+      office:
+        "Document EDITING — modify/create Word (docx), Excel (xlsx) or PDF files themselves (not analyze their data)",
     },
     { liveEvents: true },
   );
@@ -118,6 +139,7 @@ async function createPatterns(sessionId: string): Promise<ConfiguredPattern<Sess
       basic,
       image_processing: image,
       data,
+      office,
     },
     { liveEvents: true },
   );

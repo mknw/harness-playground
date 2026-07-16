@@ -24,7 +24,12 @@ Two purpose-split flavours, each `FROM kg-sandbox:base`, built by
 | Flavour | Adds | For |
 |---|---|---|
 | **`image-processing`** | numpy, Pillow, OpenCV (Debian `python3-opencv`) + **imagemagick** | image manipulation |
-| **`data`** | pandas, numpy, polars, pyarrow, matplotlib, seaborn + openpyxl, python-docx, python-pptx, reportlab, pypdf (via **`uv`**) | data analysis, plots, office/pdf generation |
+| **`data`** | pandas, numpy, polars, pyarrow, matplotlib, seaborn + excel backends (openpyxl, fastexcel, xlsxwriter) + python-docx, python-pptx, reportlab, pypdf (via **`uv`**) | data analysis, plots, office/pdf generation |
+| **`office`** | python-docx (Word), openpyxl + xlsxwriter (Excel), PyMuPDF (PDF read/edit/create) (via **`uv`**) | editing MS-Office documents & PDFs as deliverables |
+
+Excel backends in `data`: pandas reads/writes xlsx via **openpyxl**; polars'
+`read_excel` needs **fastexcel** (the calamine engine); **xlsxwriter** is the
+write engine for `pd.ExcelWriter` / `pl.DataFrame.write_excel`.
 
 - **`base` stays the default rootfs;** flavours are opt-in via `withSandbox({ rootfs })`.
 - Both keep `sandbox_bash` and `mcp-only` egress (no network) for now.
@@ -127,5 +132,7 @@ works today (the demonstrator does exactly this).
 **Avoid overlap:** ingest-side many→markdown *conversion* (pdf/docx/odt → md, for
 search) is handled by the `doc-convert` sidecar (see [`DATA_STASH.md`](DATA_STASH.md)
 → Document conversion). These flavours are about *executing code* and *producing*
-image/office deliverables — a different axis. An `office` flavour (LibreOffice/uno)
-for true format conversion is deferred; prefer a service over baking it.
+image/office deliverables — a different axis. The `office` flavour EDITS
+docx/xlsx/pdf in-place (python-docx/openpyxl/PyMuPDF); true format *conversion*
+(docx↔odt, →pdf via an office engine) still isn't covered — that's a deferred
+LibreOffice service, not a flavour (prefer a service over baking it).
