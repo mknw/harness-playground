@@ -199,6 +199,7 @@ import { multiSourceResearchAgent } from "./examples/multi-source-research.serve
 import { kgBuilderAgent } from "./examples/kg-builder.server";
 import { conversationalMemoryAgent } from "./examples/conversational-memory.server";
 import { sandboxSessionAgent } from "./examples/sandbox-session.server";
+import { flavouredSandboxAgent } from "./examples/flavoured-sandbox.server";
 import { retrieverAgent } from "./examples/retriever-agent.server";
 
 // Register all agents
@@ -208,4 +209,5 @@ registerAgent(multiSourceResearchAgent);
 registerAgent(kgBuilderAgent);
 registerAgent(conversationalMemoryAgent);
 registerAgent(sandboxSessionAgent);
+registerAgent(flavouredSandboxAgent);
 registerAgent(retrieverAgent);

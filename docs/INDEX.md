@@ -59,6 +59,7 @@ Source-level index: see [ui/README.md](../ui/README.md#documentation-index).
 | [DOCKER_COMPOSE.md](DOCKER_COMPOSE.md) | Neo4j, MCP Gateway, Redis service configuration |
 | [MCP_GATEWAY.md](MCP_GATEWAY.md) | MCP Gateway reference, CLI, troubleshooting |
 | [sandbox-plan.md](sandbox-plan.md) | Sandbox compute plan — `withSandbox` wrapper, attachment model, MCP-in-VM architecture, durable workspaces (`syncWorkspace`, #89), backend interface (Docker + Firecracker), substrate options, failure modes |
+| [sandbox-flavours.md](sandbox-flavours.md) | Sandbox rootfs flavours (#78) — the `image-processing` + `data` images, the router-over-flavoured-sandboxes recipe, ephemeral vs persistent, and deferred hardening (#116) |
 | [sandbox/README.md](sandbox/README.md) | Sandbox debugging — identify/inspect/reap containers, `/work` durable-workspace layout, `.harness-logs` jq recipes |
 
 **Key config files:**

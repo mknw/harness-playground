@@ -1,0 +1,18 @@
+# Sandbox rootfs — flavor: data
+#
+# base + the data-analysis + office/pdf stack (via uv). Deliberately NO opencv /
+# scikit-image (the heavy CV libs). Pillow still arrives transitively via
+# matplotlib (seaborn's plotting engine) — so the split is "no OpenCV", not
+# "no Pillow". See docs/sandbox-flavours.md. Guardrails/hardening deferred (#116).
+
+FROM kg-sandbox:base AS data
+
+# uv (static binary) — installs into the system python so `python3` sees it in
+# any shell.
+COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
+# Excel backends: openpyxl = pandas' xlsx read/write engine; fastexcel = polars'
+# read_excel engine (calamine); xlsxwriter = the write engine both use for
+# pd.ExcelWriter / pl.DataFrame.write_excel.
+RUN uv pip install --system --break-system-packages --no-cache \
+        pandas numpy polars pyarrow matplotlib seaborn \
+        openpyxl fastexcel xlsxwriter python-docx python-pptx reportlab pypdf

@@ -1,0 +1,23 @@
+# Sandbox rootfs — flavor: image-processing
+#
+# base + numpy / Pillow / OpenCV + imagemagick, for image manipulation. See
+# docs/sandbox-flavours.md. Guardrails/hardening deferred (#116). Build via
+# rootfs/build.sh (kg-sandbox:base must exist first).
+#
+# NOTE: the Python image stack is installed from Debian (apt), NOT pip/uv wheels.
+# The `opencv-python` wheel SIGILLs on import on arm64/colima (illegal
+# instruction — the same class of issue as the RediSearch arm64 crash this
+# project already hit). Debian's `python3-opencv` is compiled for a baseline
+# arm64 ISA and imports cleanly; `python3-numpy` / `python3-pil` come with it as
+# a version-matched, ABI-consistent set (so cv2 built against numpy 1.x isn't
+# paired with a mismatched numpy 2.x). `data` keeps uv — its wheels don't SIGILL.
+
+FROM kg-sandbox:base AS image-processing
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3-opencv \
+        python3-pil \
+        python3-numpy \
+        imagemagick \
+    && rm -rf /var/lib/apt/lists/*

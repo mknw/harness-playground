@@ -14,6 +14,15 @@ project root" the sandbox needs — there is no separate pool-manager daemon.
 | `/work` | Agent working directory | The filesystem MCP is scoped to this; shell `cwd` defaults here. |
 | `/opt/mcp/init.sh` | Entry/launcher | Idle-host entrypoint + `serve <name>` launch path for `docker exec`. |
 
+### PYTHONSAFEPATH
+
+The image sets `PYTHONSAFEPATH=1`: Python does **not** prepend the script dir /
+cwd to `sys.path`. Agents name their own scripts, and a `/work/inspect.py` (or
+`types.py`, `email.py`, …) would otherwise shadow the stdlib module of the same
+name and break unrelated imports (`import pandas` fails via numpy's
+`import inspect`). Cost: importing sibling modules from `/work` needs an
+explicit `PYTHONPATH=/work` — the agents' guidance says so.
+
 ## Architecture: MCP-in-VM (Docker model)
 
 The container is a **long-lived idle host**. It does *not* run the MCP servers
@@ -38,6 +47,27 @@ docker build -t kg-sandbox:base rootfs/
 The build is a two-stage Dockerfile:
 1. lift the `rust-mcp-filesystem` binary from its pinned image, then
 2. assemble `node:22-bookworm-slim` + python3 + the two MCP servers.
+
+### Flavours
+
+Beyond `base`, two purpose-split flavours extend it (design:
+[`docs/sandbox-flavours.md`](../docs/sandbox-flavours.md)):
+
+| Tag | Adds | Dockerfile |
+|-----|------|------------|
+| `kg-sandbox:image-processing` | numpy, Pillow, OpenCV via apt (`python3-opencv`; the pip wheel SIGILLs on arm64) + imagemagick | `Dockerfile.image-processing` |
+| `kg-sandbox:data` | via `uv`: pandas, numpy, polars, pyarrow, matplotlib, seaborn + excel backends (openpyxl, fastexcel, xlsxwriter) + python-docx, python-pptx, reportlab, pypdf | `Dockerfile.data` |
+| `kg-sandbox:office` | via `uv`: python-docx (Word), openpyxl + xlsxwriter (Excel), PyMuPDF (PDF) — document *editing* | `Dockerfile.office` |
+
+Build all three (base first — the flavours are `FROM kg-sandbox:base`):
+
+```sh
+bash rootfs/build.sh
+```
+
+Flavours are opt-in via `withSandbox({ rootfs: 'data' | 'image-processing' })`;
+`base` stays the default. Guardrails/hardening for these flavours are deferred —
+see [#116](https://github.com/mknw/harness-playground/issues/116).
 
 ### Inside the nix shell
 
@@ -115,6 +145,8 @@ The harness applies a `sandbox_` prefix when registering these (see plan
 ## Not in v0
 
 - Publishing to a registry (built locally for dev; image-publish is an ops step).
-- Heavier flavors (Polars / PyPDF / spaCy / sentence-transformers) — the v1
-  rootfs catalog ([#78](https://github.com/mknw/harness-playground/issues/78)).
+- Heavier flavors beyond `image-processing` / `data` (spaCy / sentence-transformers,
+  an `office`/LibreOffice flavor) — see [`docs/sandbox-flavours.md`](../docs/sandbox-flavours.md)
+  + [#78](https://github.com/mknw/harness-playground/issues/78) /
+  [#116](https://github.com/mknw/harness-playground/issues/116).
 - A Rust shell-exec server (swaps in for `mcp-shell` only if cold-start is felt).

@@ -56,6 +56,13 @@ COPY init.sh /opt/mcp/init.sh
 RUN chmod +x /opt/mcp/init.sh
 
 ENV WORK_DIR=/work
+# Don't prepend the script dir / cwd to sys.path (Python 3.11+). Agents write
+# scripts into /work (the cwd) with names they choose — a script named after a
+# stdlib module (inspect.py, types.py, email.py, …) would otherwise shadow that
+# module and break unrelated imports (`import pandas` died on an agent-written
+# /work/inspect.py via numpy's `import inspect`). Agents importing their own
+# sibling modules must set PYTHONPATH=/work explicitly (covered in guidance).
+ENV PYTHONSAFEPATH=1
 WORKDIR /work
 
 # Idle host: prepare /work, then block forever. MCP servers are spawned
