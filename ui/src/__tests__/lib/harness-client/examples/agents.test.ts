@@ -263,6 +263,33 @@ describe('Agent Harnesses', () => {
     })
   })
 
+  describe('flavouredSandboxAgent', () => {
+    it('should have valid config', async () => {
+      const { flavouredSandboxAgent } = await import('../../../../lib/harness-client/examples/flavoured-sandbox.server')
+      validateAgentConfig(flavouredSandboxAgent)
+      expect(flavouredSandboxAgent.id).toBe('flavoured-sandbox')
+    })
+
+    it('should create patterns: router + routes(flavoured sandboxes) + synthesizer', async () => {
+      const { flavouredSandboxAgent } = await import('../../../../lib/harness-client/examples/flavoured-sandbox.server')
+      const patterns = await validatePatterns(flavouredSandboxAgent)
+
+      const names = patterns.map(p => p.name)
+      expect(patterns.length).toBe(3)
+      expect(names).toContain('router')
+      // The routes name embeds the route keys (basic|image_processing|data).
+      expect(names.some(n => n.includes('routes') && n.includes('image_processing'))).toBe(true)
+      expect(names[2]).toBe('synthesizer')
+    })
+
+    it('exposes the durable-workspace capability (persistent flavours use syncWorkspace)', async () => {
+      const { flavouredSandboxAgent } = await import('../../../../lib/harness-client/examples/flavoured-sandbox.server')
+      const { harnessUsesSyncWorkspace } = await import('../../../../lib/harness-patterns')
+      const patterns = await flavouredSandboxAgent.createPatterns('test-session')
+      expect(harnessUsesSyncWorkspace(patterns as Parameters<typeof harnessUsesSyncWorkspace>[0])).toBe(true)
+    })
+  })
+
   describe('conversationalMemoryAgent', () => {
     it('should have valid config', async () => {
       const { conversationalMemoryAgent } = await import('../../../../lib/harness-client/examples/conversational-memory.server')

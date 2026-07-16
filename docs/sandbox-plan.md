@@ -6,7 +6,7 @@ Reference design for `withSandbox` — a harness wrapper that attaches a statefu
 
 This document is the infrastructure design — wrapper API, attachment model, MCP-in-VM architecture, backend interface, substrate options, lifecycle, failure modes. It does **not** cover:
 - Why we want this (see #78)
-- Rootfs flavor catalog beyond the v0 minimum (see #78 → "Rootfs flavors")
+- Rootfs flavor catalog beyond the v0 minimum (see #78 → "Rootfs flavors"; the first `image-processing` + `data` flavours are specced in [`sandbox-flavours.md`](sandbox-flavours.md))
 - `backgroundSession` (a v2 primitive, orthogonal to `withSandbox`; outlined under "Deferred / v1+")
 
 > **Design-conversation note.** An earlier draft of this doc was scaffolded too early, before the load-bearing architectural choices were probed. The current shape was reached by sampling the option space first and converging with the user before writing. Keep that ordering. See CLAUDE.md → "Design Decisions" → "Probe before scaffolding."

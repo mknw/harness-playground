@@ -1,0 +1,142 @@
+/**
+ * Flavoured Sandbox Agent (router over sandbox flavours)
+ *
+ * Demonstrates the composable recipe from docs/sandbox-flavours.md: a `router`
+ * that dispatches each turn to a differently-*flavoured* `withSandbox` route.
+ * Flavour selection lives entirely in the harness — the routed controller is
+ * flavour-agnostic.
+ *
+ * Routes:
+ *   - basic            → EPHEMERAL `base` box (anonymous pool: a reset,
+ *                        fresh-state VM each turn). Quick shell / general work.
+ *   - image_processing → PERSISTENT `image-processing` box (Pillow, OpenCV,
+ *                        imagemagick).
+ *   - data             → PERSISTENT `data` box (pandas/numpy/polars/pyarrow,
+ *                        matplotlib/seaborn, openpyxl/python-docx/… office+pdf).
+ *
+ * The two persistent routes use a **flavour-scoped attachment id**
+ * (`${sessionId}:${rootfs}`) so they get separate containers, while `sessionId`
+ * (the Data Stash key) is shared — so /work hydrate/promote is common across
+ * flavours, only in-VM scratch differs. This shows multiple persistent flavours
+ * in one session working today, without the deferred flavour-in-identity change.
+ *
+ * NOTE: the interactive Shell terminal attaches to the base `sessionId`
+ * container (PtyManager keys on sessionId, rootfs 'base'), NOT these flavoured
+ * ones — flavour-aware Shell is deferred (#116). See docs/sandbox-flavours.md.
+ */
+"use server";
+
+import {
+  router,
+  routes,
+  synthesizer,
+  actorCritic,
+  createActorControllerAdapter,
+  createCriticAdapter,
+  type ConfiguredPattern,
+} from "../../harness-patterns";
+import { withSandbox } from "../../sandbox/with-sandbox.server";
+import type { SessionData } from "../session.server";
+import type { AgentConfig } from "../registry.server";
+
+const WORKSPACE_NOTE = `
+Files under /work/in are restored inputs; write deliverables the user should keep
+to /work/out (saved to the Data Stash and restored next time). /work is scratch.
+`.trim();
+
+const BASIC_GUIDANCE = `
+You have an EPHEMERAL Linux sandbox — a fresh box each turn, no state persists.
+Use sandbox_bash / sandbox_write / sandbox_read for quick shell work and small
+scripts (Python 3 is available). Don't rely on files from previous turns.
+`.trim();
+
+const IMAGE_GUIDANCE = `
+You have a PERSISTENT image-processing sandbox. Available via sandbox_bash:
+Python 3 with numpy, Pillow (PIL) and OpenCV (cv2), plus imagemagick (\`convert\`).
+${WORKSPACE_NOTE}
+`.trim();
+
+const DATA_GUIDANCE = `
+You have a PERSISTENT data sandbox. Available via sandbox_bash: Python 3 with
+pandas, numpy, polars, pyarrow, matplotlib and seaborn (plots), plus openpyxl /
+python-docx / python-pptx / reportlab / pypdf for office & PDF files. Save
+plots/spreadsheets/reports to /work/out.
+${WORKSPACE_NOTE}
+`.trim();
+
+/** A sandbox tool-loop; the actor sees the in-VM `sandbox_*` tools via the ALS
+ *  scope `withSandbox` sets up, so `availableTools` is left empty. */
+function sandboxLoop(patternId: string, guidance: string) {
+  const actor = createActorControllerAdapter({ contextPrefix: guidance });
+  const critic = createCriticAdapter();
+  return actorCritic<SessionData>(actor, critic, [], {
+    patternId,
+    availableTools: [],
+    liveEvents: true,
+    maxRetries: 6,
+  });
+}
+
+async function createPatterns(sessionId: string): Promise<ConfiguredPattern<SessionData>[]> {
+  // Ephemeral: no id (anonymous pool) → a reset (fresh-state) VM each turn.
+  const basic = withSandbox({
+    rootfs: "base",
+    egress: "mcp-only",
+    sessionId,
+  })(sandboxLoop("flavour-basic-loop", BASIC_GUIDANCE));
+
+  // Persistent + flavour-scoped id → its own container, distinct from `data`.
+  // sessionId stays the conversation id, so /work is shared across flavours.
+  const image = withSandbox({
+    id: `${sessionId}:image-processing`,
+    sessionId,
+    rootfs: "image-processing",
+    egress: "mcp-only",
+    syncWorkspace: true,
+  })(sandboxLoop("flavour-image-loop", IMAGE_GUIDANCE));
+
+  const data = withSandbox({
+    id: `${sessionId}:data`,
+    sessionId,
+    rootfs: "data",
+    egress: "mcp-only",
+    syncWorkspace: true,
+  })(sandboxLoop("flavour-data-loop", DATA_GUIDANCE));
+
+  const routerPattern = router<SessionData>(
+    {
+      basic: "Quick one-off shell / general Linux work in a throwaway box",
+      image_processing:
+        "Image manipulation — Pillow, OpenCV (cv2), imagemagick (resize, convert, analyze images)",
+      data: "Data analysis & office docs — pandas/numpy/polars, matplotlib/seaborn plots, xlsx/docx/pptx/pdf",
+    },
+    { liveEvents: true },
+  );
+
+  const routesPattern = routes<SessionData>(
+    {
+      basic,
+      image_processing: image,
+      data,
+    },
+    { liveEvents: true },
+  );
+
+  const synth = synthesizer<SessionData>({
+    mode: "thread",
+    patternId: "flavoured-sandbox-synth",
+    liveEvents: true,
+  });
+
+  return [routerPattern, routesPattern, synth];
+}
+
+export const flavouredSandboxAgent: AgentConfig = {
+  id: "flavoured-sandbox",
+  name: "Sandbox · Flavoured (router)",
+  description:
+    "Routes each turn to a purpose-built sandbox flavour — base (ephemeral), image-processing, or data.",
+  icon: "🧪",
+  servers: [],
+  createPatterns,
+};

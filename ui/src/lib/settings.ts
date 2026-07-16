@@ -51,7 +51,7 @@ export const DEFAULT_SETTINGS: HarnessSettings = {
   sandbox: {
     globalCap: 16,
     perSessionCap: 4,
-    warmPool: { base: 1 },
+    warmPool: { base: 1, 'image-processing': 1, data: 1 },
     // Hot-cache window only: a parked VM is reused instantly within this window.
     // Durable workspace state lives in the document store (hydrated into /work on
     // first boot, promoted from /work/out on exit), so this need not be long — 1h.
