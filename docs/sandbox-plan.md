@@ -400,10 +400,11 @@ Devs working specifically on `FirecrackerBackend` bugs opt into Lima / UTM / Orb
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| `sandbox.globalCap` | 16 | Max concurrent sandbox VMs across all sessions |
-| `sandbox.perSessionCap` | 4 | Max concurrent sandbox VMs per session |
+| `sandbox.globalCap` | 16 | Max concurrent **in-flight** sandbox VMs across all sessions |
+| `sandbox.perSessionCap` | 4 | Max concurrent in-flight sandbox VMs per session |
+| `sandbox.maxAttachments` | 8 | Hard ceiling on **parked (at-rest)** attachments in the `AttachmentTable`. When a new boot would exceed it, the least-recently-used refCount=0 attachment is evicted (#82). `globalCap` bounds in-flight; this bounds at-rest. |
 | `sandbox.warmPool.base` | 1–2 | Pre-booted VMs of the base flavor |
-| `sandbox.idleEvictMs` | 3_600_000 | Idle time before a parked VM is destroyed. With durable workspaces (#89) this is only the *warm-cache* horizon — instant reuse of the live container within the window; beyond it, the next turn re-hydrates `/work/in` from the DataStash. Was 300_000 before #89. |
+| `sandbox.idleEvictMs` | 3_600_000 | Idle time before a parked VM is destroyed. Reaped by the per-acquire lazy sweep *and* a 60s timer-driven sweep (#82) so a fully idle harness still releases parked VMs. With durable workspaces (#89) this is only the *warm-cache* horizon — instant reuse of the live container within the window; beyond it, the next turn re-hydrates `/work/in` from the DataStash. Was 300_000 before #89. |
 | `sandbox.defaultTimeoutSec` | 60 | Per-tool-call wall-clock cap |
 | `sandbox.defaultMemoryMB` | 512 | Per-VM memory cap |
 | `sandbox.defaultEgress` | `'mcp-only'` | Default egress profile |

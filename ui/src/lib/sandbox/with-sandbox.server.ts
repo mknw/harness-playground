@@ -74,6 +74,12 @@ export interface WithSandboxConfig {
   syncWorkspace?: boolean
 }
 
+/** How often the default attachment table sweeps idle parked VMs (#82). This is
+ *  a check *cadence*, not the idle threshold — eviction still respects
+ *  `idleEvictMs`. The per-acquire lazy sweep covers active harnesses; this timer
+ *  covers a fully idle one whose parked VMs would otherwise never be reaped. */
+const SANDBOX_SWEEP_INTERVAL_MS = 60_000
+
 // Process-shared singletons, lazily constructed from DEFAULT_SETTINGS. Cap
 // values are read once at first use; the settings panel can't reshape an
 // already-built scheduler/pool/table at runtime (those caps are process-
@@ -140,7 +146,13 @@ export function getDefaultAttachments(): AttachmentTable {
   if (!defaultAttachments) {
     defaultAttachments = new AttachmentTable(getDefaultBackend(), getDefaultPool(), {
       idleMs: DEFAULT_SETTINGS.sandbox.idleEvictMs,
+      maxAttachments: DEFAULT_SETTINGS.sandbox.maxAttachments,
     })
+    // Timer-driven sweep (#82): reap parked VMs even on a fully idle harness,
+    // which the per-acquire lazy sweep never reaches. Only the default
+    // (production) singleton is armed; tests inject their own table and opt in
+    // explicitly. The timer is unref'd, so it never blocks process exit.
+    defaultAttachments.startSweepTimer(SANDBOX_SWEEP_INTERVAL_MS)
   }
   return defaultAttachments
 }
@@ -150,6 +162,7 @@ export function getDefaultAttachments(): AttachmentTable {
  * reaper so a test can observe a fresh first-build. Production never calls this.
  */
 export function __resetSandboxDefaultsForTests(): void {
+  defaultAttachments?.stopSweepTimer()
   defaultBackend = null
   defaultPool = null
   defaultScheduler = null
