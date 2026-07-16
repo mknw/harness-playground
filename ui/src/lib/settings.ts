@@ -82,6 +82,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   CustomHaiku: 200_000,
   CustomOpus4: 200_000,
   CustomSonnet4: 200_000,
+  AnthropicSonnet5: 1_000_000,
   // Cerebras — separate-quota safety nets at end of each fallback chain
   CerebrasGPT120B: 131_072,        // gpt-oss-120b
   CerebrasZaiGLM4_7: 131_072,      // zai-glm-4.7
@@ -107,6 +108,27 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   CriticFallback: 32_768,
   SynthesizerFallback: 32_768,
   DescribeFallback: 32_768,
+}
+
+/**
+ * Configured `max_tokens` per BAML client — MUST mirror `baml_src/clients.baml`.
+ *
+ * Used by the adapters' truncation detection: a response whose
+ * `usage.outputTokens` reaches its client's cap was cut off mid-generation
+ * (Anthropic reports exactly the cap on a max_tokens stop). A truncated
+ * ControllerAction loses its trailing fields (`status`, `is_final`) or ends
+ * mid-`tool_args` → BamlValidationError / invalid tool_args. Detection lets the
+ * retry path tell the actor to produce a smaller response instead of blindly
+ * regenerating the same oversized one (see `.harness-logs/baml-validation-sandbox.json`).
+ *
+ * Only clients with an explicit cap in clients.baml are listed; unknown clients
+ * are treated as not-detectable (no false positives).
+ */
+export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
+  AnthropicSonnet5: 32_768,
+  AnthropicSonnet46: 16_384,
+  AnthropicHaiku45: 16_384,
+  AnthropicOpus4: 4_096,
 }
 
 export const SETTINGS_STORAGE_KEY = 'kg_agent_settings'

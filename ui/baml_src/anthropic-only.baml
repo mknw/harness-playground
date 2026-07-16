@@ -11,16 +11,18 @@
 client<llm> RouterAnthropic {
   provider fallback
   options {
-    strategy [AnthropicHaiku45, AnthropicSonnet46]
+    strategy [AnthropicHaiku45, AnthropicSonnet5]
   }
 }
 
 client<llm> ControllerAnthropic {
   provider fallback
   options {
-    // Sonnet 4.6 leads — best structured-output adherence for tool selection.
-    // Haiku 4.5 as cheap backstop if Sonnet rate-limits.
-    strategy [AnthropicSonnet46, AnthropicHaiku45]
+    // Sonnet 5 leads — near-Opus structured-output/agentic quality at Sonnet
+    // cost. Backstop is Sonnet 4.6, NOT Haiku: a rate-limit fallback on the
+    // controller must stay Sonnet-tier (Haiku's weaker structured output was
+    // implicated in tool-loop parse failures).
+    strategy [AnthropicSonnet5, AnthropicSonnet46]
   }
 }
 
@@ -28,15 +30,15 @@ client<llm> CriticAnthropic {
   provider fallback
   options {
     // Haiku 4.5 leads — critic is short evaluative judgment, doesn't need
-    // Sonnet-tier reasoning. Sonnet as backstop.
-    strategy [AnthropicHaiku45, AnthropicSonnet46]
+    // Sonnet-tier reasoning. Sonnet 5 as backstop.
+    strategy [AnthropicHaiku45, AnthropicSonnet5]
   }
 }
 
 client<llm> SynthesizerAnthropic {
   provider fallback
   options {
-    strategy [AnthropicSonnet46, AnthropicHaiku45]
+    strategy [AnthropicSonnet5, AnthropicHaiku45]
   }
 }
 

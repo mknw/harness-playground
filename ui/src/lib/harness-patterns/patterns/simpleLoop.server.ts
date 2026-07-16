@@ -29,7 +29,7 @@ import { getActiveSandbox } from '../../sandbox/scope.server'
 import { trimToFit, getContextWindow } from '../token-budget.server'
 import { resolveClientForRole } from '../clients.server'
 import type { ControllerFnWithLLMData } from '../baml-adapters.server'
-import { dedupByRefId, annotateExpansions, LLMCallError } from '../baml-adapters.server'
+import { dedupByRefId, annotateExpansions, LLMCallError, llmCallHitOutputCap } from '../baml-adapters.server'
 import type { LLMCallData } from '../types'
 
 assertServerOnImport()
@@ -219,6 +219,9 @@ export function simpleLoop<T extends SimpleLoopData>(
         // Call BAML controller — catch validation errors gracefully
         // so partial results from earlier turns are preserved
         let action: ControllerAction
+        // Hoisted so the tool_args-parse branch below can check for output-cap
+        // truncation on the call that produced this turn's action.
+        let controllerLlmCall: LLMCallData | undefined
         const collector = new Collector('simpleLoop')
         try {
           const controllerResult = await controller(
@@ -232,6 +235,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             config?.fewShots
           )
           action = controllerResult.action
+          controllerLlmCall = controllerResult.llmCall
 
           // Track controller action event with LLM call data.
           // `turn` and `maxTurns` are surfaced so live consumers can size
@@ -395,7 +399,13 @@ export function simpleLoop<T extends SimpleLoopData>(
           args = repairJson(action.tool_args)
         } catch {
           hasError = true
-          errorMessage = `Invalid tool_args JSON: ${action.tool_args}`
+          // Truncation-aware message: a response cut off at the client's
+          // max_tokens cap is not malformed JSON — name the real cause so the
+          // synthesizer/user sees it (actorCritic carries the retrying variant).
+          errorMessage = llmCallHitOutputCap(controllerLlmCall)
+            ? `tool_args for ${action.tool_name} were CUT OFF at the output-token ` +
+              `limit (response truncated mid-generation)`
+            : `Invalid tool_args JSON: ${action.tool_args}`
           errorTurn = turn
           break
         }

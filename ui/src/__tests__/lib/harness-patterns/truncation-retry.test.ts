@@ -1,0 +1,214 @@
+/**
+ * Output-cap truncation handling in the BAML adapters.
+ *
+ * A controller response that hits its client's `max_tokens` truncates mid-JSON
+ * (observed live: a sandbox actor inlined a full report-generation script into
+ * `tool_args`, was cut at exactly the cap, and lost the trailing required
+ * fields → BamlValidationError). The adapters detect the cap-hit via the
+ * collector's usage + clientName against CLIENT_MAX_OUTPUT_TOKENS and do ONE
+ * corrective retry with truncation guidance appended to the per-call `context`.
+ *
+ * Hermetic: baml_client + MCP are mocked; the "collector" is a plain object
+ * shaped like Collector.last (the adapters only read `.last`).
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mockFinalAction } from '../../mocks/baml'
+import { mockListTools } from '../../mocks/mcp'
+import type { Collector } from '@boundaryml/baml'
+
+vi.mock('../../../lib/harness-patterns/assert.server', () => ({
+  assertServerOnImport: vi.fn(),
+}))
+
+vi.mock('../../../lib/harness-patterns/mcp-client.server', () => ({
+  listTools: mockListTools(['read_neo4j_cypher', 'sandbox_bash', 'Return']),
+}))
+
+const mockLoopController = vi.fn()
+const mockActorController = vi.fn()
+
+vi.mock('../../../../baml_client', () => ({
+  b: {
+    LoopController: mockLoopController,
+    ActorController: mockActorController,
+  },
+}))
+
+/** Fake collector whose last call reports the given output tokens + client. */
+function fakeCollector(outputTokens: number, clientName: string): Collector {
+  return {
+    last: {
+      usage: { inputTokens: 1000, outputTokens, cachedInputTokens: 0 },
+      calls: [{ selected: true, provider: 'anthropic', clientName }],
+      rawLlmResponse: '{"reasoning": "truncated mid-way',
+    },
+  } as unknown as Collector
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  // Anthropic-only default routing (no client override) — the truncation retry
+  // must work exactly where the old Groq-only escalation did not.
+  delete process.env.USE_MIXED_CHAINS
+})
+
+describe('llmCallHitOutputCap', () => {
+  it('detects a call that hit its configured cap', async () => {
+    const { llmCallHitOutputCap } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    expect(
+      llmCallHitOutputCap({
+        clientName: 'AnthropicSonnet5',
+        usage: { inputTokens: 1, outputTokens: 32_768, cachedInputTokens: 0, totalTokens: 32_769 },
+      }),
+    ).toBe(true)
+  })
+
+  it('is false below the cap, for unknown clients, and without usage', async () => {
+    const { llmCallHitOutputCap } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    expect(
+      llmCallHitOutputCap({
+        clientName: 'AnthropicSonnet5',
+        usage: { inputTokens: 1, outputTokens: 512, cachedInputTokens: 0, totalTokens: 513 },
+      }),
+    ).toBe(false)
+    expect(
+      llmCallHitOutputCap({
+        clientName: 'SomeUnknownClient',
+        usage: { inputTokens: 1, outputTokens: 999_999, cachedInputTokens: 0, totalTokens: 1_000_000 },
+      }),
+    ).toBe(false)
+    expect(llmCallHitOutputCap({ clientName: 'AnthropicSonnet5' })).toBe(false)
+    expect(llmCallHitOutputCap(undefined)).toBe(false)
+  })
+})
+
+describe('ActorController truncation retry (Anthropic-only path)', () => {
+  it('retries ONCE with truncation guidance appended to context when the output hit the cap', async () => {
+    const { createActorControllerAdapter, TRUNCATION_RETRY_GUIDANCE } = await import(
+      '../../../lib/harness-patterns/baml-adapters.server'
+    )
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockActorController
+      .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'missing status/is_final', 'missing status/is_final'))
+      .mockResolvedValueOnce(mockFinalAction('Recovered'))
+
+    const actor = createActorControllerAdapter({
+      toolNames: ['sandbox_bash'],
+      contextPrefix: 'You have a sandbox.',
+    })
+    const result = await actor('do the thing', 'intent', [], [], fakeCollector(32_768, 'AnthropicSonnet5'), 1, 6)
+
+    expect(result.action).toBeDefined()
+    expect(mockActorController).toHaveBeenCalledTimes(2)
+    // context is the 5th positional arg — the retry must carry the guidance.
+    const retryContext = mockActorController.mock.calls[1][4] as string
+    expect(retryContext).toContain('You have a sandbox.')
+    expect(retryContext).toContain(TRUNCATION_RETRY_GUIDANCE)
+    // First call must NOT have the guidance (it's retry-only, per-call scoped).
+    expect(String(mockActorController.mock.calls[0][4])).not.toContain('CUT OFF')
+  })
+
+  it('does NOT retry when the parse failure was not a cap-hit (rethrows as LLMCallError)', async () => {
+    const { createActorControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockActorController.mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'bad output', 'bad output'))
+
+    const { LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const actor = createActorControllerAdapter({ toolNames: ['sandbox_bash'] })
+    await expect(
+      actor('do the thing', 'intent', [], [], fakeCollector(512, 'AnthropicSonnet5'), 1, 6),
+    ).rejects.toBeInstanceOf(LLMCallError)
+    expect(mockActorController).toHaveBeenCalledTimes(1)
+  })
+
+  it('throws LLMCallError when the truncation retry also fails (exactly one retry)', async () => {
+    const { createActorControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockActorController
+      .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'truncated', 'truncated'))
+      .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'truncated again', 'truncated again'))
+
+    const { LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const actor = createActorControllerAdapter({ toolNames: ['sandbox_bash'] })
+    await expect(
+      actor('do the thing', 'intent', [], [], fakeCollector(16_384, 'AnthropicHaiku45'), 1, 6),
+    ).rejects.toBeInstanceOf(LLMCallError)
+    expect(mockActorController).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('LoopController truncation retry (Anthropic-only path)', () => {
+  it('retries ONCE with truncation guidance appended to context', async () => {
+    const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } = await import(
+      '../../../lib/harness-patterns/baml-adapters.server'
+    )
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockLoopController
+      .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'missing fields', 'missing fields'))
+      .mockResolvedValueOnce(mockFinalAction('Recovered'))
+
+    const controller = createLoopControllerAdapter(['read_neo4j_cypher', 'Return'], 'Prefix.')
+    const result = await controller(
+      'user message', 'intent', '[]', 0, undefined,
+      fakeCollector(16_384, 'AnthropicSonnet46'),
+    )
+
+    expect(result.action).toBeDefined()
+    expect(mockLoopController).toHaveBeenCalledTimes(2)
+    const retryContext = mockLoopController.mock.calls[1][4] as string
+    expect(retryContext).toContain('Prefix.')
+    expect(retryContext).toContain(TRUNCATION_RETRY_GUIDANCE)
+  })
+
+  it('without a cap-hit, the Anthropic-only path still rethrows (no Groq escalation, no retry)', async () => {
+    const { createLoopControllerAdapter } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const { BamlValidationError } = await import('@boundaryml/baml')
+
+    mockLoopController.mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'bad output', 'bad output'))
+
+    const { LLMCallError } = await import('../../../lib/harness-patterns/baml-adapters.server')
+    const controller = createLoopControllerAdapter(['Return'])
+    await expect(
+      controller('user message', 'intent', '[]', 0, undefined, fakeCollector(512, 'AnthropicSonnet46')),
+    ).rejects.toBeInstanceOf(LLMCallError)
+    expect(mockLoopController).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('mixed-chains interaction', () => {
+  it('truncation retry takes precedence over Groq escalation when the cap was hit', async () => {
+    process.env.USE_MIXED_CHAINS = '1'
+    try {
+      const { createLoopControllerAdapter, TRUNCATION_RETRY_GUIDANCE } = await import(
+        '../../../lib/harness-patterns/baml-adapters.server'
+      )
+      const { BamlValidationError } = await import('@boundaryml/baml')
+
+      mockLoopController
+        .mockRejectedValueOnce(new BamlValidationError('prompt', 'raw', 'truncated', 'truncated'))
+        .mockResolvedValueOnce(mockFinalAction('Recovered'))
+
+      const controller = createLoopControllerAdapter(['Return'])
+      const result = await controller(
+        'user message', 'intent', '[]', 0, undefined,
+        fakeCollector(16_384, 'AnthropicSonnet46'),
+      )
+
+      expect(result.action).toBeDefined()
+      expect(mockLoopController).toHaveBeenCalledTimes(2)
+      // The retry keeps the SAME chain with corrective context — it must not
+      // hop to the Groq client (that path is for structured-output failures,
+      // not transport truncation).
+      const retryOpts = mockLoopController.mock.calls[1][7] as Record<string, unknown> | undefined
+      expect(retryOpts && (retryOpts as { client?: string }).client).not.toBe('GroqGPT120B')
+      expect(String(mockLoopController.mock.calls[1][4])).toContain(TRUNCATION_RETRY_GUIDANCE)
+    } finally {
+      delete process.env.USE_MIXED_CHAINS
+    }
+  })
+})

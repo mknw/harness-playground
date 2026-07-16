@@ -29,7 +29,7 @@ import { trackEvent, resolveConfig, generateId } from '../context.server'
 import { getRequestSettings } from '../../settings-context.server'
 import { getActiveSandbox } from '../../sandbox/scope.server'
 import type { CodeModeControllerFnWithLLMData, CriticFnWithLLMData } from '../baml-adapters.server'
-import { LLMCallError } from '../baml-adapters.server'
+import { LLMCallError, llmCallHitOutputCap } from '../baml-adapters.server'
 
 assertServerOnImport()
 
@@ -196,17 +196,31 @@ export function actorCritic<T extends ActorCriticData>(
         } catch {
           // Surface unparseable tool_args as a recoverable error too — same
           // observability reasoning as the allowlist branch above.
-          const errMsg = `Invalid tool_args JSON for ${action.tool_name}: ${action.tool_args}`
+          //
+          // Truncation-aware feedback: when the actor call hit its client's
+          // output-token cap, the args aren't malformed — they were CUT OFF.
+          // Generic "fix your JSON quoting" feedback makes the model regenerate
+          // the same oversized payload until retries exhaust; say the real
+          // cause so the retry converges (write smaller, append to continue).
+          const truncated = llmCallHitOutputCap(actorLlmCall)
+          const errMsg = truncated
+            ? `tool_args for ${action.tool_name} were CUT OFF at the output-token limit ` +
+              `(response truncated mid-generation, not a formatting mistake). Produce a ` +
+              `materially smaller tool_args: write the first part of any large file now ` +
+              `and CONTINUE BY APPENDING in later calls (e.g. bash \`cat >> file <<'EOF'\`).`
+            : `Invalid tool_args JSON for ${action.tool_name}: ${action.tool_args}`
           trackEvent(
             scope,
             'error',
             {
               error: errMsg,
               severity: 'recoverable',
-              hint:
-                'Actor produced unparseable tool_args. Common causes: unquoted ' +
-                'keys/values, unescaped newlines inside scripts. The actor will ' +
-                'see this in previousAttempts and (hopefully) retry with valid JSON.',
+              hint: truncated
+                ? 'Actor response hit the max_tokens cap mid-tool_args. The actor sees ' +
+                  'truncation-specific feedback in previousAttempts and should split the work.'
+                : 'Actor produced unparseable tool_args. Common causes: unquoted ' +
+                  'keys/values, unescaped newlines inside scripts. The actor will ' +
+                  'see this in previousAttempts and (hopefully) retry with valid JSON.',
               iteration: attempt,
             } as ErrorEventData,
             resolved.trackHistory,

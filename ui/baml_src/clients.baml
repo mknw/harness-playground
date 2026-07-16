@@ -131,12 +131,27 @@ client<llm> AnthropicOpus4 {
   }
 }
 
+// Sonnet 5: adaptive thinking is ON by default (thinking spend counts against
+// max_tokens), and the new tokenizer runs ~30% more tokens for the same text —
+// so the output cap is deliberately generous. 4096 was proven inadequate for
+// sandbox actors (a report-generation script truncated mid-tool_args →
+// BamlValidationError; see baml-adapters truncation handling). Keep these caps
+// in sync with CLIENT_MAX_OUTPUT_TOKENS in ui/src/lib/settings.ts.
+client<llm> AnthropicSonnet5 {
+  provider anthropic
+  options {
+    model "claude-sonnet-5"
+    api_key env.ANTHROPIC_API_KEY
+    max_tokens 32768
+  }
+}
+
 client<llm> AnthropicSonnet46 {
   provider anthropic
   options {
     model "claude-sonnet-4-6"
     api_key env.ANTHROPIC_API_KEY
-    max_tokens 4096
+    max_tokens 16384
   }
 }
 
@@ -146,7 +161,7 @@ client<llm> AnthropicHaiku45 {
   options {
     model "claude-haiku-4-5"
     api_key env.ANTHROPIC_API_KEY
-    max_tokens 4096
+    max_tokens 16384
   }
 }
 
