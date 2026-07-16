@@ -25,6 +25,7 @@ import { getActiveSandbox } from '../sandbox/scope.server'
 import { Collector, BamlValidationError } from '@boundaryml/baml'
 import { getBamlFiles } from '../../../baml_client/inlinedbaml'
 import { clientOverrideFor } from './clients.server'
+import { CLIENT_MAX_OUTPUT_TOKENS } from '../settings'
 
 assertServerOnImport()
 
@@ -161,6 +162,53 @@ export function extractFailureLLMCallData(
     durationMs: Date.now() - startTime
   }
 }
+
+// ============================================================================
+// Output-cap truncation detection (#see .harness-logs/baml-validation-sandbox.json)
+// ============================================================================
+
+/**
+ * Whether an LLM call's output was cut off at its client's `max_tokens` cap.
+ * Anthropic reports `outputTokens` == the cap exactly on a max_tokens stop, so
+ * `>= cap` is a precise signal, not a heuristic. Unknown clients (no entry in
+ * CLIENT_MAX_OUTPUT_TOKENS) → false, never a false positive.
+ *
+ * Why it matters: a truncated ControllerAction either loses its trailing
+ * required fields (`status`, `is_final`) → hard BamlValidationError, or ends
+ * mid-`tool_args` → invalid-JSON rejection in the loop. Both used to feed the
+ * model generic feedback, so it would regenerate the same oversized response
+ * until retries exhausted. Detection lets the retry say WHY it failed.
+ */
+export function llmCallHitOutputCap(
+  llmCall: Pick<LLMCallData, 'clientName' | 'usage'> | undefined,
+): boolean {
+  if (!llmCall?.clientName || !llmCall.usage?.outputTokens) return false
+  const cap = CLIENT_MAX_OUTPUT_TOKENS[llmCall.clientName]
+  return cap !== undefined && llmCall.usage.outputTokens >= cap
+}
+
+/** Collector-side variant for adapter catch blocks (pre-LLMCallData). */
+function collectorHitOutputCap(collector: Collector | undefined): boolean {
+  const last = collector?.last
+  if (!last?.usage?.outputTokens) return false
+  const calls = (last.calls ?? []) as Array<{ selected?: boolean; clientName?: string }>
+  const call = calls.find((c) => c.selected) ?? calls[calls.length - 1]
+  const cap = call?.clientName ? CLIENT_MAX_OUTPUT_TOKENS[call.clientName] : undefined
+  return cap !== undefined && (last.usage.outputTokens ?? 0) >= cap
+}
+
+/**
+ * Corrective guidance appended to `context` on the one truncation retry. Goes
+ * through the per-call context field (transient — influences only the retry,
+ * not other actors or turns). Recovery-oriented per design review: tells the
+ * model to APPEND large content across calls, not to pre-emptively chunk.
+ */
+export const TRUNCATION_RETRY_GUIDANCE =
+  'IMPORTANT: your previous response exceeded the output-token limit and was CUT OFF ' +
+  'mid-generation, so it could not be parsed. Respond again with a materially SMALLER ' +
+  'response. Keep tool_args compact; when a file or script is large, write the first ' +
+  "part now and CONTINUE BY APPENDING in later calls (e.g. bash `cat >> file <<'EOF'`) " +
+  'instead of inlining everything in a single call.'
 
 /** Error thrown by BAML adapters when an LLM call fails after all in-adapter
  *  fallbacks have been exhausted. Carries the captured prompt/variables/HTTP
@@ -381,6 +429,24 @@ export function createLoopControllerAdapter(
         ? await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots, baseOpts)
         : await b.LoopController(user_message, intent, tools, turns, context, priorResults, fewShots)
     } catch (e) {
+      // Output-cap truncation (any chain, incl. Anthropic-only): the parse
+      // failed because the response was cut off, not because the model can't
+      // do structured output. ONE corrective retry with the truncation notice
+      // appended to `context` (per-call, transient); a second failure throws.
+      if (e instanceof BamlValidationError && collectorHitOutputCap(collector)) {
+        const retryContext = [context, TRUNCATION_RETRY_GUIDANCE].filter(Boolean).join('\n\n')
+        try {
+          action = hasBaseOpts
+            ? await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots, baseOpts)
+            : await b.LoopController(user_message, intent, tools, turns, retryContext, priorResults, fewShots)
+          const llmCall = collector
+            ? extractLLMCallData(collector, 'LoopController', variables, startTime, action)
+            : undefined
+          return { action, llmCall }
+        } catch (eRetry) {
+          throw wrapAsLLMCallError(eRetry, 'LoopController', variables, startTime, collector)
+        }
+      }
       if (!(e instanceof BamlValidationError) || !clientOverride) {
         throw wrapAsLLMCallError(e, 'LoopController', variables, startTime, collector)
       }
@@ -621,6 +687,22 @@ export function createActorControllerAdapter(
         ? await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts, baseOpts)
         : await b.ActorController(user_message, intent, tools, attempts, context, fewShots, attemptNumber, maxAttempts)
     } catch (e) {
+      // Output-cap truncation: one corrective retry with the truncation notice
+      // appended to `context` — see createLoopControllerAdapter for rationale.
+      if (e instanceof BamlValidationError && collectorHitOutputCap(collector)) {
+        const retryContext = [context, TRUNCATION_RETRY_GUIDANCE].filter(Boolean).join('\n\n')
+        try {
+          action = hasBaseOpts
+            ? await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts, baseOpts)
+            : await b.ActorController(user_message, intent, tools, attempts, retryContext, fewShots, attemptNumber, maxAttempts)
+          const llmCall = collector
+            ? extractLLMCallData(collector, 'ActorController', variables, startTime, action)
+            : undefined
+          return { action, llmCall }
+        } catch (eRetry) {
+          throw wrapAsLLMCallError(eRetry, 'ActorController', variables, startTime, collector)
+        }
+      }
       if (!(e instanceof BamlValidationError) || !clientOverride) {
         throw wrapAsLLMCallError(e, 'ActorController', variables, startTime, collector)
       }

@@ -121,11 +121,13 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 
 | Client | Role | Chain |
 |--------|------|-------|
-| `RouterAnthropic` | Intent classification | AnthropicHaiku45 → AnthropicSonnet46 |
-| `ControllerAnthropic` | Tool loop controllers (simpleLoop + actor) | AnthropicSonnet46 → AnthropicHaiku45 |
-| `CriticAnthropic` | Evaluation/critique | AnthropicHaiku45 → AnthropicSonnet46 |
-| `SynthesizerAnthropic` | Response synthesis | AnthropicSonnet46 → AnthropicHaiku45 |
+| `RouterAnthropic` | Intent classification | AnthropicHaiku45 → AnthropicSonnet5 |
+| `ControllerAnthropic` | Tool loop controllers (simpleLoop + actor) | AnthropicSonnet5 → AnthropicSonnet46 (backstop stays Sonnet-tier — no Haiku fallback on structured output) |
+| `CriticAnthropic` | Evaluation/critique | AnthropicHaiku45 → AnthropicSonnet5 |
+| `SynthesizerAnthropic` | Response synthesis | AnthropicSonnet5 → AnthropicHaiku45 |
 | `DescribeAnthropic` | Lightweight tool result summarization, titles, intent compaction (`compactIntent`) | AnthropicHaiku45 |
+
+**Output caps + truncation recovery:** Anthropic client `max_tokens` are 32768 (Sonnet 5) / 16384 (Sonnet 4.6, Haiku 4.5) — mirrored in `CLIENT_MAX_OUTPUT_TOKENS` (`ui/src/lib/settings.ts`); keep the two in sync. A controller response that hits its cap truncates mid-JSON (historically: `BamlValidationError: missing status/is_final` when a sandbox actor inlined a huge script into `tool_args`). The adapters detect cap-hits and do ONE corrective retry with truncation guidance appended to the per-call `context`; the loops emit truncation-specific feedback instead of generic "invalid JSON" when `tool_args` were cut off (`llmCallHitOutputCap`).
 
 **Mixed-provider chains** (gated by `USE_MIXED_CHAINS=1`, see top of file) — declared in `baml_src/clients.baml`:
 

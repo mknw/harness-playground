@@ -51,7 +51,9 @@ Guidance:
 3. When a task produces a FILE the user should keep, write it to /work/out
    (don't just compute the answer with a throwaway python3 -c). That file is the
    deliverable and is what persists to the Data Stash.
-4. Let the critic decide completion — you don't need a Return tool. Focus on
+4. To continue a partial or large file, APPEND to it (bash \`cat >> file <<'EOF'\`)
+   — don't regenerate the whole file from scratch.
+5. Let the critic decide completion — you don't need a Return tool. Focus on
    producing the right tool call; the critic ends the loop when the result is
    sufficient.
 `.trim();
