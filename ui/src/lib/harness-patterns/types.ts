@@ -362,7 +362,7 @@ export interface ConfiguredPattern<T> {
    *  equivalent to a contribution of 1. */
   estimateTurns?: (settings: TurnEstimateSettings) => number
   /** Wrapped sub-patterns, for combinators that compose others
-   *  (`chain`, `routes`, `parallel`, `guardrail`, `hook`, `withApproval`,
+   *  (`chain`, `routes`, `parallel`, `guardrail`, `hook`,
    *  `withReferences`). Leaf patterns omit it. Purely for static
    *  introspection of the pattern graph — execution runs through `fn`, never
    *  this — so it's safe and additive. See `pattern-capabilities.ts`
@@ -686,7 +686,6 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   router: true,
   routes: false,
   chain: false,
-  withApproval: true,
   compactIntent: 'intent_compacted',
   // The retriever's matches are surfaced as a tool_result (the channel the
   // synthesizer reads via view.fromLastPattern()) — same as a simpleLoop tool.
@@ -701,7 +700,6 @@ export const DEFAULT_COMMIT_STRATEGY: Record<string, CommitStrategy> = {
   router: 'always',
   routes: 'always',
   chain: 'always',
-  withApproval: 'on-success',
   compactIntent: 'always',
   retriever: 'always'
 }
@@ -716,7 +714,6 @@ export const DEFAULT_ERROR_SEVERITY: Record<string, 'recoverable' | 'irrecoverab
   router: 'irrecoverable',
   routes: 'irrecoverable',
   chain: 'irrecoverable',
-  withApproval: 'recoverable',
   // compactIntent is best-effort: on failure it leaves intent unset and the
   // downstream actor falls back to the raw user message — never fatal.
   compactIntent: 'recoverable',
