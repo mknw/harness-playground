@@ -161,7 +161,7 @@ interface ControllerAction {
   tool_name: string      // Tool to call. simpleLoop: `'Return'` exits the loop. actorCritic: actor's `'Return'` is ignored — the critic alone owns termination.
   tool_args: string      // JSON payload
   status: string         // User-facing message
-  is_final: boolean      // simpleLoop only — actorCritic ignores it on the actor side
+  is_final: boolean      // simpleLoop: exits the loop. actorCritic: cannot exit (critic owns that), but is an advisory *critic trigger* — see criticCadence.
 }
 
 // Critic result for actor-critic pattern
@@ -351,6 +351,7 @@ actorCritic(b.CodeModeController.bind(b), b.CodeModeCritic.bind(b), tools.all, {
 interface ActorCriticConfig extends PatternConfig {
   maxRetries?: number             // Default: 3
   onToolResult?: OnToolResult     // Same shape + semantics as in SimpleLoopConfig
+  criticCadence?: number          // Default: 1 (critic every turn). See below.
 }
 ```
 
@@ -360,6 +361,20 @@ interface ActorCriticConfig extends PatternConfig {
 3. Critic evaluates result
 4. Retry with feedback if insufficient
 5. Exit when sufficient or max retries
+
+**`criticCadence` — let the actor free-run a multi-step sequence.** By default
+(`1`) the critic runs after every successful turn. This interrupts multi-step
+deliverables mid-plan: the actor writes a script, and the critic — the loop's
+*sole* exit authority — can wrongly accept the written-but-unrun script as "done"
+(observed live: a report loop exited with no `.docx` because the critic judged the
+generator script before it ran). With `criticCadence: N` the actor free-runs and
+the critic evaluates only (a) every Nth successful turn, (b) when the actor sets
+`is_final: true` ("I think I'm done" — it still can't exit by itself; the critic
+verifies), and (c) on the final attempt. This is the composable "actor free-runs,
+judge gates exit" shape without a second pattern. `is_final` is thus an advisory
+critic *trigger* here, never an exit. With `N > 1`, `maxRetries` bounds actor
+turns (tool steps), not critic calls; values `< 1` are clamped to `1` so the
+critic can never be disabled.
 
 ### `parallel(...patterns)`
 
@@ -876,7 +891,7 @@ BAML Inputs (ActorController):
   tools        : ToolDescription[]← MCP listTools()
   attempts     : Attempt[]        ← assembled from scope events per attempt
 
-BAML Return → ControllerAction (same shape as simpleLoop; actor's `is_final` / `tool_name: 'Return'` are *not* honored — exit is the critic's call)
+BAML Return → ControllerAction (same shape as simpleLoop; the actor cannot exit — `tool_name: 'Return'` is rejected and `is_final` only *triggers* a critic check under `criticCadence`. Exit is the critic's call.)
 
 BAML Inputs (Critic):
   intent   : string      ← same intent

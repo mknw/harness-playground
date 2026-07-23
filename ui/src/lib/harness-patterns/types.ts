@@ -266,6 +266,19 @@ export interface ActorCriticConfig extends PatternConfig {
    *  and the loop's strict allowlist stay in sync when the user mutates the
    *  selection mid-conversation. */
   dynamicToolAllowlist?: () => Promise<string[]>
+  /** How often the critic runs, in successful actor turns (default: 1 = every
+   *  turn, the original behavior). With `criticCadence: N` the actor free-runs a
+   *  sequence of tool calls and the critic — still the loop's SOLE exit
+   *  authority — evaluates only (a) every Nth successful turn, (b) whenever the
+   *  actor sets `is_final: true` ("I think I'm done"), and (c) on the final
+   *  attempt. This lets a multi-step deliverable (e.g. write a script, THEN run
+   *  it) finish before the critic judges, so it can't wrongly accept an
+   *  intermediate state as complete — the failure in
+   *  `.harness-logs/context-3817275e-*.json`, where a critic ran right after the
+   *  report script was WRITTEN (before it ran) and exited with no .docx. Values
+   *  < 1 are clamped to 1 so the critic can never be disabled. Note: with N > 1,
+   *  `maxRetries` bounds actor turns (tool steps), not critic evaluations. */
+  criticCadence?: number
 }
 
 /** Synthetic tool injected into LoopController's tools list when prior results
