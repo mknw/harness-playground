@@ -33,7 +33,6 @@ Functional, composable framework for agentic tool execution.
   - [Tools()](#tools)
   - [simpleLoop()](#simpleloopcontroller-tools-config)
   - [actorCritic()](#actorcriticactor-critic-tools-config)
-  - [withApproval()](#withapprovalpattern-predicate)
   - [withReferences()](#withreferencespattern-config)
   - [synthesizer()](#synthesizerconfig)
   - [compactIntent()](#compactintentconfig)
@@ -416,22 +415,6 @@ const distillHook = hook(distillChain, {
 **How it works:**
 - `background: true` — schedules the inner pattern via `queueMicrotask` and returns immediately
 - `background: false` (default) — runs synchronously; inner events are wrapped with `pattern_enter` / `pattern_exit`
-
-### `withApproval(pattern, predicate)`
-
-Wrap pattern to pause for user approval on matching actions.
-
-```typescript
-withApproval(
-  simpleLoop(b.Neo4jController.bind(b), tools.neo4j, { schema }),
-  approvalPredicates.writes
-)
-
-// Built-in predicates
-approvalPredicates.writes     // tool_name includes 'write'
-approvalPredicates.deletes    // tool_name includes 'delete'
-approvalPredicates.mutations  // write, delete, create, update, insert, remove
-```
 
 ### `withReferences(pattern, config?)`
 
@@ -845,10 +828,10 @@ transformed into prompt-friendly types. The table below shows which harness
 | `critic_result` | `CriticResultEventData` | _(embedded in `Attempt.feedback`)_ | actorCritic |
 | `user_message` | `UserMessageEventData` | `Message { role, content }` | router (history) |
 | `assistant_message` | `AssistantMessageEventData` | `Message { role, content }` | router (history) |
-| `pattern_enter` | `PatternEnterEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `withApproval`, `guardrail` |
-| `pattern_exit` | `PatternExitEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `withApproval`, `guardrail` |
-| `approval_request` | `ApprovalRequestEventData` | _(not sent to BAML)_ | withApproval only |
-| `approval_response` | `ApprovalResponseEventData` | _(not sent to BAML)_ | withApproval only |
+| `pattern_enter` | `PatternEnterEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail` |
+| `pattern_exit` | `PatternExitEventData` | _(not sent to BAML)_ | `chain` + wrapper patterns: `parallel`, `hook`, `guardrail` |
+| `approval_request` | `ApprovalRequestEventData` | _(not sent to BAML)_ | (reserved — no active emitter) |
+| `approval_response` | `ApprovalResponseEventData` | _(not sent to BAML)_ | (reserved — no active emitter) |
 | `error` | `ErrorEventData` | _(read via `view.hasErrors()`)_ | synthesizer (error context), harness error handling |
 | `reference_attached` | `ReferenceAttachedEventData` | _(not sent to BAML)_ | withReferences only (observability) |
 | `intent_compacted` | `IntentCompactedEventData` | _(not sent to BAML)_ | compactIntent only (observability) |
@@ -1011,8 +994,6 @@ import {
   simpleLoop,
   actorCritic,
   synthesizer,
-  withApproval,
-  approvalPredicates,
   Tools,
   callTool,
   createNeo4jController,
@@ -1036,13 +1017,10 @@ async function createPatterns() {
   const actor = createActorControllerAdapter(tools.all)
   const critic = createCriticAdapter()
 
-  const neo4jPattern = withApproval(
-    simpleLoop(neo4jController, tools.neo4j ?? [], {
-      patternId: 'neo4j-query',
-      schema
-    }),
-    approvalPredicates.writes
-  )
+  const neo4jPattern = simpleLoop(neo4jController, tools.neo4j ?? [], {
+    patternId: 'neo4j-query',
+    schema
+  })
 
   const webPattern = simpleLoop(webController, tools.web ?? [], {
     patternId: 'web-search'
@@ -1096,7 +1074,6 @@ Span names:
 - `router` - Intent classification
 - `pattern.simpleLoop` - Decide-execute loop
 - `pattern.actorCritic` - Generate-evaluate loop
-- `pattern.withApproval` - Approval flow
 - `pattern.chain` - Sequential composition
 - `pattern.synthesizer` - Response synthesis
 - `controller` / `actor` / `critic` - BAML function calls
@@ -1124,7 +1101,6 @@ harness-patterns/
     ├── simpleLoop.server.ts    # ReAct loop; emits callId on tool_call/tool_result; resolveRefs(); config-driven cross-turn memory
     ├── actorCritic.server.ts   # Generate-evaluate loop; emits callId on tool pairs
     ├── judge.server.ts         # Evaluation pattern for quality gates
-    ├── withApproval.server.ts  # Approval gate; wraps inner events with pattern_enter/exit
     ├── parallel.server.ts      # Concurrent branches; wraps each branch with pattern_enter/exit
     ├── guardrail.server.ts     # Rail validation; wraps inner events with pattern_enter/exit
     ├── hook.server.ts          # Lifecycle hook; wraps inner events with pattern_enter/exit
